@@ -22,9 +22,9 @@ type CronErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
-// CronHandler is the Vercel serverless function handler for /api/cron
+// Handler is the Vercel serverless function handler for /api/cron
 // This endpoint is triggered by Vercel Cron every 20 hours to refresh the token
-func CronHandler(w http.ResponseWriter, r *http.Request) {
+func Handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Only allow GET requests (Vercel Cron uses GET)
