@@ -1,6 +1,7 @@
 package advancedmd
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html/charset"
 )
 
 // PPMDResults represents the XML response from AdvancedMD API
@@ -53,6 +56,17 @@ func buildLoginXML() string {
 	)
 }
 
+// parseXMLResponse parses XML with ISO-8859-1 encoding support
+func parseXMLResponse(body []byte) (*PPMDResults, error) {
+	var result PPMDResults
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder.CharsetReader = charset.NewReaderLabel
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse XML: %w", err)
+	}
+	return &result, nil
+}
+
 // GetWebserver performs Step 1 of the login process to get the redirect URL
 // Note: This returns success="0" with error code -2147220476, but contains the webserver URL
 func GetWebserver() (string, error) {
@@ -70,8 +84,8 @@ func GetWebserver() (string, error) {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var result PPMDResults
-	if err := xml.Unmarshal(body, &result); err != nil {
+	result, err := parseXMLResponse(body)
+	if err != nil {
 		return "", fmt.Errorf("failed to parse XML response: %w", err)
 	}
 
@@ -101,8 +115,8 @@ func GetAuthToken(webserverURL string) (string, error) {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var result PPMDResults
-	if err := xml.Unmarshal(body, &result); err != nil {
+	result, err := parseXMLResponse(body)
+	if err != nil {
 		return "", fmt.Errorf("failed to parse XML response: %w", err)
 	}
 
