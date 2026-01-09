@@ -210,10 +210,29 @@ advancedmd-token-management/
 
 ## Security
 
-- All credentials in Vercel Environment Variables (encrypted)
+### Why API Secrets?
+
+| Secret | Purpose | Who Uses It |
+|--------|---------|-------------|
+| `API_SECRET` | Protects `/api/token` endpoint from unauthorized access | ElevenLabs agent (you configure this in the tool's Authorization header) |
+| `CRON_SECRET` | Protects `/api/cron` endpoint so only Vercel Cron can trigger token refresh | Vercel Cron (automatically sent by Vercel) |
+
+**Without these secrets:**
+- Anyone could call your `/api/token` endpoint and get your AdvancedMD credentials
+- Anyone could spam your `/api/cron` endpoint, causing unnecessary API calls to AdvancedMD
+
+**How they work:**
+1. When ElevenLabs calls `/api/token`, it sends `Authorization: Bearer YOUR_API_SECRET`
+2. Your Go function checks if the secret matches before returning the token
+3. If it doesn't match → 401 Unauthorized
+
+### Security Summary
+
+- All credentials in Vercel Environment Variables (encrypted at rest)
 - Cron endpoint protected by `CRON_SECRET`
 - Token endpoint protected by `API_SECRET`
 - Redis connection uses TLS (if your provider supports it)
+- AdvancedMD credentials never exposed to clients
 
 ## Troubleshooting
 
