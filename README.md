@@ -130,8 +130,8 @@ Map response fields for reuse:
 
 | Variable | JSON Path |
 |----------|-----------|
-| `amd_token` | `$.token` |
-| `amd_webserver` | `$.webserverUrl` |
+| `amd_token` | `token` |
+| `amd_webserver` | `webserverUrl` |
 
 ### 4. System Prompt
 
