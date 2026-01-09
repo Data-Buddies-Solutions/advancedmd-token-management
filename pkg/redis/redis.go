@@ -1,12 +1,13 @@
 package redis
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // TokenData represents the cached token information
@@ -17,10 +18,35 @@ type TokenData struct {
 }
 
 const tokenKey = "advancedmd:token"
-const ttlSeconds = 23 * 60 * 60 // 23 hours
+const ttlDuration = 23 * time.Hour // 23 hours
 
-// SaveToken stores token in Upstash Redis with TTL
+var ctx = context.Background()
+
+// getClient creates a Redis client from the REDIS_URL environment variable
+// Format: redis://default:password@host:port
+func getClient() (*redis.Client, error) {
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		return nil, fmt.Errorf("REDIS_URL environment variable not set")
+	}
+
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse REDIS_URL: %w", err)
+	}
+
+	client := redis.NewClient(opt)
+	return client, nil
+}
+
+// SaveToken stores token in Redis with TTL
 func SaveToken(token, webserverURL string) error {
+	client, err := getClient()
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
 	data := TokenData{
 		Token:        token,
 		WebserverURL: webserverURL,
@@ -32,72 +58,33 @@ func SaveToken(token, webserverURL string) error {
 		return fmt.Errorf("failed to marshal token data: %w", err)
 	}
 
-	// URL-encode the JSON value for the REST API
-	encodedValue := url.PathEscape(string(jsonData))
-
-	// Upstash REST API: SET key value EX seconds
-	apiURL := fmt.Sprintf("%s/set/%s/%s/ex/%d",
-		os.Getenv("UPSTASH_REDIS_REST_URL"),
-		tokenKey,
-		encodedValue,
-		ttlSeconds,
-	)
-
-	req, err := http.NewRequest("GET", apiURL, nil)
+	err = client.Set(ctx, tokenKey, jsonData, ttlDuration).Err()
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("UPSTASH_REDIS_REST_TOKEN"))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("redis error: status %d", resp.StatusCode)
+		return fmt.Errorf("failed to save token to Redis: %w", err)
 	}
 
 	return nil
 }
 
-// GetToken retrieves token from Upstash Redis
+// GetToken retrieves token from Redis
 func GetToken() (*TokenData, error) {
-	apiURL := fmt.Sprintf("%s/get/%s",
-		os.Getenv("UPSTASH_REDIS_REST_URL"),
-		tokenKey,
-	)
-
-	req, err := http.NewRequest("GET", apiURL, nil)
+	client, err := getClient()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("UPSTASH_REDIS_REST_TOKEN"))
+	defer client.Close()
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Result *string `json:"result"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	// Key not found - return nil without error
-	if result.Result == nil {
+	val, err := client.Get(ctx, tokenKey).Result()
+	if err == redis.Nil {
+		// Key not found - return nil without error
 		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token from Redis: %w", err)
 	}
 
 	var data TokenData
-	if err := json.Unmarshal([]byte(*result.Result), &data); err != nil {
+	if err := json.Unmarshal([]byte(val), &data); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal token data: %w", err)
 	}
 

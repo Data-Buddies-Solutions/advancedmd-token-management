@@ -1,11 +1,11 @@
 # AdvancedMD Token Management Service
 
-A high-performance Go microservice deployed on Vercel that handles AdvancedMD's 2-step authentication flow and caches tokens in Upstash Redis. Designed for integration with ElevenLabs conversational agents.
+A high-performance Go microservice deployed on Vercel that handles AdvancedMD's 2-step authentication flow and caches tokens in Redis. Designed for integration with ElevenLabs conversational agents.
 
 ## Features
 
 - **Fast**: Go runtime with ~50ms cold starts on Vercel
-- **Cached**: Tokens stored in Upstash Redis with 23-hour TTL
+- **Cached**: Tokens stored in Redis with 23-hour TTL
 - **Automated**: Vercel Cron refreshes tokens every 20 hours
 - **Fallback**: On-demand token refresh if cache is empty
 - **Secure**: API key authentication on all endpoints
@@ -14,7 +14,7 @@ A high-performance Go microservice deployed on Vercel that handles AdvancedMD's 
 
 ```
 ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│  Vercel Cron    │──────│  /api/cron      │──────│  Upstash Redis  │
+│  Vercel Cron    │──────│  /api/cron      │──────│     Redis       │
 │  (every 20 hrs) │      │  (Go)           │      │  (token cache)  │
 └─────────────────┘      └─────────────────┘      └─────────────────┘
                                                           │
@@ -38,28 +38,21 @@ git clone https://github.com/Data-Buddies-Solutions/advancedmd-token-management.
 cd advancedmd-token-management
 ```
 
-### 2. Set Up Upstash Redis
-
-1. Go to [Upstash Console](https://console.upstash.com/)
-2. Create a new Redis database
-3. Copy the REST URL and REST Token
-
-### 3. Configure Environment Variables
+### 2. Configure Environment Variables
 
 In Vercel Dashboard → Settings → Environment Variables, add:
 
-| Variable | Description |
-|----------|-------------|
-| `ADVANCEDMD_USERNAME` | Your AdvancedMD API username |
-| `ADVANCEDMD_PASSWORD` | Your AdvancedMD API password |
-| `ADVANCEDMD_OFFICE_KEY` | Your office key (e.g., `991NNN`) |
-| `ADVANCEDMD_APP_NAME` | Your registered app name |
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST Token |
-| `CRON_SECRET` | Random secret for cron endpoint |
-| `API_SECRET` | Random secret for token endpoint |
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ADVANCEDMD_USERNAME` | Your AdvancedMD API username | `DBSAPI` |
+| `ADVANCEDMD_PASSWORD` | Your AdvancedMD API password | `yourpassword` |
+| `ADVANCEDMD_OFFICE_KEY` | Your office key | `991NNN` |
+| `ADVANCEDMD_APP_NAME` | Your registered app name | `YourAppName` |
+| `REDIS_URL` | Redis connection string | `redis://default:pass@host:port` |
+| `CRON_SECRET` | Random secret for cron endpoint | `random-string-123` |
+| `API_SECRET` | Random secret for token endpoint | `random-string-456` |
 
-### 4. Deploy to Vercel
+### 3. Deploy to Vercel
 
 ```bash
 # Install Vercel CLI
@@ -199,7 +192,7 @@ advancedmd-token-management/
 │   ├── advancedmd/
 │   │   └── auth.go      # 2-step authentication logic
 │   └── redis/
-│       └── redis.go     # Upstash Redis client
+│       └── redis.go     # Redis client
 ├── go.mod
 ├── vercel.json          # Vercel config + cron schedule
 └── README.md
@@ -220,7 +213,7 @@ advancedmd-token-management/
 - All credentials in Vercel Environment Variables (encrypted)
 - Cron endpoint protected by `CRON_SECRET`
 - Token endpoint protected by `API_SECRET`
-- Redis connection uses TLS
+- Redis connection uses TLS (if your provider supports it)
 
 ## Troubleshooting
 
@@ -234,8 +227,9 @@ advancedmd-token-management/
 - Ensure `ADVANCEDMD_APP_NAME` is registered with AdvancedMD
 
 ### Redis connection fails
-- Verify Upstash credentials are correct
-- Check `UPSTASH_REDIS_REST_URL` format (should be `https://...`)
+- Verify `REDIS_URL` format: `redis://default:password@host:port`
+- Check that your Redis instance allows external connections
+- Verify the password is correct
 
 ## License
 
