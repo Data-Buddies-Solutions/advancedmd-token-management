@@ -234,6 +234,118 @@ advancedmd-token-management/
 - Redis connection uses TLS (if your provider supports it)
 - AdvancedMD credentials never exposed to clients
 
+## AdvancedMD API Types
+
+AdvancedMD has multiple API types. Depending on the operation, you may need to use different APIs:
+
+### XMLRPC API (Legacy/Core Features)
+
+Used for core operations like `addpatient`, `getpatient`, scheduling, etc.
+
+**URL Pattern:** `{webserverUrl}/xmlrpc/processrequest.aspx`
+
+**Request Format:** Uses `ppmdmsg` wrapper with `@action` field
+```json
+{
+  "ppmdmsg": {
+    "@action": "addpatient",
+    "@class": "api",
+    "@msgtime": "4/1/2021 2:16:55 PM",
+    "@nocookie": "0",
+    "patientlist": {
+      "patient": {
+        "@name": "Smith,John",
+        "@sex": "M",
+        "@dob": "01/15/1980"
+      }
+    }
+  }
+}
+```
+
+**Headers Required:**
+- `Cookie: token={amd_token}`
+- `Content-Type: application/json`
+
+### EHR REST API (Electronic Health Records)
+
+Used for EHR-specific operations like documents, files, etc.
+
+**URL Pattern:** Replace `processrequest` with `ehr-api` in webserverUrl, then add endpoint path
+
+Example:
+- webserverUrl: `https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP`
+- EHR Base: `https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP`
+- Full URL: `https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP/files/documents`
+
+**Request Format:** Standard REST with JSON body (no `ppmdmsg` wrapper)
+
+### Practice Manager REST API
+
+Used for practice management operations like profiles, master files, etc.
+
+**URL Pattern:** Replace `processrequest` with `api` in webserverUrl, then add endpoint path
+
+Example:
+- webserverUrl: `https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP`
+- REST Base: `https://providerapi.advancedmd.com/api/api-801/YOURAPP`
+- Full URL: `https://providerapi.advancedmd.com/api/api-801/YOURAPP/masterfiles/olsprofiles`
+
+### API Comparison
+
+| | XMLRPC API | EHR REST API | PM REST API |
+|---|---|---|---|
+| **URL** | Single endpoint | Multiple endpoints | Multiple endpoints |
+| **Action** | `@action` in body | HTTP method | HTTP method |
+| **Format** | `ppmdmsg` wrapper | Standard JSON | Standard JSON |
+| **Use Cases** | Patients, scheduling | Documents, files | Profiles, master files |
+
+---
+
+## Planned Updates (TODO)
+
+### Add Pre-Built URL Bases to Response
+
+Currently, the `/api/token` endpoint returns:
+```json
+{
+  "token": "...",
+  "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
+  "createdAt": "..."
+}
+```
+
+**Planned update** - Return additional pre-built URLs for each API type:
+```json
+{
+  "token": "...",
+  "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
+  "xmlrpcUrl": "https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx",
+  "restApiBase": "https://providerapi.advancedmd.com/api/api-801/YOURAPP",
+  "ehrApiBase": "https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP",
+  "createdAt": "..."
+}
+```
+
+**Why?** ElevenLabs dynamic variables don't support string manipulation. Pre-built URLs allow direct use:
+- `{{amd_xmlrpc_url}}` → for XMLRPC calls (addpatient, etc.)
+- `{{amd_ehr_api_base}}/files/documents` → for EHR REST calls
+- `{{amd_rest_api_base}}/masterfiles/olsprofiles` → for PM REST calls
+
+### Update ElevenLabs Dynamic Variable Assignments
+
+After implementing the above, update the token tool assignments:
+
+| Variable | Value Path |
+|----------|------------|
+| `amd_token` | `token` |
+| `amd_webserver` | `webserverUrl` |
+| `amd_xmlrpc_url` | `xmlrpcUrl` |
+| `amd_ehr_api_base` | `ehrApiBase` |
+| `amd_rest_api_base` | `restApiBase` |
+
+---
+
 ## Troubleshooting
 
 ### Token endpoint returns 401
