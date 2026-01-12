@@ -204,10 +204,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify API secret to prevent unauthorized access
-	// ElevenLabs sends this as: Authorization: Bearer {API_SECRET}
+	// Accepts either:
+	//   - "Bearer {API_SECRET}" (standard bearer token format)
+	//   - "{API_SECRET}" (raw secret, for ElevenLabs which can't add Bearer prefix)
 	auth := r.Header.Get("Authorization")
-	expectedAuth := "Bearer " + os.Getenv("API_SECRET")
-	if auth != expectedAuth {
+	apiSecret := os.Getenv("API_SECRET")
+	expectedBearer := "Bearer " + apiSecret
+	if auth != expectedBearer && auth != apiSecret {
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Unauthorized"})
 		return
