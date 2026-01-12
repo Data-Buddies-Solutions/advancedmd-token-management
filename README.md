@@ -81,9 +81,23 @@ curl -H "Authorization: Bearer YOUR_API_SECRET" \
 {
   "token": "991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
   "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-101/YOURAPP",
+  "xmlrpcUrl": "https://providerapi.advancedmd.com/processrequest/api-101/YOURAPP/xmlrpc/processrequest.aspx",
+  "restApiBase": "https://providerapi.advancedmd.com/api/api-101/YOURAPP",
+  "ehrApiBase": "https://providerapi.advancedmd.com/ehr-api/api-101/YOURAPP",
   "createdAt": "2024-01-09T10:00:00Z"
 }
 ```
+
+**Response Fields:**
+
+| Field | Description | Use Case |
+|-------|-------------|----------|
+| `token` | AdvancedMD session token | Pass as `Cookie: token={token}` in API requests |
+| `webserverUrl` | Base URL from login | Reference only (use pre-built URLs instead) |
+| `xmlrpcUrl` | Full XMLRPC endpoint | For `addpatient`, `getpatient`, scheduling (ppmdmsg operations) |
+| `restApiBase` | Practice Manager REST base | Append paths like `/masterfiles/olsprofiles` |
+| `ehrApiBase` | EHR REST API base | Append paths like `/files/documents` |
+| `createdAt` | Token generation timestamp | For debugging/monitoring token freshness |
 
 ### GET /api/cron
 
@@ -126,12 +140,15 @@ Add header:
 
 ### 3. Dynamic Variable Assignment
 
-Map response fields for reuse:
+Map response fields for reuse in your ElevenLabs agent:
 
-| Variable | JSON Path |
-|----------|-----------|
-| `amd_token` | `token` |
-| `amd_webserver` | `webserverUrl` |
+| Variable | JSON Path | Purpose |
+|----------|-----------|---------|
+| `amd_token` | `token` | Authentication token for API requests |
+| `amd_webserver` | `webserverUrl` | Base URL (reference only) |
+| `amd_xmlrpc_url` | `xmlrpcUrl` | Full URL for XMLRPC API (addpatient, etc.) |
+| `amd_rest_api_base` | `restApiBase` | Base URL for Practice Manager REST API |
+| `amd_ehr_api_base` | `ehrApiBase` | Base URL for EHR REST API |
 
 ### 4. System Prompt
 
@@ -141,11 +158,48 @@ Add to your agent's system prompt:
 When the user asks about patient data, appointments, or medical records:
 
 1. FIRST call get_advancedmd_token to get authentication
-2. The token is stored in {amd_token}, server URL in {amd_webserver}
-3. Use these in subsequent AdvancedMD API calls
+2. Use the pre-built URLs directly:
+   - {amd_xmlrpc_url} for patient operations (addpatient, getpatient, scheduling)
+   - {amd_ehr_api_base}/files/documents for EHR documents
+   - {amd_rest_api_base}/masterfiles/olsprofiles for profiles
+3. Include Cookie header: Cookie: token={amd_token}
 4. Handle errors gracefully
 
 The token is cached for ~23 hours - call once per conversation.
+```
+
+### 5. Example: Add Patient Tool
+
+Create a server tool for adding patients:
+
+| Field | Value |
+|-------|-------|
+| Name | `add_patient` |
+| Description | Adds a new patient to AdvancedMD |
+| Method | POST |
+| URL | `{{amd_xmlrpc_url}}` |
+
+**Headers:**
+- `Cookie`: `token={{amd_token}}`
+- `Content-Type`: `application/json`
+
+**Body (example):**
+```json
+{
+  "ppmdmsg": {
+    "@action": "addpatient",
+    "@class": "api",
+    "@msgtime": "{{current_datetime}}",
+    "@nocookie": "0",
+    "patientlist": {
+      "patient": {
+        "@name": "{{patient_last_name}},{{patient_first_name}}",
+        "@sex": "{{patient_sex}}",
+        "@dob": "{{patient_dob}}"
+      }
+    }
+  }
+}
 ```
 
 ## How It Works
@@ -302,20 +356,12 @@ Example:
 
 ---
 
-## Planned Updates (TODO)
+## Recent Updates
 
-### Add Pre-Built URL Bases to Response
+### Pre-Built URL Bases (Implemented)
 
-Currently, the `/api/token` endpoint returns:
-```json
-{
-  "token": "...",
-  "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
-  "createdAt": "..."
-}
-```
+The `/api/token` endpoint now returns pre-built URLs for all AdvancedMD API types:
 
-**Planned update** - Return additional pre-built URLs for each API type:
 ```json
 {
   "token": "...",
@@ -327,22 +373,20 @@ Currently, the `/api/token` endpoint returns:
 }
 ```
 
-**Why?** ElevenLabs dynamic variables don't support string manipulation. Pre-built URLs allow direct use:
-- `{{amd_xmlrpc_url}}` → for XMLRPC calls (addpatient, etc.)
+**Why this was added:** ElevenLabs dynamic variables don't support string manipulation. Pre-built URLs allow direct use:
+- `{{amd_xmlrpc_url}}` → for XMLRPC calls (addpatient, getpatient, scheduling)
 - `{{amd_ehr_api_base}}/files/documents` → for EHR REST calls
 - `{{amd_rest_api_base}}/masterfiles/olsprofiles` → for PM REST calls
 
-### Update ElevenLabs Dynamic Variable Assignments
+### URL Building Logic
 
-After implementing the above, update the token tool assignments:
+The service automatically builds URLs from the webserver URL returned by AdvancedMD:
 
-| Variable | Value Path |
-|----------|------------|
-| `amd_token` | `token` |
-| `amd_webserver` | `webserverUrl` |
-| `amd_xmlrpc_url` | `xmlrpcUrl` |
-| `amd_ehr_api_base` | `ehrApiBase` |
-| `amd_rest_api_base` | `restApiBase` |
+| URL Type | Transformation | Example |
+|----------|----------------|---------|
+| `xmlrpcUrl` | Append `/xmlrpc/processrequest.aspx` | `{webserver}/xmlrpc/processrequest.aspx` |
+| `restApiBase` | Replace `/processrequest/` with `/api/` | `https://...com/api/api-801/APP` |
+| `ehrApiBase` | Replace `/processrequest/` with `/ehr-api/` | `https://...com/ehr-api/api-801/APP` |
 
 ---
 
