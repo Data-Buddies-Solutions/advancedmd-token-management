@@ -22,14 +22,14 @@ import (
 // AdvancedMD API types, allowing ElevenLabs agents to use them as template variables.
 //
 // ElevenLabs Dynamic Variable Mapping (use in URL templates like https://{variable}/path):
-//   - amd_token     -> token       (for Cookie: token={amd_token})
+//   - amd_token     -> token       (for Cookie or Authorization header)
 //   - amd_webserver -> webserverUrl (base path for reference)
 //   - amd_xmlrpc_url -> xmlrpcUrl   (for addpatient, getpatient, scheduling)
 //   - amd_rest_api_base -> restApiBase (for profiles, master files, scheduling)
 //   - amd_ehr_api_base -> ehrApiBase   (for documents, files)
 type TokenResponse struct {
 	// Token is the AdvancedMD session token for API authentication.
-	// Use in requests as: Cookie: token={Token}
+	// Use in requests as: Cookie: token={Token} or Authorization: Bearer {Token}
 	Token string `json:"token"`
 
 	// WebserverURL is the base path from AdvancedMD's login response (without https://).
