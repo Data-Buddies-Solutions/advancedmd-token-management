@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"advancedmd-token-management/pkg/advancedmd"
@@ -53,18 +54,23 @@ type CronErrorResponse struct {
 func buildCronTokenData(token, webserverURL string) *redis.TokenData {
 	return &redis.TokenData{
 		Token:        token,
-		WebserverURL: webserverURL,
+		WebserverURL: stripProtocol(webserverURL),
 		// Build XMLRPC URL: append /xmlrpc/processrequest.aspx to webserver URL
 		// Used for: addpatient, getpatient, scheduling (ppmdmsg operations)
-		XmlrpcURL: webserverURL + "/xmlrpc/processrequest.aspx",
+		XmlrpcURL: stripProtocol(webserverURL + "/xmlrpc/processrequest.aspx"),
 		// Build REST API base: replace "processrequest" with "api"
 		// Used for: profiles, master files (Practice Manager REST API)
-		RestApiBase: replaceURLSegment(webserverURL, "/processrequest/", "/api/"),
+		RestApiBase: stripProtocol(replaceURLSegment(webserverURL, "/processrequest/", "/api/")),
 		// Build EHR API base: replace "processrequest" with "ehr-api"
 		// Used for: documents, files (Electronic Health Records REST API)
-		EhrApiBase: replaceURLSegment(webserverURL, "/processrequest/", "/ehr-api/"),
+		EhrApiBase: stripProtocol(replaceURLSegment(webserverURL, "/processrequest/", "/ehr-api/")),
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// stripProtocol removes the https:// prefix from a URL for use in ElevenLabs templates.
+func stripProtocol(url string) string {
+	return strings.TrimPrefix(url, "https://")
 }
 
 // replaceURLSegment performs a string replacement in the URL path.
