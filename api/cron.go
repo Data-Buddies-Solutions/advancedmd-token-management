@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"advancedmd-token-management/pkg/advancedmd"
@@ -66,11 +65,6 @@ func buildCronTokenData(token, webserverURL string) *redis.TokenData {
 		EhrApiBase: stripProtocol(replaceURLSegment(webserverURL, "/processrequest/", "/ehr-api/")),
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
-}
-
-// stripProtocol removes the https:// prefix from a URL for use in ElevenLabs templates.
-func stripProtocol(url string) string {
-	return strings.TrimPrefix(url, "https://")
 }
 
 // replaceURLSegment performs a string replacement in the URL path.
