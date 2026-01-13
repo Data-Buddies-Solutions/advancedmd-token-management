@@ -18,37 +18,37 @@ import (
 )
 
 // TokenResponse is the JSON response structure for the /api/token endpoint.
-// It contains the authentication token and pre-built URLs for all AdvancedMD
-// API types, allowing ElevenLabs agents to make API calls without URL manipulation.
+// It contains the authentication token and base paths (without https://) for all
+// AdvancedMD API types, allowing ElevenLabs agents to use them as template variables.
 //
-// ElevenLabs Dynamic Variable Mapping:
+// ElevenLabs Dynamic Variable Mapping (use in URL templates like https://{variable}/path):
 //   - amd_token     -> token       (for Cookie: token={amd_token})
-//   - amd_webserver -> webserverUrl (original base URL for reference)
+//   - amd_webserver -> webserverUrl (base path for reference)
 //   - amd_xmlrpc_url -> xmlrpcUrl   (for addpatient, getpatient, scheduling)
-//   - amd_rest_api_base -> restApiBase (for profiles, master files)
+//   - amd_rest_api_base -> restApiBase (for profiles, master files, scheduling)
 //   - amd_ehr_api_base -> ehrApiBase   (for documents, files)
 type TokenResponse struct {
 	// Token is the AdvancedMD session token for API authentication.
 	// Use in requests as: Cookie: token={Token}
 	Token string `json:"token"`
 
-	// WebserverURL is the base URL from AdvancedMD's login response.
-	// Example: https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP
+	// WebserverURL is the base path from AdvancedMD's login response (without https://).
+	// Example: providerapi.advancedmd.com/processrequest/api-801/YOURAPP
 	WebserverURL string `json:"webserverUrl"`
 
-	// XmlrpcURL is the complete XMLRPC API endpoint URL.
-	// Use this directly for ppmdmsg operations (addpatient, getpatient, scheduling).
-	// Example: https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx
+	// XmlrpcURL is the XMLRPC API endpoint path (without https://).
+	// Use in ElevenLabs as: https://{amd_xmlrpc_url}
+	// Example: providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx
 	XmlrpcURL string `json:"xmlrpcUrl"`
 
-	// RestApiBase is the base URL for Practice Manager REST API.
-	// Append endpoint paths to this base (e.g., /masterfiles/olsprofiles).
-	// Example: https://providerapi.advancedmd.com/api/api-801/YOURAPP
+	// RestApiBase is the base path for Practice Manager REST API (without https://).
+	// Use in ElevenLabs as: https://{amd_rest_api_base}/scheduler/Columns/openings
+	// Example: providerapi.advancedmd.com/api/api-801/YOURAPP
 	RestApiBase string `json:"restApiBase"`
 
-	// EhrApiBase is the base URL for Electronic Health Records (EHR) REST API.
-	// Append endpoint paths to this base (e.g., /files/documents).
-	// Example: https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP
+	// EhrApiBase is the base path for Electronic Health Records (EHR) REST API (without https://).
+	// Use in ElevenLabs as: https://{amd_ehr_api_base}/files/documents
+	// Example: providerapi.advancedmd.com/ehr-api/api-801/YOURAPP
 	EhrApiBase string `json:"ehrApiBase"`
 
 	// CreatedAt is the RFC3339 timestamp when this token was generated.
@@ -66,69 +66,73 @@ type ErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
-// buildXmlrpcURL constructs the full XMLRPC API endpoint URL from the webserver URL.
+// stripProtocol removes the https:// prefix from a URL so it can be used
+// as a template variable in ElevenLabs (e.g., https://{amd_rest_api_base}/path).
+func stripProtocol(url string) string {
+	return strings.TrimPrefix(url, "https://")
+}
+
+// buildXmlrpcURL constructs the XMLRPC API endpoint path from the webserver URL.
 // The XMLRPC API is used for legacy/core operations like addpatient, getpatient, scheduling.
 //
 // URL transformation:
 //
 //	Input:  https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP
-//	Output: https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx
+//	Output: providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx
 //
 // Parameters:
 //   - webserverURL: Base URL returned from AdvancedMD login
 //
 // Returns:
-//   - Full XMLRPC endpoint URL ready for ppmdmsg API calls
+//   - XMLRPC endpoint path (without https://) for use in ElevenLabs templates
 func buildXmlrpcURL(webserverURL string) string {
-	return webserverURL + "/xmlrpc/processrequest.aspx"
+	return stripProtocol(webserverURL + "/xmlrpc/processrequest.aspx")
 }
 
-// buildRestApiBase constructs the Practice Manager REST API base URL.
+// buildRestApiBase constructs the Practice Manager REST API base path.
 // Used for practice management operations like profiles and master files.
 //
 // URL transformation (replaces "processrequest" with "api"):
 //
 //	Input:  https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP
-//	Output: https://providerapi.advancedmd.com/api/api-801/YOURAPP
+//	Output: providerapi.advancedmd.com/api/api-801/YOURAPP
 //
-// Usage example:
+// Usage in ElevenLabs:
 //
-//	base := buildRestApiBase(webserverURL)
-//	fullURL := base + "/masterfiles/olsprofiles"
+//	https://{amd_rest_api_base}/scheduler/Columns/openings
 //
 // Parameters:
 //   - webserverURL: Base URL returned from AdvancedMD login
 //
 // Returns:
-//   - REST API base URL (append endpoint paths to use)
+//   - REST API base path (without https://) for use in ElevenLabs templates
 func buildRestApiBase(webserverURL string) string {
 	// Replace "processrequest" with "api" in the URL path
 	// Example: /processrequest/api-801/YOURAPP -> /api/api-801/YOURAPP
-	return strings.Replace(webserverURL, "/processrequest/", "/api/", 1)
+	return stripProtocol(strings.Replace(webserverURL, "/processrequest/", "/api/", 1))
 }
 
-// buildEhrApiBase constructs the Electronic Health Records (EHR) REST API base URL.
+// buildEhrApiBase constructs the Electronic Health Records (EHR) REST API base path.
 // Used for EHR-specific operations like documents and files.
 //
 // URL transformation (replaces "processrequest" with "ehr-api"):
 //
 //	Input:  https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP
-//	Output: https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP
+//	Output: providerapi.advancedmd.com/ehr-api/api-801/YOURAPP
 //
-// Usage example:
+// Usage in ElevenLabs:
 //
-//	base := buildEhrApiBase(webserverURL)
-//	fullURL := base + "/files/documents"
+//	https://{amd_ehr_api_base}/files/documents
 //
 // Parameters:
 //   - webserverURL: Base URL returned from AdvancedMD login
 //
 // Returns:
-//   - EHR API base URL (append endpoint paths to use)
+//   - EHR API base path (without https://) for use in ElevenLabs templates
 func buildEhrApiBase(webserverURL string) string {
 	// Replace "processrequest" with "ehr-api" in the URL path
 	// Example: /processrequest/api-801/YOURAPP -> /ehr-api/api-801/YOURAPP
-	return strings.Replace(webserverURL, "/processrequest/", "/ehr-api/", 1)
+	return stripProtocol(strings.Replace(webserverURL, "/processrequest/", "/ehr-api/", 1))
 }
 
 // buildTokenData creates a complete TokenData struct with all pre-built URLs.
@@ -144,7 +148,7 @@ func buildEhrApiBase(webserverURL string) string {
 func buildTokenData(token, webserverURL string) *redis.TokenData {
 	return &redis.TokenData{
 		Token:        token,
-		WebserverURL: webserverURL,
+		WebserverURL: stripProtocol(webserverURL),
 		XmlrpcURL:    buildXmlrpcURL(webserverURL),
 		RestApiBase:  buildRestApiBase(webserverURL),
 		EhrApiBase:   buildEhrApiBase(webserverURL),
