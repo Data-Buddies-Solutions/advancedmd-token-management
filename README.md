@@ -79,11 +79,11 @@ curl -H "Authorization: Bearer YOUR_API_SECRET" \
 **Response:**
 ```json
 {
-  "token": "991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
-  "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-101/YOURAPP",
-  "xmlrpcUrl": "https://providerapi.advancedmd.com/processrequest/api-101/YOURAPP/xmlrpc/processrequest.aspx",
-  "restApiBase": "https://providerapi.advancedmd.com/api/api-101/YOURAPP",
-  "ehrApiBase": "https://providerapi.advancedmd.com/ehr-api/api-101/YOURAPP",
+  "token": "Bearer 991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
+  "webserverUrl": "providerapi.advancedmd.com/processrequest/api-101/YOURAPP",
+  "xmlrpcUrl": "providerapi.advancedmd.com/processrequest/api-101/YOURAPP/xmlrpc/processrequest.aspx",
+  "restApiBase": "providerapi.advancedmd.com/api/api-101/YOURAPP",
+  "ehrApiBase": "providerapi.advancedmd.com/ehr-api/api-101/YOURAPP",
   "createdAt": "2024-01-09T10:00:00Z"
 }
 ```
@@ -92,12 +92,14 @@ curl -H "Authorization: Bearer YOUR_API_SECRET" \
 
 | Field | Description | Use Case |
 |-------|-------------|----------|
-| `token` | AdvancedMD session token | Pass as `Cookie: token={token}` in API requests |
-| `webserverUrl` | Base URL from login | Reference only (use pre-built URLs instead) |
-| `xmlrpcUrl` | Full XMLRPC endpoint | For `addpatient`, `getpatient`, scheduling (ppmdmsg operations) |
-| `restApiBase` | Practice Manager REST base | Append paths like `/masterfiles/olsprofiles` |
-| `ehrApiBase` | EHR REST API base | Append paths like `/files/documents` |
+| `token` | Pre-formatted Bearer token | Use directly as `Authorization: {amd_token}` header |
+| `webserverUrl` | Base path from login (no https://) | Reference only |
+| `xmlrpcUrl` | XMLRPC endpoint path (no https://) | Use as `https://{amd_xmlrpc_url}` |
+| `restApiBase` | Practice Manager REST base (no https://) | Use as `https://{amd_rest_api_base}/endpoint` |
+| `ehrApiBase` | EHR REST API base (no https://) | Use as `https://{amd_ehr_api_base}/endpoint` |
 | `createdAt` | Token generation timestamp | For debugging/monitoring token freshness |
+
+> **Note for ElevenLabs:** URLs are returned WITHOUT the `https://` prefix so they can be used as template variables (e.g., `https://{amd_rest_api_base}/scheduler/Columns/openings`). The token is returned WITH the `Bearer ` prefix so it can be used directly as the Authorization header value.
 
 ### GET /api/cron
 
@@ -144,11 +146,11 @@ Map response fields for reuse in your ElevenLabs agent:
 
 | Variable | JSON Path | Purpose |
 |----------|-----------|---------|
-| `amd_token` | `token` | Authentication token for API requests |
-| `amd_webserver` | `webserverUrl` | Base URL (reference only) |
-| `amd_xmlrpc_url` | `xmlrpcUrl` | Full URL for XMLRPC API (addpatient, etc.) |
-| `amd_rest_api_base` | `restApiBase` | Base URL for Practice Manager REST API |
-| `amd_ehr_api_base` | `ehrApiBase` | Base URL for EHR REST API |
+| `amd_token` | `token` | Pre-formatted Bearer token for Authorization header |
+| `amd_webserver` | `webserverUrl` | Base path (reference only, no https://) |
+| `amd_xmlrpc_url` | `xmlrpcUrl` | XMLRPC API path (use as `https://{amd_xmlrpc_url}`) |
+| `amd_rest_api_base` | `restApiBase` | REST API base (use as `https://{amd_rest_api_base}/endpoint`) |
+| `amd_ehr_api_base` | `ehrApiBase` | EHR API base (use as `https://{amd_ehr_api_base}/endpoint`) |
 
 ### 4. System Prompt
 
@@ -158,17 +160,32 @@ Add to your agent's system prompt:
 When the user asks about patient data, appointments, or medical records:
 
 1. FIRST call get_advancedmd_token to get authentication
-2. Use the pre-built URLs directly:
-   - {amd_xmlrpc_url} for patient operations (addpatient, getpatient, scheduling)
-   - {amd_ehr_api_base}/files/documents for EHR documents
-   - {amd_rest_api_base}/masterfiles/olsprofiles for profiles
-3. Include Cookie header: Cookie: token={amd_token}
+2. Use the URL variables with https:// prefix:
+   - https://{amd_xmlrpc_url} for XMLRPC operations (addpatient, getpatient)
+   - https://{amd_rest_api_base}/scheduler/Columns/openings for scheduling
+   - https://{amd_ehr_api_base}/files/documents for EHR documents
+3. Include Authorization header with {amd_token} (already includes "Bearer " prefix)
 4. Handle errors gracefully
 
 The token is cached for ~23 hours - call once per conversation.
 ```
 
-### 5. Example: Add Patient Tool
+### 5. Example: REST API Tool (Scheduling)
+
+Create a server tool for getting appointment openings:
+
+| Field | Value |
+|-------|-------|
+| Name | `get_openings` |
+| Description | Gets available appointment openings from AdvancedMD |
+| Method | POST |
+| URL | `https://{amd_rest_api_base}/scheduler/Columns/openings` |
+
+**Headers:**
+- `Authorization`: `{amd_token}` (dynamic variable - already includes "Bearer " prefix)
+- `Content-Type`: `application/json`
+
+### 6. Example: XMLRPC API Tool (Add Patient)
 
 Create a server tool for adding patients:
 
@@ -177,10 +194,10 @@ Create a server tool for adding patients:
 | Name | `add_patient` |
 | Description | Adds a new patient to AdvancedMD |
 | Method | POST |
-| URL | `{{amd_xmlrpc_url}}` |
+| URL | `https://{amd_xmlrpc_url}` |
 
 **Headers:**
-- `Cookie`: `token={{amd_token}}`
+- `Authorization`: `{amd_token}` (dynamic variable - already includes "Bearer " prefix)
 - `Content-Type`: `application/json`
 
 **Body (example):**
@@ -231,9 +248,10 @@ Hour 21: ElevenLabs calls /api/token → Redis read (~50ms) ✓
 
 ### Using the Token
 
-In AdvancedMD API calls:
-- **Cookie:** `Cookie: token={token}`
-- **Or Bearer:** `Authorization: Bearer {token}`
+The token is pre-formatted with "Bearer " prefix for direct use:
+- **Authorization Header:** `Authorization: {amd_token}` (sends `Bearer <token>`)
+
+> **Note:** The token value already includes "Bearer " so don't add it again!
 
 ## Project Structure
 
@@ -358,35 +376,39 @@ Example:
 
 ## Recent Updates
 
-### Pre-Built URL Bases (Implemented)
+### ElevenLabs-Optimized Response Format
 
-The `/api/token` endpoint now returns pre-built URLs for all AdvancedMD API types:
+The `/api/token` endpoint returns values optimized for ElevenLabs dynamic variables:
 
 ```json
 {
-  "token": "...",
-  "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
-  "xmlrpcUrl": "https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx",
-  "restApiBase": "https://providerapi.advancedmd.com/api/api-801/YOURAPP",
-  "ehrApiBase": "https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP",
+  "token": "Bearer 991NNN...",
+  "webserverUrl": "providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
+  "xmlrpcUrl": "providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx",
+  "restApiBase": "providerapi.advancedmd.com/api/api-801/YOURAPP",
+  "ehrApiBase": "providerapi.advancedmd.com/ehr-api/api-801/YOURAPP",
   "createdAt": "..."
 }
 ```
 
-**Why this was added:** ElevenLabs dynamic variables don't support string manipulation. Pre-built URLs allow direct use:
-- `{{amd_xmlrpc_url}}` → for XMLRPC calls (addpatient, getpatient, scheduling)
-- `{{amd_ehr_api_base}}/files/documents` → for EHR REST calls
-- `{{amd_rest_api_base}}/masterfiles/olsprofiles` → for PM REST calls
+**Key optimizations for ElevenLabs:**
+
+1. **Token includes "Bearer " prefix** - Use directly as Authorization header value without string manipulation
+2. **URLs exclude "https://" prefix** - Use in URL templates like `https://{amd_rest_api_base}/endpoint`
+
+**Why this format:** ElevenLabs dynamic variables don't support string concatenation. These formats allow direct use:
+- `Authorization: {amd_token}` → sends `Authorization: Bearer <token>`
+- `https://{amd_rest_api_base}/scheduler/Columns/openings` → builds complete URL
 
 ### URL Building Logic
 
 The service automatically builds URLs from the webserver URL returned by AdvancedMD:
 
-| URL Type | Transformation | Example |
-|----------|----------------|---------|
-| `xmlrpcUrl` | Append `/xmlrpc/processrequest.aspx` | `{webserver}/xmlrpc/processrequest.aspx` |
-| `restApiBase` | Replace `/processrequest/` with `/api/` | `https://...com/api/api-801/APP` |
-| `ehrApiBase` | Replace `/processrequest/` with `/ehr-api/` | `https://...com/ehr-api/api-801/APP` |
+| URL Type | Transformation | Example Output |
+|----------|----------------|----------------|
+| `xmlrpcUrl` | Append `/xmlrpc/processrequest.aspx`, strip https:// | `providerapi.advancedmd.com/.../xmlrpc/processrequest.aspx` |
+| `restApiBase` | Replace `/processrequest/` with `/api/`, strip https:// | `providerapi.advancedmd.com/api/api-801/APP` |
+| `ehrApiBase` | Replace `/processrequest/` with `/ehr-api/`, strip https:// | `providerapi.advancedmd.com/ehr-api/api-801/APP` |
 
 ---
 
