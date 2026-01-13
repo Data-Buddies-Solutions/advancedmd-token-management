@@ -28,8 +28,8 @@ import (
 //   - amd_rest_api_base -> restApiBase (for profiles, master files, scheduling)
 //   - amd_ehr_api_base -> ehrApiBase   (for documents, files)
 type TokenResponse struct {
-	// Token is the AdvancedMD session token for API authentication.
-	// Use in requests as: Cookie: token={Token} or Authorization: Bearer {Token}
+	// Token is the AdvancedMD session token pre-formatted with "Bearer " prefix.
+	// Use directly as Authorization header value: Authorization: {amd_token}
 	Token string `json:"token"`
 
 	// WebserverURL is the base path from AdvancedMD's login response (without https://).
@@ -147,7 +147,7 @@ func buildEhrApiBase(webserverURL string) string {
 //   - *redis.TokenData: Complete token data ready for caching and response
 func buildTokenData(token, webserverURL string) *redis.TokenData {
 	return &redis.TokenData{
-		Token:        token,
+		Token:        "Bearer " + token,
 		WebserverURL: stripProtocol(webserverURL),
 		XmlrpcURL:    buildXmlrpcURL(webserverURL),
 		RestApiBase:  buildRestApiBase(webserverURL),

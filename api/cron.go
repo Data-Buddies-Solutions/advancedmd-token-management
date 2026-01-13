@@ -52,7 +52,7 @@ type CronErrorResponse struct {
 //   - *redis.TokenData: Complete token data ready for caching
 func buildCronTokenData(token, webserverURL string) *redis.TokenData {
 	return &redis.TokenData{
-		Token:        token,
+		Token:        "Bearer " + token,
 		WebserverURL: stripProtocol(webserverURL),
 		// Build XMLRPC URL: append /xmlrpc/processrequest.aspx to webserver URL
 		// Used for: addpatient, getpatient, scheduling (ppmdmsg operations)
