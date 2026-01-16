@@ -25,9 +25,14 @@ import (
 //   - RestApiBase: Base URL for Practice Manager REST API (profiles, master files)
 //   - EhrApiBase: Base URL for EHR REST API (documents, files)
 type TokenData struct {
-	// Token is the AdvancedMD session token used for authentication.
-	// Pass this in the Cookie header as: Cookie: token={Token}
+	// Token is the AdvancedMD session token pre-formatted with "Bearer " prefix.
+	// Use directly as Authorization header value for REST API calls.
 	Token string `json:"token"`
+
+	// CookieToken is the token pre-formatted for XMLRPC Cookie header.
+	// Use directly as Cookie header value: Cookie: {CookieToken}
+	// Format: "token={rawtoken}"
+	CookieToken string `json:"cookieToken"`
 
 	// WebserverURL is the base URL returned from AdvancedMD's 2-step login.
 	// Example: https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP

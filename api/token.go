@@ -22,15 +22,21 @@ import (
 // AdvancedMD API types, allowing ElevenLabs agents to use them as template variables.
 //
 // ElevenLabs Dynamic Variable Mapping (use in URL templates like https://{variable}/path):
-//   - amd_token     -> token       (for Cookie or Authorization header)
-//   - amd_webserver -> webserverUrl (base path for reference)
-//   - amd_xmlrpc_url -> xmlrpcUrl   (for addpatient, getpatient, scheduling)
+//   - amd_token        -> token       (for REST API Authorization header)
+//   - amd_cookie_token -> cookieToken (for XMLRPC Cookie header)
+//   - amd_webserver    -> webserverUrl (base path for reference)
+//   - amd_xmlrpc_url   -> xmlrpcUrl   (for addpatient, getpatient, scheduling)
 //   - amd_rest_api_base -> restApiBase (for profiles, master files, scheduling)
 //   - amd_ehr_api_base -> ehrApiBase   (for documents, files)
 type TokenResponse struct {
 	// Token is the AdvancedMD session token pre-formatted with "Bearer " prefix.
 	// Use directly as Authorization header value: Authorization: {amd_token}
 	Token string `json:"token"`
+
+	// CookieToken is the token pre-formatted for XMLRPC Cookie header.
+	// Use directly as Cookie header value: Cookie: {amd_cookie_token}
+	// Format: "token={rawtoken}"
+	CookieToken string `json:"cookieToken"`
 
 	// WebserverURL is the base path from AdvancedMD's login response (without https://).
 	// Example: providerapi.advancedmd.com/processrequest/api-801/YOURAPP
@@ -148,6 +154,7 @@ func buildEhrApiBase(webserverURL string) string {
 func buildTokenData(token, webserverURL string) *redis.TokenData {
 	return &redis.TokenData{
 		Token:        "Bearer " + token,
+		CookieToken:  "token=" + token,
 		WebserverURL: stripProtocol(webserverURL),
 		XmlrpcURL:    buildXmlrpcURL(webserverURL),
 		RestApiBase:  buildRestApiBase(webserverURL),
@@ -167,6 +174,7 @@ func buildTokenData(token, webserverURL string) *redis.TokenData {
 func tokenDataToResponse(data *redis.TokenData) TokenResponse {
 	return TokenResponse{
 		Token:        data.Token,
+		CookieToken:  data.CookieToken,
 		WebserverURL: data.WebserverURL,
 		XmlrpcURL:    data.XmlrpcURL,
 		RestApiBase:  data.RestApiBase,

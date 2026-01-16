@@ -80,6 +80,7 @@ curl -H "Authorization: Bearer YOUR_API_SECRET" \
 ```json
 {
   "token": "Bearer 991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
+  "cookieToken": "token=991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
   "webserverUrl": "providerapi.advancedmd.com/processrequest/api-101/YOURAPP",
   "xmlrpcUrl": "providerapi.advancedmd.com/processrequest/api-101/YOURAPP/xmlrpc/processrequest.aspx",
   "restApiBase": "providerapi.advancedmd.com/api/api-101/YOURAPP",
@@ -92,14 +93,15 @@ curl -H "Authorization: Bearer YOUR_API_SECRET" \
 
 | Field | Description | Use Case |
 |-------|-------------|----------|
-| `token` | Pre-formatted Bearer token | Use directly as `Authorization: {amd_token}` header |
+| `token` | Pre-formatted Bearer token | Use directly as `Authorization: {amd_token}` header for REST APIs |
+| `cookieToken` | Pre-formatted Cookie token | Use directly as `Cookie: {amd_cookie_token}` header for XMLRPC APIs |
 | `webserverUrl` | Base path from login (no https://) | Reference only |
 | `xmlrpcUrl` | XMLRPC endpoint path (no https://) | Use as `https://{amd_xmlrpc_url}` |
 | `restApiBase` | Practice Manager REST base (no https://) | Use as `https://{amd_rest_api_base}/endpoint` |
 | `ehrApiBase` | EHR REST API base (no https://) | Use as `https://{amd_ehr_api_base}/endpoint` |
 | `createdAt` | Token generation timestamp | For debugging/monitoring token freshness |
 
-> **Note for ElevenLabs:** URLs are returned WITHOUT the `https://` prefix so they can be used as template variables (e.g., `https://{amd_rest_api_base}/scheduler/Columns/openings`). The token is returned WITH the `Bearer ` prefix so it can be used directly as the Authorization header value.
+> **Note for ElevenLabs:** URLs are returned WITHOUT the `https://` prefix so they can be used as template variables (e.g., `https://{amd_rest_api_base}/scheduler/Columns/openings`). Two token formats are provided: `token` with "Bearer " prefix for REST API Authorization headers, and `cookieToken` with "token=" prefix for XMLRPC Cookie headers.
 
 ### GET /api/cron
 
@@ -146,7 +148,8 @@ Map response fields for reuse in your ElevenLabs agent:
 
 | Variable | JSON Path | Purpose |
 |----------|-----------|---------|
-| `amd_token` | `token` | Pre-formatted Bearer token for Authorization header |
+| `amd_token` | `token` | Pre-formatted Bearer token for REST API Authorization header |
+| `amd_cookie_token` | `cookieToken` | Pre-formatted Cookie token for XMLRPC Cookie header |
 | `amd_webserver` | `webserverUrl` | Base path (reference only, no https://) |
 | `amd_xmlrpc_url` | `xmlrpcUrl` | XMLRPC API path (use as `https://{amd_xmlrpc_url}`) |
 | `amd_rest_api_base` | `restApiBase` | REST API base (use as `https://{amd_rest_api_base}/endpoint`) |
@@ -197,7 +200,7 @@ Create a server tool for adding patients:
 | URL | `https://{amd_xmlrpc_url}` |
 
 **Headers:**
-- `Authorization`: `{amd_token}` (dynamic variable - already includes "Bearer " prefix)
+- `Cookie`: `{amd_cookie_token}` (dynamic variable - pre-formatted with "token=" prefix)
 - `Content-Type`: `application/json`
 
 **Body (example):**
@@ -336,7 +339,7 @@ Used for core operations like `addpatient`, `getpatient`, scheduling, etc.
 ```
 
 **Headers Required:**
-- `Cookie: token={amd_token}`
+- `Cookie: {amd_cookie_token}` (pre-formatted, includes "token=" prefix)
 - `Content-Type: application/json`
 
 ### EHR REST API (Electronic Health Records)
@@ -383,6 +386,7 @@ The `/api/token` endpoint returns values optimized for ElevenLabs dynamic variab
 ```json
 {
   "token": "Bearer 991NNN...",
+  "cookieToken": "token=991NNN...",
   "webserverUrl": "providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
   "xmlrpcUrl": "providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx",
   "restApiBase": "providerapi.advancedmd.com/api/api-801/YOURAPP",
@@ -393,11 +397,13 @@ The `/api/token` endpoint returns values optimized for ElevenLabs dynamic variab
 
 **Key optimizations for ElevenLabs:**
 
-1. **Token includes "Bearer " prefix** - Use directly as Authorization header value without string manipulation
-2. **URLs exclude "https://" prefix** - Use in URL templates like `https://{amd_rest_api_base}/endpoint`
+1. **Token includes "Bearer " prefix** - Use directly as Authorization header value for REST APIs
+2. **CookieToken includes "token=" prefix** - Use directly as Cookie header value for XMLRPC APIs
+3. **URLs exclude "https://" prefix** - Use in URL templates like `https://{amd_rest_api_base}/endpoint`
 
 **Why this format:** ElevenLabs dynamic variables don't support string concatenation. These formats allow direct use:
-- `Authorization: {amd_token}` → sends `Authorization: Bearer <token>`
+- `Authorization: {amd_token}` → sends `Authorization: Bearer <token>` (REST APIs)
+- `Cookie: {amd_cookie_token}` → sends `Cookie: token=<token>` (XMLRPC APIs)
 - `https://{amd_rest_api_base}/scheduler/Columns/openings` → builds complete URL
 
 ### URL Building Logic
