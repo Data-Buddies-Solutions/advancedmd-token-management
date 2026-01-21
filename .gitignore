@@ -25,3 +25,4 @@ vendor/
 
 # Vercel
 .vercel/
+.vercel
