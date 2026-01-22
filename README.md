@@ -275,13 +275,29 @@ advancedmd-token-management/
 
 ## Performance
 
+Real-world metrics observed from production Vercel logs:
+
+### Endpoint Performance
+
+| Endpoint | Cold Start | Warm Response | Memory Used |
+|----------|------------|---------------|-------------|
+| `/api/token` | 84-170ms | **7-11ms** | 23-25 MB |
+| `/api/verify-patient` | N/A | 189-711ms | 33-34 MB |
+| `/api/cron` | N/A | 272-669ms | 32-33 MB |
+
+### What Affects Latency
+
+- **`/api/token`**: Mostly Redis read time. Extremely fast when warm.
+- **`/api/verify-patient`**: 150-650ms is waiting for AdvancedMD's XMLRPC API to respond. This latency is on AdvancedMD's side, not ours.
+- **`/api/cron`**: Performs 2-step authentication + Redis write. Latency depends on AdvancedMD response times.
+
+### Token Lifecycle
+
 | Metric | Value |
 |--------|-------|
-| Cold Start | ~50ms |
-| Warm Response | ~10-20ms |
-| Redis Latency | ~20ms |
 | Token TTL | 23 hours |
 | Cron Schedule | Every 20 hours |
+| Buffer Window | 3 hours |
 
 ## Security
 

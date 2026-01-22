@@ -7,6 +7,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -135,6 +136,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// This gets a fresh token regardless of whether one is already cached
 	token, webserverURL, err := advancedmd.Authenticate()
 	if err != nil {
+		log.Printf("[CRON ERROR] AdvancedMD authentication failed: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(CronErrorResponse{
 			Error:   "Authentication failed",
@@ -150,6 +152,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// Step 3: Save token to Redis with 23-hour TTL
 	// The 20-hour cron schedule + 23-hour TTL provides a 3-hour buffer
 	if err := redis.SaveToken(tokenData); err != nil {
+		log.Printf("[CRON ERROR] Redis save failed: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(CronErrorResponse{
 			Error:   "Failed to save token to cache",

@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/**/*.go": {
+      "memory": 512
+    }
+  },
   "crons": [
     {
       "path": "/api/cron",
