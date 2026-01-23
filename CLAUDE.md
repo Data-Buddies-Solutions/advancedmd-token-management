@@ -17,7 +17,7 @@ AdvancedMD uses a non-standard 2-step authentication:
 1. **Step 1**: POST to `partnerlogin.advancedmd.com` → Returns a webserver URL (confusingly returns `success="0"` but includes the URL)
 2. **Step 2**: POST to the webserver URL → Returns the actual session token
 
-See `pkg/advancedmd/auth.go` for implementation details.
+See `internal/auth/authenticator.go` for implementation details.
 
 ### AdvancedMD API Types
 
@@ -43,16 +43,27 @@ This is because ElevenLabs doesn't support string concatenation in dynamic varia
 
 ```
 advancedmd-token-management/
-├── api/
-│   ├── token.go         # GET /api/token - Returns cached token for ElevenLabs
-│   └── cron.go          # GET /api/cron - Refreshes token (Vercel Cron)
-├── pkg/
-│   ├── advancedmd/
-│   │   └── auth.go      # 2-step authentication implementation
-│   └── redis/
-│       └── redis.go     # Token caching
-├── vercel.json          # Vercel config + cron schedule
-└── README.md            # User-facing documentation
+├── cmd/
+│   └── api/
+│       └── main.go              # Server entrypoint, graceful shutdown
+├── internal/
+│   ├── config/
+│   │   └── config.go            # Environment variable loading
+│   ├── domain/
+│   │   ├── token.go             # Token model + URL transforms
+│   │   └── patient.go           # Patient model + DOB normalization
+│   ├── auth/
+│   │   ├── authenticator.go     # 2-step AdvancedMD authentication
+│   │   └── token_manager.go     # Background refresh + caching
+│   ├── clients/
+│   │   ├── redis.go             # Pooled Redis client
+│   │   └── advancedmd_xmlrpc.go # XMLRPC client for patient lookup
+│   └── http/
+│       ├── router.go            # chi router setup
+│       ├── handlers.go          # Request handlers
+│       └── middleware.go        # Auth, logging, request ID
+├── Dockerfile                   # Multi-stage build for Railway
+└── README.md                    # User-facing documentation
 ```
 
 ## Common Tasks
@@ -60,25 +71,30 @@ advancedmd-token-management/
 ### Running Locally
 
 ```bash
-# Set environment variables (see .env.example)
+# Set environment variables
 export ADVANCEDMD_USERNAME=...
 export ADVANCEDMD_PASSWORD=...
-# etc.
+export ADVANCEDMD_OFFICE_KEY=...
+export ADVANCEDMD_APP_NAME=...
+export REDIS_URL=...
+export API_SECRET=...
 
-# Run with vercel dev
-vercel dev
+# Build and run
+go build -o gateway ./cmd/api && ./gateway
 ```
 
 ### Testing the Token Endpoint
 
 ```bash
-curl -H "Authorization: Bearer YOUR_API_SECRET" http://localhost:3000/api/token
+curl -H "Authorization: Bearer YOUR_API_SECRET" http://localhost:8080/api/token
 ```
 
-### Deploying
+### Deploying to Railway
 
 ```bash
-vercel --prod
+railway login
+railway link
+railway up
 ```
 
 ## AdvancedMD API Quirks to Know

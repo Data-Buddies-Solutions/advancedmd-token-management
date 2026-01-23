@@ -1,32 +1,67 @@
 # AdvancedMD Token Management Service
 
-A high-performance Go microservice deployed on Vercel that handles AdvancedMD's 2-step authentication flow and caches tokens in Redis. Designed for integration with ElevenLabs conversational agents.
+A high-performance Go microservice that handles AdvancedMD's 2-step authentication flow and caches tokens in Redis. Designed for integration with ElevenLabs conversational agents.
 
 ## Features
 
-- **Fast**: Go runtime with ~50ms cold starts on Vercel
+- **Fast**: Sub-millisecond server processing (~100µs), ~300ms total round-trip
 - **Cached**: Tokens stored in Redis with 23-hour TTL
-- **Automated**: Vercel Cron refreshes tokens every 20 hours
+- **Automated**: Background goroutine refreshes tokens every 20 hours
 - **Fallback**: On-demand token refresh if cache is empty
+- **Reliable**: Graceful shutdown, health checks, request logging
 - **Secure**: API key authentication on all endpoints
 
 ## Architecture
 
 ```
-┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│  Vercel Cron    │──────│  /api/cron      │──────│     Redis       │
-│  (every 20 hrs) │      │  (Go)           │      │  (token cache)  │
-└─────────────────┘      └─────────────────┘      └─────────────────┘
-                                                          │
-                         ┌─────────────────┐              │
-                         │  /api/token     │──────────────┘
-                         │  (Go ~50ms)     │
-                         └─────────────────┘
-                                 │
-                         ┌─────────────────┐
-                         │  ElevenLabs     │
-                         │  Agent          │
-                         └─────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         Railway                                  │
+│  ┌─────────────────┐      ┌─────────────────┐                   │
+│  │  Background     │──────│     Redis       │                   │
+│  │  Refresh        │      │  (token cache)  │                   │
+│  │  (every 20 hrs) │      └─────────────────┘                   │
+│  └─────────────────┘              │                             │
+│          │                        │                             │
+│  ┌───────┴─────────────────────────┴───────┐                    │
+│  │              Go Gateway                  │                    │
+│  │  • GET  /health         (no auth)       │                    │
+│  │  • GET  /api/token      (auth required) │                    │
+│  │  • POST /api/verify-patient (auth req)  │                    │
+│  └─────────────────────────────────────────┘                    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                      ┌───────┴───────┐
+                      │  ElevenLabs   │
+                      │  Agent        │
+                      └───────────────┘
+```
+
+## Project Structure
+
+```
+advancedmd-token-management/
+├── cmd/
+│   └── api/
+│       └── main.go              # Server entrypoint, graceful shutdown
+├── internal/
+│   ├── config/
+│   │   └── config.go            # Environment variable loading
+│   ├── domain/
+│   │   ├── token.go             # Token model + URL transforms
+│   │   └── patient.go           # Patient model + DOB normalization
+│   ├── auth/
+│   │   ├── authenticator.go     # 2-step AdvancedMD authentication
+│   │   └── token_manager.go     # Background refresh + caching
+│   ├── clients/
+│   │   ├── redis.go             # Pooled Redis client
+│   │   └── advancedmd_xmlrpc.go # XMLRPC client for patient lookup
+│   └── http/
+│       ├── router.go            # chi router setup
+│       ├── handlers.go          # Request handlers
+│       └── middleware.go        # Auth, logging, request ID
+├── Dockerfile                   # Multi-stage build for Railway
+├── go.mod
+└── README.md
 ```
 
 ## Quick Start
@@ -40,8 +75,6 @@ cd advancedmd-token-management
 
 ### 2. Configure Environment Variables
 
-In Vercel Dashboard → Settings → Environment Variables, add:
-
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `ADVANCEDMD_USERNAME` | Your AdvancedMD API username | `DBSAPI` |
@@ -49,22 +82,54 @@ In Vercel Dashboard → Settings → Environment Variables, add:
 | `ADVANCEDMD_OFFICE_KEY` | Your office key | `991NNN` |
 | `ADVANCEDMD_APP_NAME` | Your registered app name | `YourAppName` |
 | `REDIS_URL` | Redis connection string | `redis://default:pass@host:port` |
-| `CRON_SECRET` | Random secret for cron endpoint | `random-string-123` |
-| `API_SECRET` | Random secret for token endpoint | `random-string-456` |
+| `API_SECRET` | Secret for API authentication | `random-string-456` |
+| `PORT` | Server port (optional) | `8080` |
 
-### 3. Deploy to Vercel
+### 3. Run Locally
 
 ```bash
-# Install Vercel CLI
-npm i -g vercel
+# Set environment variables
+export ADVANCEDMD_USERNAME=...
+export ADVANCEDMD_PASSWORD=...
+export ADVANCEDMD_OFFICE_KEY=...
+export ADVANCEDMD_APP_NAME=...
+export REDIS_URL=...
+export API_SECRET=...
 
-# Deploy
-vercel --prod
+# Build and run
+go build -o gateway ./cmd/api && ./gateway
 ```
 
-Or connect your GitHub repo to Vercel for automatic deployments.
+### 4. Deploy to Railway
+
+**Option A: Railway CLI**
+```bash
+railway login
+railway init
+railway up
+```
+
+**Option B: Railway Dashboard**
+1. Go to https://railway.app/new
+2. Select "Deploy from GitHub repo"
+3. Choose your repository
+4. Add environment variables in the Variables tab
+5. Railway auto-detects the Dockerfile and deploys
 
 ## API Endpoints
+
+### GET /health
+
+Health check endpoint (no authentication required).
+
+```bash
+curl https://your-app.railway.app/health
+```
+
+**Response:**
+```json
+{"status":"ok"}
+```
 
 ### GET /api/token
 
@@ -73,7 +138,7 @@ Returns a valid AdvancedMD session token. Called by ElevenLabs agents.
 **Request:**
 ```bash
 curl -H "Authorization: Bearer YOUR_API_SECRET" \
-     https://your-app.vercel.app/api/token
+     https://your-app.railway.app/api/token
 ```
 
 **Response:**
@@ -101,24 +166,58 @@ curl -H "Authorization: Bearer YOUR_API_SECRET" \
 | `ehrApiBase` | EHR REST API base (no https://) | Use as `https://{amd_ehr_api_base}/endpoint` |
 | `createdAt` | Token generation timestamp | For debugging/monitoring token freshness |
 
-> **Note for ElevenLabs:** URLs are returned WITHOUT the `https://` prefix so they can be used as template variables (e.g., `https://{amd_rest_api_base}/scheduler/Columns/openings`). Two token formats are provided: `token` with "Bearer " prefix for REST API Authorization headers, and `cookieToken` with "token=" prefix for XMLRPC Cookie headers.
+> **Note for ElevenLabs:** URLs are returned WITHOUT the `https://` prefix so they can be used as template variables (e.g., `https://{amd_rest_api_base}/scheduler/Columns/openings`).
 
-### GET /api/cron
+### POST /api/verify-patient
 
-Refreshes the token. Triggered automatically by Vercel Cron every 20 hours.
+Looks up a patient by last name and date of birth.
 
 **Request:**
 ```bash
-curl -H "Authorization: Bearer YOUR_CRON_SECRET" \
-     https://your-app.vercel.app/api/cron
+curl -X POST \
+     -H "Authorization: Bearer YOUR_API_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"lastName":"Smith","dob":"01/15/1980"}' \
+     https://your-app.railway.app/api/verify-patient
 ```
 
-**Response:**
+**Request Body:**
 ```json
 {
-  "success": true,
-  "message": "Token refreshed successfully",
-  "webserverUrl": "https://providerapi.advancedmd.com/processrequest/api-101/YOURAPP"
+  "lastName": "Smith",
+  "dob": "01/15/1980",
+  "firstName": "John"  // optional, for disambiguation
+}
+```
+
+**Response (single match):**
+```json
+{
+  "status": "verified",
+  "patientId": "12345",
+  "name": "SMITH,JOHN",
+  "dob": "01/15/1980",
+  "phone": "555-123-4567"
+}
+```
+
+**Response (multiple matches):**
+```json
+{
+  "status": "multiple_matches",
+  "message": "Found 2 patients with that last name and DOB. Please provide first name.",
+  "matches": [
+    {"firstName": "JOHN"},
+    {"firstName": "JANE"}
+  ]
+}
+```
+
+**Response (not found):**
+```json
+{
+  "status": "not_found",
+  "message": "No patient found with that last name and date of birth"
 }
 ```
 
@@ -133,7 +232,7 @@ In ElevenLabs Agent settings → Add Tool → Webhook:
 | Name | `get_advancedmd_token` |
 | Description | Gets a valid authentication token for AdvancedMD API calls. Call this FIRST before any AdvancedMD requests. |
 | Method | GET |
-| URL | `https://your-app.vercel.app/api/token` |
+| URL | `https://your-app.railway.app/api/token` |
 
 ### 2. Configure Authentication
 
@@ -150,7 +249,6 @@ Map response fields for reuse in your ElevenLabs agent:
 |----------|-----------|---------|
 | `amd_token` | `token` | Pre-formatted Bearer token for REST API Authorization header |
 | `amd_cookie_token` | `cookieToken` | Pre-formatted Cookie token for XMLRPC Cookie header |
-| `amd_webserver` | `webserverUrl` | Base path (reference only, no https://) |
 | `amd_xmlrpc_url` | `xmlrpcUrl` | XMLRPC API path (use as `https://{amd_xmlrpc_url}`) |
 | `amd_rest_api_base` | `restApiBase` | REST API base (use as `https://{amd_rest_api_base}/endpoint`) |
 | `amd_ehr_api_base` | `ehrApiBase` | EHR API base (use as `https://{amd_ehr_api_base}/endpoint`) |
@@ -227,16 +325,14 @@ Create a server tool for adding patients:
 ### Token Lifecycle
 
 ```
-Hour 0:  Cron runs → 2-step AMD login → Token saved (23hr TTL)
+Startup: Load from Redis (if exists) → Start background refresh
          ▼
-Hour 1:  ElevenLabs calls /api/token → Redis read (~50ms) ✓
-Hour 2:  ElevenLabs calls /api/token → Redis read (~50ms) ✓
+Request: GET /api/token → Return from memory (~100µs server-side)
+         ▼
+Hour 20: Background refresh → 2-step AMD login → Update Redis + memory
+         ▼
+Hour 40: Background refresh → 2-step AMD login → Update Redis + memory
 ...
-Hour 19: ElevenLabs calls /api/token → Redis read (~50ms) ✓
-         ▼
-Hour 20: Cron runs → 2-step AMD login → NEW Token saved
-         ▼
-Hour 21: ElevenLabs calls /api/token → Redis read (~50ms) ✓
 ```
 
 ### AdvancedMD 2-Step Authentication
@@ -249,195 +345,62 @@ Hour 21: ElevenLabs calls /api/token → Redis read (~50ms) ✓
    - POST to webserver URL from Step 1
    - Returns success="1" with session token
 
-### Using the Token
+### Connection Pooling
 
-The token is pre-formatted with "Bearer " prefix for direct use:
-- **Authorization Header:** `Authorization: {amd_token}` (sends `Bearer <token>`)
-
-> **Note:** The token value already includes "Bearer " so don't add it again!
-
-## Project Structure
-
-```
-advancedmd-token-management/
-├── api/
-│   ├── cron.go          # Token refresh endpoint (Vercel Cron)
-│   └── token.go         # Token retrieval endpoint (ElevenLabs)
-├── pkg/
-│   ├── advancedmd/
-│   │   └── auth.go      # 2-step authentication logic
-│   └── redis/
-│       └── redis.go     # Redis client
-├── go.mod
-├── vercel.json          # Vercel config + cron schedule
-└── README.md
-```
-
-## Performance
-
-Real-world metrics observed from production Vercel logs:
-
-### Endpoint Performance
-
-| Endpoint | Cold Start | Warm Response | Memory Used |
-|----------|------------|---------------|-------------|
-| `/api/token` | 84-170ms | **7-11ms** | 23-25 MB |
-| `/api/verify-patient` | N/A | 189-711ms | 33-34 MB |
-| `/api/cron` | N/A | 272-669ms | 32-33 MB |
-
-### What Affects Latency
-
-- **`/api/token`**: Mostly Redis read time. Extremely fast when warm.
-- **`/api/verify-patient`**: 150-650ms is waiting for AdvancedMD's XMLRPC API to respond. This latency is on AdvancedMD's side, not ours.
-- **`/api/cron`**: Performs 2-step authentication + Redis write. Latency depends on AdvancedMD response times.
-
-### Token Lifecycle
-
-| Metric | Value |
-|--------|-------|
-| Token TTL | 23 hours |
-| Cron Schedule | Every 20 hours |
-| Buffer Window | 3 hours |
-
-## Security
-
-### Why API Secrets?
-
-| Secret | Purpose | Who Uses It |
-|--------|---------|-------------|
-| `API_SECRET` | Protects `/api/token` endpoint from unauthorized access | ElevenLabs agent (you configure this in the tool's Authorization header) |
-| `CRON_SECRET` | Protects `/api/cron` endpoint so only Vercel Cron can trigger token refresh | Vercel Cron (automatically sent by Vercel) |
-
-**Without these secrets:**
-- Anyone could call your `/api/token` endpoint and get your AdvancedMD credentials
-- Anyone could spam your `/api/cron` endpoint, causing unnecessary API calls to AdvancedMD
-
-**How they work:**
-1. When ElevenLabs calls `/api/token`, it sends `Authorization: Bearer YOUR_API_SECRET`
-2. Your Go function checks if the secret matches before returning the token
-3. If it doesn't match → 401 Unauthorized
-
-### Security Summary
-
-- All credentials in Vercel Environment Variables (encrypted at rest)
-- Cron endpoint protected by `CRON_SECRET`
-- Token endpoint protected by `API_SECRET`
-- Redis connection uses TLS (if your provider supports it)
-- AdvancedMD credentials never exposed to clients
+Unlike serverless deployments, Railway runs a persistent process:
+- **Redis**: Single pooled connection (10 connections, 2 idle)
+- **HTTP**: Shared client with keep-alive for AdvancedMD calls
+- **Result**: Faster responses, no cold starts
 
 ## AdvancedMD API Types
-
-AdvancedMD has multiple API types. Depending on the operation, you may need to use different APIs:
-
-### XMLRPC API (Legacy/Core Features)
-
-Used for core operations like `addpatient`, `getpatient`, scheduling, etc.
-
-**URL Pattern:** `{webserverUrl}/xmlrpc/processrequest.aspx`
-
-**Request Format:** Uses `ppmdmsg` wrapper with `@action` field
-```json
-{
-  "ppmdmsg": {
-    "@action": "addpatient",
-    "@class": "api",
-    "@msgtime": "4/1/2021 2:16:55 PM",
-    "@nocookie": "0",
-    "patientlist": {
-      "patient": {
-        "@name": "Smith,John",
-        "@sex": "M",
-        "@dob": "01/15/1980"
-      }
-    }
-  }
-}
-```
-
-**Headers Required:**
-- `Cookie: {amd_cookie_token}` (pre-formatted, includes "token=" prefix)
-- `Content-Type: application/json`
-
-### EHR REST API (Electronic Health Records)
-
-Used for EHR-specific operations like documents, files, etc.
-
-**URL Pattern:** Replace `processrequest` with `ehr-api` in webserverUrl, then add endpoint path
-
-Example:
-- webserverUrl: `https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP`
-- EHR Base: `https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP`
-- Full URL: `https://providerapi.advancedmd.com/ehr-api/api-801/YOURAPP/files/documents`
-
-**Request Format:** Standard REST with JSON body (no `ppmdmsg` wrapper)
-
-### Practice Manager REST API
-
-Used for practice management operations like profiles, master files, etc.
-
-**URL Pattern:** Replace `processrequest` with `api` in webserverUrl, then add endpoint path
-
-Example:
-- webserverUrl: `https://providerapi.advancedmd.com/processrequest/api-801/YOURAPP`
-- REST Base: `https://providerapi.advancedmd.com/api/api-801/YOURAPP`
-- Full URL: `https://providerapi.advancedmd.com/api/api-801/YOURAPP/masterfiles/olsprofiles`
-
-### API Comparison
 
 | | XMLRPC API | EHR REST API | PM REST API |
 |---|---|---|---|
 | **URL** | Single endpoint | Multiple endpoints | Multiple endpoints |
 | **Action** | `@action` in body | HTTP method | HTTP method |
 | **Format** | `ppmdmsg` wrapper | Standard JSON | Standard JSON |
+| **Auth Header** | `Cookie: {amd_cookie_token}` | `Authorization: {amd_token}` | `Authorization: {amd_token}` |
 | **Use Cases** | Patients, scheduling | Documents, files | Profiles, master files |
 
----
+## Performance
 
-## Recent Updates
+### Benchmarks (January 2026)
 
-### ElevenLabs-Optimized Response Format
+| Endpoint | Server Processing | Round-Trip (US) |
+|----------|-------------------|-----------------|
+| `GET /health` | ~20µs | ~280-360ms |
+| `GET /api/token` | ~80-110µs | ~280-350ms |
+| `POST /api/verify-patient` | ~350ms | ~350-400ms |
 
-The `/api/token` endpoint returns values optimized for ElevenLabs dynamic variables:
+- **Server processing**: Sub-millisecond for cached token retrieval
+- **Round-trip**: Includes network latency to Railway's us-east4 region
+- **verify-patient**: Includes AdvancedMD XMLRPC call (~350ms)
 
-```json
-{
-  "token": "Bearer 991NNN...",
-  "cookieToken": "token=991NNN...",
-  "webserverUrl": "providerapi.advancedmd.com/processrequest/api-801/YOURAPP",
-  "xmlrpcUrl": "providerapi.advancedmd.com/processrequest/api-801/YOURAPP/xmlrpc/processrequest.aspx",
-  "restApiBase": "providerapi.advancedmd.com/api/api-801/YOURAPP",
-  "ehrApiBase": "providerapi.advancedmd.com/ehr-api/api-801/YOURAPP",
-  "createdAt": "..."
-}
-```
+## Security
 
-**Key optimizations for ElevenLabs:**
+### API Authentication
 
-1. **Token includes "Bearer " prefix** - Use directly as Authorization header value for REST APIs
-2. **CookieToken includes "token=" prefix** - Use directly as Cookie header value for XMLRPC APIs
-3. **URLs exclude "https://" prefix** - Use in URL templates like `https://{amd_rest_api_base}/endpoint`
+| Secret | Purpose | Who Uses It |
+|--------|---------|-------------|
+| `API_SECRET` | Protects all `/api/*` endpoints | ElevenLabs agent |
 
-**Why this format:** ElevenLabs dynamic variables don't support string concatenation. These formats allow direct use:
-- `Authorization: {amd_token}` → sends `Authorization: Bearer <token>` (REST APIs)
-- `Cookie: {amd_cookie_token}` → sends `Cookie: token=<token>` (XMLRPC APIs)
-- `https://{amd_rest_api_base}/scheduler/Columns/openings` → builds complete URL
+**How it works:**
+1. Client sends `Authorization: Bearer YOUR_API_SECRET`
+2. Middleware validates the secret
+3. If invalid → 401 Unauthorized
 
-### URL Building Logic
+### Security Summary
 
-The service automatically builds URLs from the webserver URL returned by AdvancedMD:
-
-| URL Type | Transformation | Example Output |
-|----------|----------------|----------------|
-| `xmlrpcUrl` | Append `/xmlrpc/processrequest.aspx`, strip https:// | `providerapi.advancedmd.com/.../xmlrpc/processrequest.aspx` |
-| `restApiBase` | Replace `/processrequest/` with `/api/`, strip https:// | `providerapi.advancedmd.com/api/api-801/APP` |
-| `ehrApiBase` | Replace `/processrequest/` with `/ehr-api/`, strip https:// | `providerapi.advancedmd.com/ehr-api/api-801/APP` |
-
----
+- All credentials in environment variables
+- API endpoints protected by `API_SECRET`
+- Redis connection uses TLS (if provider supports it)
+- AdvancedMD credentials never exposed to clients
+- Request logging with unique request IDs
 
 ## Troubleshooting
 
 ### Token endpoint returns 401
-- Verify `API_SECRET` is set in Vercel environment variables
+- Verify `API_SECRET` is set in environment variables
 - Check the `Authorization` header format: `Bearer YOUR_SECRET`
 
 ### Authentication fails
@@ -449,6 +412,32 @@ The service automatically builds URLs from the webserver URL returned by Advance
 - Verify `REDIS_URL` format: `redis://default:password@host:port`
 - Check that your Redis instance allows external connections
 - Verify the password is correct
+
+### Container won't start
+- Check Railway logs for startup errors
+- Verify all required environment variables are set
+- Ensure `PORT` is set to `8080` (or Railway's assigned port)
+
+## Development
+
+### Running Tests
+
+```bash
+go test ./internal/... -v
+```
+
+### Building
+
+```bash
+go build -o gateway ./cmd/api
+```
+
+### Docker Build
+
+```bash
+docker build -t advancedmd-gateway .
+docker run -p 8080:8080 --env-file .env advancedmd-gateway
+```
 
 ## License
 

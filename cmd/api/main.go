@@ -16,6 +16,9 @@ import (
 )
 
 func main() {
+	// Configure logger to write to stdout (Railway interprets stderr as error-level)
+	log.SetOutput(os.Stdout)
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
