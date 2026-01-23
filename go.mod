@@ -3,6 +3,8 @@ module advancedmd-token-management
 go 1.21
 
 require (
+	github.com/go-chi/chi/v5 v5.0.11
+	github.com/google/uuid v1.5.0
 	github.com/redis/go-redis/v9 v9.7.0
 	golang.org/x/net v0.34.0
 )

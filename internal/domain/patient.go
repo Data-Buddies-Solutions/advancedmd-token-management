@@ -1,0 +1,58 @@
+package domain
+
+import (
+	"strings"
+	"time"
+)
+
+// Patient represents a patient record.
+type Patient struct {
+	ID        string
+	FirstName string
+	LastName  string
+	FullName  string // "LASTNAME,FIRSTNAME" format from AMD
+	DOB       string // MM/DD/YYYY
+	Phone     string
+}
+
+// StripPatientPrefix removes the "pat" prefix from patient IDs.
+// AMD returns IDs like "pat45" but the booking API expects just "45".
+func StripPatientPrefix(id string) string {
+	return strings.TrimPrefix(id, "pat")
+}
+
+// NormalizeDOB converts various date formats to MM/DD/YYYY.
+func NormalizeDOB(dob string) string {
+	// Already in correct format
+	if len(dob) == 10 && dob[2] == '/' && dob[5] == '/' {
+		return dob
+	}
+
+	formats := []string{
+		"2006-01-02",
+		"01-02-2006",
+		"1/2/2006",
+		"01/02/2006",
+		"January 2 2006",
+		"January 2, 2006",
+		"Jan 2 2006",
+		"Jan 2, 2006",
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, dob); err == nil {
+			return t.Format("01/02/2006")
+		}
+	}
+
+	return dob
+}
+
+// ParseFirstName extracts the first name from AMD's "LASTNAME,FIRSTNAME" format.
+func ParseFirstName(fullName string) string {
+	parts := strings.SplitN(fullName, ",", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
