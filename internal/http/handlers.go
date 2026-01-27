@@ -83,6 +83,133 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tokenData.ToResponse())
 }
 
+// AddPatientRequest is the expected JSON body for patient creation.
+type AddPatientRequest struct {
+	FirstName         string `json:"firstName"`
+	LastName          string `json:"lastName"`
+	DOB               string `json:"dob"`
+	Email             string `json:"email"`
+	Phone             string `json:"phone"`
+	InsuranceProvider string `json:"insuranceProvider"`
+	SubscriberNum     string `json:"subscriberNum"`
+}
+
+// AddPatientResponse is returned after creating a patient.
+type AddPatientResponse struct {
+	Status    string `json:"status"`
+	PatientID string `json:"patientId,omitempty"`
+	Name      string `json:"name,omitempty"`
+	DOB       string `json:"dob,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// HandleAddPatient creates a new patient in AdvancedMD and attaches insurance.
+func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req AddPatientRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:  "error",
+			Message: "Invalid JSON body",
+		})
+		return
+	}
+
+	// Validate required fields
+	missing := []string{}
+	if req.FirstName == "" {
+		missing = append(missing, "firstName")
+	}
+	if req.LastName == "" {
+		missing = append(missing, "lastName")
+	}
+	if req.DOB == "" {
+		missing = append(missing, "dob")
+	}
+	if req.Email == "" {
+		missing = append(missing, "email")
+	}
+	if req.Phone == "" {
+		missing = append(missing, "phone")
+	}
+	if req.InsuranceProvider == "" {
+		missing = append(missing, "insuranceProvider")
+	}
+	if req.SubscriberNum == "" {
+		missing = append(missing, "subscriberNum")
+	}
+	if len(missing) > 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Missing required fields: %s", strings.Join(missing, ", ")),
+		})
+		return
+	}
+
+	// Normalize inputs
+	normalizedDOB := domain.NormalizeDOB(req.DOB)
+	formattedPhone := domain.FormatPhone(req.Phone)
+
+	// Look up carrier ID
+	carrierID, ok := domain.LookupCarrierID(req.InsuranceProvider)
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Unknown insurance provider: %s", req.InsuranceProvider),
+		})
+		return
+	}
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:  "error",
+			Message: "Failed to get authentication token: " + err.Error(),
+		})
+		return
+	}
+
+	// Create patient in AMD
+	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, req.FirstName, req.LastName, normalizedDOB, formattedPhone, req.Email)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:  "error",
+			Message: "Failed to create patient: " + err.Error(),
+		})
+		return
+	}
+
+	strippedID := domain.StripPatientPrefix(rawPatientID)
+
+	// Attach insurance
+	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, carrierID, req.SubscriberNum); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:    "partial",
+			PatientID: strippedID,
+			Name:      patientName,
+			DOB:       normalizedDOB,
+			Message:   "Patient created but insurance failed: " + err.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(AddPatientResponse{
+		Status:    "created",
+		PatientID: strippedID,
+		Name:      patientName,
+		DOB:       normalizedDOB,
+		Message:   "Patient created and insurance attached successfully",
+	})
+}
+
 // HandleVerifyPatient looks up a patient by name and DOB.
 func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

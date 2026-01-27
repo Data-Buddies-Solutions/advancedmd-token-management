@@ -27,6 +27,7 @@ A high-performance Go microservice that handles AdvancedMD's 2-step authenticati
 │  │  • GET  /health         (no auth)       │                    │
 │  │  • GET  /api/token      (auth required) │                    │
 │  │  • POST /api/verify-patient (auth req)  │                    │
+│  │  • POST /api/add-patient    (auth req)  │                    │
 │  └─────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -221,6 +222,75 @@ curl -X POST \
 }
 ```
 
+### POST /api/add-patient
+
+Creates a new patient in AdvancedMD and attaches insurance. Makes two sequential XMLRPC calls: `addpatient` then `addinsurance`.
+
+**Request:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer YOUR_API_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"firstName":"John","lastName":"Smith","dob":"01/15/1990","email":"john@example.com","phone":"8015551234","insuranceProvider":"aetna","subscriberNum":"ABC123"}' \
+     https://your-app.railway.app/api/add-patient
+```
+
+**Request Body:**
+```json
+{
+  "firstName": "John",
+  "lastName": "Smith",
+  "dob": "01/15/1990",
+  "email": "john@example.com",
+  "phone": "8015551234",
+  "insuranceProvider": "aetna",
+  "subscriberNum": "ABC123"
+}
+```
+
+All 7 fields are required.
+
+**Supported Insurance Providers:** `blue cross blue shield`, `bcbs`, `aetna`, `cigna`, `united healthcare`, `uhc`, `humana`, `medicare`, `medicaid` (case-insensitive). Carrier IDs are placeholders — replace with real AMD carrier IDs before going live.
+
+**Response (success):**
+```json
+{
+  "status": "created",
+  "patientId": "6034372",
+  "name": "SMITH,JOHN",
+  "dob": "01/15/1990",
+  "message": "Patient created and insurance attached successfully"
+}
+```
+
+**Response (partial — patient created but insurance failed):**
+```json
+{
+  "status": "partial",
+  "patientId": "6034372",
+  "name": "SMITH,JOHN",
+  "dob": "01/15/1990",
+  "message": "Patient created but insurance failed: ..."
+}
+```
+
+**Response (error):**
+```json
+{
+  "status": "error",
+  "message": "Missing required fields: email, phone"
+}
+```
+
+| Scenario | HTTP | Status |
+|----------|------|--------|
+| Missing/invalid input | 400 | `error` |
+| Unknown insurance provider | 400 | `error` |
+| Token retrieval fails | 500 | `error` |
+| addpatient fails | 500 | `error` |
+| addpatient OK, addinsurance fails | 500 | `partial` (includes patientId) |
+| Both succeed | 200 | `created` |
+
 ## ElevenLabs Integration
 
 ### 1. Create Server Tool
@@ -286,37 +356,31 @@ Create a server tool for getting appointment openings:
 - `Authorization`: `{amd_token}` (dynamic variable - already includes "Bearer " prefix)
 - `Content-Type`: `application/json`
 
-### 6. Example: XMLRPC API Tool (Add Patient)
+### 6. Example: Add Patient Tool (via Middleware)
 
-Create a server tool for adding patients:
+Create a server tool for adding patients with insurance. This calls the middleware which handles both the `addpatient` and `addinsurance` AMD calls.
 
 | Field | Value |
 |-------|-------|
 | Name | `add_patient` |
-| Description | Adds a new patient to AdvancedMD |
+| Description | Creates a new patient and attaches their insurance. Collect first name, last name, date of birth, email, phone number, insurance provider, and subscriber number before calling. |
 | Method | POST |
-| URL | `https://{amd_xmlrpc_url}` |
+| URL | `https://your-app.railway.app/api/add-patient` |
 
 **Headers:**
-- `Cookie`: `{amd_cookie_token}` (dynamic variable - pre-formatted with "token=" prefix)
+- `Authorization`: `Bearer YOUR_API_SECRET`
 - `Content-Type`: `application/json`
 
-**Body (example):**
+**Body:**
 ```json
 {
-  "ppmdmsg": {
-    "@action": "addpatient",
-    "@class": "api",
-    "@msgtime": "{{current_datetime}}",
-    "@nocookie": "0",
-    "patientlist": {
-      "patient": {
-        "@name": "{{patient_last_name}},{{patient_first_name}}",
-        "@sex": "{{patient_sex}}",
-        "@dob": "{{patient_dob}}"
-      }
-    }
-  }
+  "firstName": "{{first_name}}",
+  "lastName": "{{last_name}}",
+  "dob": "{{date_of_birth}}",
+  "email": "{{email}}",
+  "phone": "{{phone}}",
+  "insuranceProvider": "{{insurance_provider}}",
+  "subscriberNum": "{{subscriber_number}}"
 }
 ```
 
@@ -371,6 +435,7 @@ Unlike serverless deployments, Railway runs a persistent process:
 | `GET /health` | ~20µs | ~280-360ms |
 | `GET /api/token` | ~80-110µs | ~280-350ms |
 | `POST /api/verify-patient` | ~350ms | ~350-400ms |
+| `POST /api/add-patient` | ~700ms | ~700-800ms |
 
 - **Server processing**: Sub-millisecond for cached token retrieval
 - **Round-trip**: Includes network latency to Railway's us-east4 region
