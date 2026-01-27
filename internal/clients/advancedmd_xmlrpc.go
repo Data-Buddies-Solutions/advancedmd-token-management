@@ -139,10 +139,25 @@ func (c *AdvancedMDClient) LookupPatient(ctx context.Context, tokenData *domain.
 	return []domain.Patient{}, nil
 }
 
+// AddPatientParams holds the parameters for creating a new patient.
+type AddPatientParams struct {
+	FirstName string
+	LastName  string
+	DOB       string
+	Phone     string
+	Email     string
+	Street    string
+	AptSuite  string
+	City      string
+	State     string
+	Zip       string
+	Sex       string
+}
+
 // AddPatient creates a new patient in AdvancedMD.
 // Returns the raw patient ID (with "pat" prefix), responsible party ID, and patient name.
-func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.TokenData, firstName, lastName, dob, phone, email string) (string, string, string, error) {
-	name := lastName + "," + firstName
+func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.TokenData, params AddPatientParams) (string, string, string, error) {
+	name := params.LastName + "," + params.FirstName
 	msgTime := time.Now().Format("01/02/2006 03:04:05 PM")
 
 	payload := map[string]interface{}{
@@ -155,16 +170,23 @@ func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.Tok
 				"patient": map[string]interface{}{
 					"@respparty":         "SELF",
 					"@name":              name,
-					"@sex":               "U",
+					"@sex":               params.Sex,
 					"@relationship":      "1",
 					"@hipaarelationship": "18",
-					"@dob":               dob,
+					"@dob":               params.DOB,
 					"@ssn":               "",
 					"@chart":             "AUTO",
 					"@profile":           "3",
+					"address": map[string]interface{}{
+						"@address1": params.Street,
+						"@address2": params.AptSuite,
+						"@city":     params.City,
+						"@state":    params.State,
+						"@zip":      params.Zip,
+					},
 					"contactinfo": map[string]interface{}{
-						"@homephone": phone,
-						"@email":     email,
+						"@homephone": params.Phone,
+						"@email":     params.Email,
 					},
 				},
 			},
