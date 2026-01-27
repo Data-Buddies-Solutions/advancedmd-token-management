@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -88,10 +89,17 @@ type AddPatientRequest struct {
 	FirstName         string `json:"firstName"`
 	LastName          string `json:"lastName"`
 	DOB               string `json:"dob"`
-	Email             string `json:"email"`
 	Phone             string `json:"phone"`
-	InsuranceProvider string `json:"insuranceProvider"`
-	SubscriberNum     string `json:"subscriberNum"`
+	Email             string `json:"email"`
+	Street            string `json:"street"`
+	AptSuite          string `json:"aptSuite"`
+	City              string `json:"city"`
+	State             string `json:"state"`
+	Zip               string `json:"zip"`
+	Sex               string `json:"sex"`
+	CarrierID      string `json:"carrierId"`
+	SubscriberName string `json:"subscriberName"`
+	SubscriberNum  string `json:"subscriberNum"`
 }
 
 // AddPatientResponse is returned after creating a patient.
@@ -109,6 +117,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	var req AddPatientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("add-patient: failed to decode JSON: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
@@ -117,7 +126,10 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
+	log.Printf("add-patient: received request: firstName=%q lastName=%q dob=%q phone=%q email=%q street=%q aptSuite=%q city=%q state=%q zip=%q sex=%q carrierId=%q subscriberName=%q subscriberNum=%q",
+		req.FirstName, req.LastName, req.DOB, req.Phone, req.Email, req.Street, req.AptSuite, req.City, req.State, req.Zip, req.Sex, req.CarrierID, req.SubscriberName, req.SubscriberNum)
+
+	// Validate required fields (aptSuite is optional)
 	missing := []string{}
 	if req.FirstName == "" {
 		missing = append(missing, "firstName")
@@ -128,14 +140,32 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	if req.DOB == "" {
 		missing = append(missing, "dob")
 	}
-	if req.Email == "" {
-		missing = append(missing, "email")
-	}
 	if req.Phone == "" {
 		missing = append(missing, "phone")
 	}
-	if req.InsuranceProvider == "" {
-		missing = append(missing, "insuranceProvider")
+	if req.Email == "" {
+		missing = append(missing, "email")
+	}
+	if req.Street == "" {
+		missing = append(missing, "street")
+	}
+	if req.City == "" {
+		missing = append(missing, "city")
+	}
+	if req.State == "" {
+		missing = append(missing, "state")
+	}
+	if req.Zip == "" {
+		missing = append(missing, "zip")
+	}
+	if req.Sex == "" {
+		missing = append(missing, "sex")
+	}
+	if req.CarrierID == "" {
+		missing = append(missing, "carrierId")
+	}
+	if req.SubscriberName == "" {
+		missing = append(missing, "subscriberName")
 	}
 	if req.SubscriberNum == "" {
 		missing = append(missing, "subscriberNum")
@@ -152,17 +182,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	// Normalize inputs
 	normalizedDOB := domain.NormalizeDOB(req.DOB)
 	formattedPhone := domain.FormatPhone(req.Phone)
-
-	// Look up carrier ID
-	carrierID, ok := domain.LookupCarrierID(req.InsuranceProvider)
-	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Unknown insurance provider: %s", req.InsuranceProvider),
-		})
-		return
-	}
+	normalizedSex := domain.NormalizeSex(req.Sex)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -176,7 +196,19 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create patient in AMD
-	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, req.FirstName, req.LastName, normalizedDOB, formattedPhone, req.Email)
+	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, clients.AddPatientParams{
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		DOB:       normalizedDOB,
+		Phone:     formattedPhone,
+		Email:     req.Email,
+		Street:    req.Street,
+		AptSuite:  req.AptSuite,
+		City:      req.City,
+		State:     strings.ToUpper(req.State),
+		Zip:       req.Zip,
+		Sex:       normalizedSex,
+	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AddPatientResponse{
@@ -189,7 +221,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	strippedID := domain.StripPatientPrefix(rawPatientID)
 
 	// Attach insurance
-	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, carrierID, req.SubscriberNum); err != nil {
+	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, req.CarrierID, req.SubscriberNum); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",

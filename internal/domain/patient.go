@@ -68,10 +68,15 @@ func FormatPhone(phone string) string {
 // All values are placeholders — replace with real carrier IDs before going live.
 var CarrierMap = map[string]string{
 	"blue cross blue shield": "carXXXX",
+	"blue cross":             "carXXXX",
+	"blue shield":            "carXXXX",
+	"bluecross blueshield":   "carXXXX",
 	"bcbs":                   "carXXXX",
 	"aetna":                  "carXXXX",
 	"cigna":                  "carXXXX",
 	"united healthcare":      "carXXXX",
+	"unitedhealthcare":       "carXXXX",
+	"united":                 "carXXXX",
 	"uhc":                    "carXXXX",
 	"humana":                 "carXXXX",
 	"medicare":               "carXXXX",
@@ -82,6 +87,18 @@ var CarrierMap = map[string]string{
 func LookupCarrierID(providerName string) (string, bool) {
 	id, ok := CarrierMap[strings.ToLower(strings.TrimSpace(providerName))]
 	return id, ok
+}
+
+// NormalizeSex converts various sex inputs to AMD's expected format (M/F/U).
+func NormalizeSex(sex string) string {
+	switch strings.ToUpper(strings.TrimSpace(sex)) {
+	case "M", "MALE":
+		return "M"
+	case "F", "FEMALE":
+		return "F"
+	default:
+		return "U"
+	}
 }
 
 // ParseFirstName extracts the first name from AMD's "LASTNAME,FIRSTNAME" format.
