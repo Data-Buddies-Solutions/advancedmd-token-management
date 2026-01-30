@@ -18,6 +18,12 @@ type ErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
+// ElevenLabsWebhookResponse is the response format for ElevenLabs conversation initiation webhook.
+type ElevenLabsWebhookResponse struct {
+	Type             string            `json:"type"`
+	DynamicVariables map[string]string `json:"dynamic_variables"`
+}
+
 // VerifyPatientRequest is the expected JSON body for patient verification.
 type VerifyPatientRequest struct {
 	LastName  string `json:"lastName"`
@@ -62,10 +68,11 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGetToken returns the cached AdvancedMD token.
+// Accepts both GET (for testing) and POST (for ElevenLabs webhook).
 func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed"})
 		return
@@ -81,7 +88,20 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(tokenData.ToResponse())
+	resp := tokenData.ToResponse()
+	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
+		Type: "conversation_initiation_client_data",
+		DynamicVariables: map[string]string{
+			"token":        resp.Token,
+			"cookieToken":  resp.CookieToken,
+			"webserverUrl": resp.WebserverURL,
+			"xmlrpcUrl":    resp.XmlrpcURL,
+			"restApiBase":  resp.RestApiBase,
+			"ehrApiBase":   resp.EhrApiBase,
+			"createdAt":    resp.CreatedAt,
+			"patient_id":   "1",
+		},
+	})
 }
 
 // AddPatientRequest is the expected JSON body for patient creation.
