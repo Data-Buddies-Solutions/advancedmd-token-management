@@ -67,7 +67,28 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-// HandleGetToken returns the cached AdvancedMD token.
+// ElevenLabsWebhookRequest represents the incoming webhook from ElevenLabs.
+type ElevenLabsWebhookRequest struct {
+	CallerID string `json:"caller_id"`
+}
+
+// stripPhoneToDigits removes all non-digit characters and strips leading country code.
+func stripPhoneToDigits(phone string) string {
+	var digits strings.Builder
+	for _, r := range phone {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	result := digits.String()
+	// Strip leading "1" if it's an 11-digit US number
+	if len(result) == 11 && result[0] == '1' {
+		result = result[1:]
+	}
+	return result
+}
+
+// HandleGetToken returns the cached AdvancedMD token and looks up caller by phone.
 // Accepts POST only (for ElevenLabs conversation initiation webhook).
 func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -77,6 +98,15 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed"})
 		return
 	}
+
+	// Parse the incoming webhook to get caller_id
+	var webhookReq ElevenLabsWebhookRequest
+	if err := json.NewDecoder(r.Body).Decode(&webhookReq); err != nil {
+		log.Printf("token: failed to decode webhook body: %v", err)
+		// Continue anyway - caller_id is optional
+	}
+
+	log.Printf("token: received webhook with caller_id=%q", webhookReq.CallerID)
 
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
@@ -89,16 +119,46 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := tokenData.ToResponse()
+
+	// Default dynamic variables
+	dynamicVars := map[string]string{
+		"amd_token":         resp.Token,
+		"amd_cookie_token":  resp.CookieToken,
+		"amd_xmlrpc_url":    resp.XmlrpcURL,
+		"amd_rest_api_base": resp.RestApiBase,
+		"amd_ehr_api_base":  resp.EhrApiBase,
+		"patient_status":    "new",
+		"patient_id":        "",
+		"patient_name":      "",
+		"patient_first_name": "",
+		"patient_dob":       "",
+	}
+
+	// Look up patient by phone if caller_id provided
+	if webhookReq.CallerID != "" {
+		phone := stripPhoneToDigits(webhookReq.CallerID)
+		log.Printf("token: looking up patient by phone=%q", phone)
+
+		if phone != "" {
+			patient, err := h.amdClient.LookupPatientByPhone(r.Context(), tokenData, phone)
+			if err != nil {
+				log.Printf("token: patient lookup failed: %v", err)
+			} else if patient != nil {
+				log.Printf("token: found existing patient id=%s name=%s", patient.ID, patient.FullName)
+				dynamicVars["patient_status"] = "existing"
+				dynamicVars["patient_id"] = patient.ID
+				dynamicVars["patient_name"] = patient.FullName
+				dynamicVars["patient_first_name"] = patient.FirstName
+				dynamicVars["patient_dob"] = patient.DOB
+			} else {
+				log.Printf("token: no patient found for phone=%s", phone)
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
-		Type: "conversation_initiation_client_data",
-		DynamicVariables: map[string]string{
-			"amd_token":        resp.Token,
-			"amd_cookie_token": resp.CookieToken,
-			"amd_xmlrpc_url":   resp.XmlrpcURL,
-			"amd_rest_api_base": resp.RestApiBase,
-			"amd_ehr_api_base": resp.EhrApiBase,
-			"patient_id":       "1",
-		},
+		Type:             "conversation_initiation_client_data",
+		DynamicVariables: dynamicVars,
 	})
 }
 
