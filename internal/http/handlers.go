@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
@@ -49,15 +51,17 @@ type PatientMatch struct {
 
 // Handlers holds the dependencies for HTTP handlers.
 type Handlers struct {
-	tokenManager *auth.TokenManager
-	amdClient    *clients.AdvancedMDClient
+	tokenManager  *auth.TokenManager
+	amdClient     *clients.AdvancedMDClient
+	amdRestClient *clients.AdvancedMDRestClient
 }
 
 // NewHandlers creates a new Handlers instance.
-func NewHandlers(tm *auth.TokenManager, amdClient *clients.AdvancedMDClient) *Handlers {
+func NewHandlers(tm *auth.TokenManager, amdClient *clients.AdvancedMDClient, amdRestClient *clients.AdvancedMDRestClient) *Handlers {
 	return &Handlers{
-		tokenManager: tm,
-		amdClient:    amdClient,
+		tokenManager:  tm,
+		amdClient:     amdClient,
+		amdRestClient: amdRestClient,
 	}
 }
 
@@ -449,4 +453,305 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			Matches: matches,
 		})
 	}
+}
+
+// AvailabilityRequest is the expected JSON body for availability lookup.
+type AvailabilityRequest struct {
+	Date     string `json:"date"`     // Required: YYYY-MM-DD format
+	Provider string `json:"provider"` // Optional: filter by provider name
+	Days     int    `json:"days"`     // Optional: how many days to search (default 7)
+}
+
+// Lunch block times (hardcoded)
+const (
+	lunchStartHour   = 11
+	lunchStartMinute = 0
+	lunchEndHour     = 12
+	lunchEndMinute   = 30
+)
+
+// providerDisplayNames maps profile IDs to friendly display names.
+var providerDisplayNames = map[string]string{
+	"1135": "Dr. Austin Bach",
+	"1141": "Dr. J. Licht",
+	"1137": "Dr. D. Noel",
+}
+
+// HandleGetAvailability returns available appointment slots for providers.
+func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed. Use POST."})
+		return
+	}
+
+	// Parse request body
+	var req AvailabilityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON body"})
+		return
+	}
+
+	// Validate required date field
+	if req.Date == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "date is required (YYYY-MM-DD format)"})
+		return
+	}
+
+	// Parse start date
+	startDate, err := time.Parse("2006-01-02", req.Date)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid date format. Use YYYY-MM-DD."})
+		return
+	}
+
+	// Default to 7 days if not specified
+	days := req.Days
+	if days <= 0 {
+		days = 7
+	}
+	if days > 30 {
+		days = 30 // Cap at 30 days
+	}
+
+	log.Printf("availability: date=%s provider=%q days=%d", req.Date, req.Provider, days)
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Error:   "Failed to get authentication token",
+			Details: err.Error(),
+		})
+		return
+	}
+
+	// Get scheduler setup
+	setup, err := h.amdClient.GetSchedulerSetup(r.Context(), tokenData)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Error:   "Failed to get scheduler setup",
+			Details: err.Error(),
+		})
+		return
+	}
+
+	// Build lookup maps
+	profileMap := make(map[string]domain.SchedulerProfile)
+	for _, p := range setup.Profiles {
+		profileMap[p.ID] = p
+	}
+
+	facilityMap := make(map[string]domain.SchedulerFacility)
+	for _, f := range setup.Facilities {
+		facilityMap[f.ID] = f
+	}
+
+	// Filter columns to allowed providers
+	var allowedColumns []domain.SchedulerColumn
+	for _, col := range setup.Columns {
+		if domain.IsAllowedColumn(col.ID) {
+			// If provider filter specified, check if name matches
+			if req.Provider != "" {
+				profile, ok := profileMap[col.ProfileID]
+				if !ok {
+					continue
+				}
+				if !strings.Contains(strings.ToUpper(profile.Name), strings.ToUpper(req.Provider)) &&
+					!strings.Contains(strings.ToUpper(col.Name), strings.ToUpper(req.Provider)) {
+					continue
+				}
+			}
+			allowedColumns = append(allowedColumns, col)
+		}
+	}
+
+	if len(allowedColumns) == 0 {
+		json.NewEncoder(w).Encode(domain.AvailabilityResponse{
+			Date:      startDate.Format("Monday, January 2, 2006"),
+			Location:  "Spring Hill",
+			Providers: []domain.ProviderAvailability{},
+		})
+		return
+	}
+
+	// Get column IDs for appointments query
+	columnIDs := make([]string, len(allowedColumns))
+	for i, col := range allowedColumns {
+		columnIDs[i] = col.ID
+	}
+
+	// Get existing appointments for all columns
+	appointmentsByColumn, err := h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, columnIDs, req.Date)
+	if err != nil {
+		log.Printf("availability: failed to get appointments: %v", err)
+		// Continue without appointments - will show all slots as available
+		appointmentsByColumn = make(map[string][]domain.Appointment)
+	}
+
+	// Calculate availability for each provider
+	var providers []domain.ProviderAvailability
+
+	for _, col := range allowedColumns {
+		profile := profileMap[col.ProfileID]
+		facility := facilityMap[col.FacilityID]
+
+		// Get display name
+		displayName := providerDisplayNames[col.ProfileID]
+		if displayName == "" {
+			displayName = profile.Name
+		}
+
+		// Calculate available slots
+		slots := calculateAvailableSlots(col, appointmentsByColumn[col.ID], startDate, days)
+
+		// Build schedule description
+		schedule := buildScheduleDescription(col)
+
+		colID, _ := strconv.Atoi(col.ID)
+		profID, _ := strconv.Atoi(col.ProfileID)
+
+		providers = append(providers, domain.ProviderAvailability{
+			Name:           displayName,
+			ColumnID:       colID,
+			ProfileID:      profID,
+			Facility:       facility.Name,
+			Schedule:       schedule,
+			SlotDuration:   col.Interval,
+			AvailableSlots: slots,
+		})
+	}
+
+	json.NewEncoder(w).Encode(domain.AvailabilityResponse{
+		Date:      startDate.Format("Monday, January 2, 2006"),
+		Location:  "Spring Hill",
+		Providers: providers,
+	})
+}
+
+// calculateAvailableSlots generates available time slots for a column.
+func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.Appointment, startDate time.Time, days int) []domain.AvailableSlot {
+	var slots []domain.AvailableSlot
+
+	// Build appointment count map: datetime string -> count
+	apptCounts := make(map[string]int)
+	for _, appt := range appointments {
+		key := appt.StartDateTime.Format("2006-01-02T15:04")
+		apptCounts[key]++
+	}
+
+	// Generate slots for each day
+	for d := 0; d < days; d++ {
+		date := startDate.AddDate(0, 0, d)
+
+		// Skip if provider doesn't work this day
+		if !col.WorksOnDay(date.Weekday()) {
+			continue
+		}
+
+		// Get work hours
+		workStart, workEnd, err := col.ParseWorkHours(date)
+		if err != nil {
+			continue
+		}
+
+		// Generate slots at interval
+		interval := time.Duration(col.Interval) * time.Minute
+		if interval == 0 {
+			interval = 15 * time.Minute // Default to 15 min
+		}
+
+		for slotTime := workStart; slotTime.Before(workEnd); slotTime = slotTime.Add(interval) {
+			// Skip lunch block (11:00 AM - 12:30 PM)
+			if isLunchTime(slotTime) {
+				continue
+			}
+
+			// Check if slot is available (count < max)
+			slotKey := slotTime.Format("2006-01-02T15:04")
+			count := apptCounts[slotKey]
+
+			maxAppts := col.MaxApptsPerSlot
+			if maxAppts == 0 {
+				maxAppts = 1 // Treat 0 as 1 for safety
+			}
+
+			if count >= maxAppts {
+				continue // Slot is full
+			}
+
+			slots = append(slots, domain.AvailableSlot{
+				Date:     domain.FormatSlotDate(slotTime),
+				Time:     domain.FormatSlotTime(slotTime),
+				DateTime: domain.FormatSlotDateTime(slotTime),
+			})
+		}
+	}
+
+	return slots
+}
+
+// isLunchTime checks if a time falls within the lunch block (11:00 AM - 12:30 PM).
+func isLunchTime(t time.Time) bool {
+	hour := t.Hour()
+	minute := t.Minute()
+
+	// Before 11:00 AM
+	if hour < lunchStartHour {
+		return false
+	}
+
+	// After 12:30 PM
+	if hour > lunchEndHour || (hour == lunchEndHour && minute >= lunchEndMinute) {
+		return false
+	}
+
+	// Within lunch block
+	return true
+}
+
+// buildScheduleDescription creates a human-readable schedule string.
+func buildScheduleDescription(col domain.SchedulerColumn) string {
+	// Parse work days from workweek bitmask
+	days := []string{}
+	dayNames := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+
+	for i := 0; i < 7; i++ {
+		if col.Workweek&(1<<i) != 0 {
+			days = append(days, dayNames[i])
+		}
+	}
+
+	daysStr := "Varies"
+	if len(days) > 0 {
+		if len(days) == 5 && days[0] == "Monday" && days[4] == "Friday" {
+			daysStr = "Monday-Friday"
+		} else if len(days) == 2 {
+			daysStr = days[0] + "-" + days[1]
+		} else {
+			daysStr = strings.Join(days, ", ")
+		}
+	}
+
+	// Format times
+	startTime := formatTimeForDisplay(col.StartTime)
+	endTime := formatTimeForDisplay(col.EndTime)
+
+	return fmt.Sprintf("%s, %s - %s", daysStr, startTime, endTime)
+}
+
+// formatTimeForDisplay converts 24h time to 12h format.
+func formatTimeForDisplay(t string) string {
+	parsed, err := time.Parse("15:04", t)
+	if err != nil {
+		return t
+	}
+	return parsed.Format("3:04 PM")
 }

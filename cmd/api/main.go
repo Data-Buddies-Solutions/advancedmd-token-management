@@ -65,8 +65,11 @@ func main() {
 	// Initialize AdvancedMD XMLRPC client
 	amdClient := clients.NewAdvancedMDClient(httpClient)
 
+	// Initialize AdvancedMD REST client
+	amdRestClient := clients.NewAdvancedMDRestClient(httpClient)
+
 	// Initialize handlers
-	handlers := apphttp.NewHandlers(tokenManager, amdClient)
+	handlers := apphttp.NewHandlers(tokenManager, amdClient, amdRestClient)
 
 	// Create router
 	router := apphttp.NewRouter(handlers, cfg.APISecret)
