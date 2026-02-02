@@ -328,3 +328,276 @@ func convertPatients(amdPatients []AMDPatient) []domain.Patient {
 	}
 	return patients
 }
+
+// AMDSchedulerSetupResponse represents the getschedulersetup response structure.
+type AMDSchedulerSetupResponse struct {
+	PPMDResults struct {
+		Results struct {
+			ColumnList   AMDColumnList   `json:"columnlist"`
+			ProfileList  AMDProfileList  `json:"profilelist"`
+			FacilityList AMDFacilityList `json:"facilitylist"`
+		} `json:"Results"`
+		Error interface{} `json:"Error"`
+	} `json:"PPMDResults"`
+}
+
+// AMDColumnList holds the list of scheduler columns.
+type AMDColumnList struct {
+	Columns interface{} `json:"column"` // Can be single object or array
+}
+
+// AMDColumn represents a single scheduler column from AMD.
+type AMDColumn struct {
+	ID              string `json:"@id"`
+	Name            string `json:"@name"`
+	Profile         string `json:"@profile"`
+	Facility        string `json:"@facility"`
+	StartTime       string `json:"@starttime"`
+	EndTime         string `json:"@endtime"`
+	Interval        string `json:"@interval"`
+	MaxApptsPerSlot string `json:"@maxapptsperslot"`
+	Workweek        string `json:"@workweek"`
+}
+
+// AMDProfileList holds the list of provider profiles.
+type AMDProfileList struct {
+	Profiles interface{} `json:"profile"` // Can be single object or array
+}
+
+// AMDProfile represents a single provider profile from AMD.
+type AMDProfile struct {
+	ID   string `json:"@id"`
+	Code string `json:"@code"`
+	Name string `json:"@name"`
+}
+
+// AMDFacilityList holds the list of facilities.
+type AMDFacilityList struct {
+	Facilities interface{} `json:"facility"` // Can be single object or array
+}
+
+// AMDFacility represents a single facility from AMD.
+type AMDFacility struct {
+	ID   string `json:"@id"`
+	Code string `json:"@code"`
+	Name string `json:"@name"`
+}
+
+// GetSchedulerSetup retrieves the scheduler configuration from AdvancedMD.
+func (c *AdvancedMDClient) GetSchedulerSetup(ctx context.Context, tokenData *domain.TokenData) (*domain.SchedulerSetup, error) {
+	msgTime := time.Now().Format("01/02/2006 03:04:05 PM")
+
+	payload := map[string]interface{}{
+		"ppmdmsg": map[string]interface{}{
+			"@action":   "getschedulersetup",
+			"@class":    "masterfiles",
+			"@msgtime":  msgTime,
+			"@nocookie": "0",
+		},
+	}
+
+	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
+	if err != nil {
+		return nil, fmt.Errorf("getschedulersetup request failed: %w", err)
+	}
+
+	var resp AMDSchedulerSetupResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse scheduler setup response: %w", err)
+	}
+
+	setup := &domain.SchedulerSetup{
+		Columns:    parseColumns(resp.PPMDResults.Results.ColumnList.Columns),
+		Profiles:   parseProfiles(resp.PPMDResults.Results.ProfileList.Profiles),
+		Facilities: parseFacilities(resp.PPMDResults.Results.FacilityList.Facilities),
+	}
+
+	return setup, nil
+}
+
+// parseColumns converts the AMD column data to domain columns.
+func parseColumns(data interface{}) []domain.SchedulerColumn {
+	if data == nil {
+		return nil
+	}
+
+	var columns []domain.SchedulerColumn
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Single column
+		col := parseColumnFromMap(v)
+		if col != nil {
+			columns = append(columns, *col)
+		}
+	case []interface{}:
+		// Array of columns
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				col := parseColumnFromMap(m)
+				if col != nil {
+					columns = append(columns, *col)
+				}
+			}
+		}
+	}
+
+	return columns
+}
+
+// parseColumnFromMap extracts a SchedulerColumn from a map.
+func parseColumnFromMap(m map[string]interface{}) *domain.SchedulerColumn {
+	col := &domain.SchedulerColumn{
+		ID:         stripPrefix(getString(m, "@id"), "col"),
+		Name:       getString(m, "@name"),
+		ProfileID:  stripPrefix(getString(m, "@profile"), "prof"),
+		FacilityID: stripPrefix(getString(m, "@facility"), "fac"),
+	}
+
+	// Get settings from nested columnsetting object
+	if settings, ok := m["columnsetting"].(map[string]interface{}); ok {
+		col.StartTime = normalizeTime(getString(settings, "@start"))
+		col.EndTime = normalizeTime(getString(settings, "@end"))
+		col.Interval = getInt(settings, "@interval")
+		col.MaxApptsPerSlot = getInt(settings, "@maxapptsperslot")
+		col.Workweek = parseWorkweek(getString(settings, "@workweek"))
+	}
+
+	return col
+}
+
+// stripPrefix removes a prefix from a string (e.g., "col1716" -> "1716").
+func stripPrefix(s, prefix string) string {
+	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+		return s[len(prefix):]
+	}
+	return s
+}
+
+// parseWorkweek converts AMD workweek string "1111100" to bitmask.
+// AMD format: 7 chars for Mon-Sun (1=works, 0=off)
+// Our format: bitmask with 1=Sun, 2=Mon, 4=Tue, etc.
+func parseWorkweek(ww string) int {
+	if len(ww) != 7 {
+		return 0
+	}
+	// AMD: index 0=Mon, 1=Tue, ..., 6=Sun
+	// Our: bit 0=Sun, 1=Mon, 2=Tue, ..., 6=Sat
+	bitmask := 0
+	amdToBit := []int{1, 2, 3, 4, 5, 6, 0} // Mon->1, Tue->2, ..., Sun->0
+	for i, ch := range ww {
+		if ch == '1' {
+			bitmask |= (1 << amdToBit[i])
+		}
+	}
+	return bitmask
+}
+
+// parseProfiles converts the AMD profile data to domain profiles.
+func parseProfiles(data interface{}) []domain.SchedulerProfile {
+	if data == nil {
+		return nil
+	}
+
+	var profiles []domain.SchedulerProfile
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		profiles = append(profiles, domain.SchedulerProfile{
+			ID:   stripPrefix(getString(v, "@id"), "prof"),
+			Code: getString(v, "@code"),
+			Name: getString(v, "@name"),
+		})
+	case []interface{}:
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				profiles = append(profiles, domain.SchedulerProfile{
+					ID:   stripPrefix(getString(m, "@id"), "prof"),
+					Code: getString(m, "@code"),
+					Name: getString(m, "@name"),
+				})
+			}
+		}
+	}
+
+	return profiles
+}
+
+// parseFacilities converts the AMD facility data to domain facilities.
+func parseFacilities(data interface{}) []domain.SchedulerFacility {
+	if data == nil {
+		return nil
+	}
+
+	var facilities []domain.SchedulerFacility
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		facilities = append(facilities, domain.SchedulerFacility{
+			ID:   stripPrefix(getString(v, "@id"), "fac"),
+			Code: getString(v, "@code"),
+			Name: getString(v, "@name"),
+		})
+	case []interface{}:
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				facilities = append(facilities, domain.SchedulerFacility{
+					ID:   stripPrefix(getString(m, "@id"), "fac"),
+					Code: getString(m, "@code"),
+					Name: getString(m, "@name"),
+				})
+			}
+		}
+	}
+
+	return facilities
+}
+
+// getString safely extracts a string from a map.
+func getString(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// getInt safely extracts an int from a map (handles string or number).
+func getInt(m map[string]interface{}, key string) int {
+	if v, ok := m[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case string:
+			var i int
+			fmt.Sscanf(n, "%d", &i)
+			return i
+		}
+	}
+	return 0
+}
+
+// normalizeTime converts AMD time formats (e.g., "0800", "08:00", "8:00 AM") to "HH:MM".
+func normalizeTime(t string) string {
+	if t == "" {
+		return ""
+	}
+
+	// Already in HH:MM format
+	if len(t) == 5 && t[2] == ':' {
+		return t
+	}
+
+	// Handle "HHMM" format (e.g., "0800")
+	if len(t) == 4 {
+		return t[:2] + ":" + t[2:]
+	}
+
+	// Handle "H:MM" format (e.g., "8:00")
+	if len(t) == 4 && t[1] == ':' {
+		return "0" + t
+	}
+
+	return t
+}
