@@ -71,28 +71,7 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-// ElevenLabsWebhookRequest represents the incoming webhook from ElevenLabs.
-type ElevenLabsWebhookRequest struct {
-	CallerID string `json:"caller_id"`
-}
-
-// stripPhoneToDigits removes all non-digit characters and strips leading country code.
-func stripPhoneToDigits(phone string) string {
-	var digits strings.Builder
-	for _, r := range phone {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-	result := digits.String()
-	// Strip leading "1" if it's an 11-digit US number
-	if len(result) == 11 && result[0] == '1' {
-		result = result[1:]
-	}
-	return result
-}
-
-// HandleGetToken returns the cached AdvancedMD token and looks up caller by phone.
+// HandleGetToken returns the cached AdvancedMD token for ElevenLabs agents.
 // Accepts POST only (for ElevenLabs conversation initiation webhook).
 func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -103,14 +82,7 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the incoming webhook to get caller_id
-	var webhookReq ElevenLabsWebhookRequest
-	if err := json.NewDecoder(r.Body).Decode(&webhookReq); err != nil {
-		log.Printf("token: failed to decode webhook body: %v", err)
-		// Continue anyway - caller_id is optional
-	}
-
-	log.Printf("token: received webhook with caller_id=%q", webhookReq.CallerID)
+	log.Printf("token: received webhook request")
 
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
@@ -124,40 +96,13 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 
 	resp := tokenData.ToResponse()
 
-	// Default dynamic variables
+	// Return only auth token variables
 	dynamicVars := map[string]string{
 		"amd_token":         resp.Token,
 		"amd_cookie_token":  resp.CookieToken,
 		"amd_xmlrpc_url":    resp.XmlrpcURL,
 		"amd_rest_api_base": resp.RestApiBase,
 		"amd_ehr_api_base":  resp.EhrApiBase,
-		"patient_status":    "new",
-		"patient_id":        "",
-		"patient_name":      "",
-		"patient_first_name": "",
-		"patient_dob":       "",
-	}
-
-	// Look up patient by phone if caller_id provided
-	if webhookReq.CallerID != "" {
-		phone := stripPhoneToDigits(webhookReq.CallerID)
-		log.Printf("token: looking up patient by phone=%q", phone)
-
-		if phone != "" {
-			patient, err := h.amdClient.LookupPatientByPhone(r.Context(), tokenData, phone)
-			if err != nil {
-				log.Printf("token: patient lookup failed: %v", err)
-			} else if patient != nil {
-				log.Printf("token: found existing patient id=%s name=%s", patient.ID, patient.FullName)
-				dynamicVars["patient_status"] = "existing"
-				dynamicVars["patient_id"] = patient.ID
-				dynamicVars["patient_name"] = patient.FullName
-				dynamicVars["patient_first_name"] = patient.FirstName
-				dynamicVars["patient_dob"] = patient.DOB
-			} else {
-				log.Printf("token: no patient found for phone=%s", phone)
-			}
-		}
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
@@ -460,15 +405,8 @@ type AvailabilityRequest struct {
 	Date     string `json:"date"`     // Required: YYYY-MM-DD format
 	Provider string `json:"provider"` // Optional: filter by provider name
 	Days     int    `json:"days"`     // Optional: how many days to search (default 7)
+	Office   string `json:"office"`   // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
 }
-
-// Lunch block times (hardcoded)
-const (
-	lunchStartHour   = 11
-	lunchStartMinute = 0
-	lunchEndHour     = 12
-	lunchEndMinute   = 30
-)
 
 // providerDisplayNames maps profile IDs to friendly display names.
 var providerDisplayNames = map[string]string{
@@ -519,7 +457,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		days = 30 // Cap at 30 days
 	}
 
-	log.Printf("availability: date=%s provider=%q days=%d", req.Date, req.Provider, days)
+	log.Printf("availability: date=%s provider=%q days=%d office=%q", req.Date, req.Provider, days, req.Office)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -554,10 +492,28 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		facilityMap[f.ID] = f
 	}
 
+	// Resolve office filter to facility ID if provided
+	var facilityFilter string
+	if req.Office != "" {
+		facilityID, ok := domain.LookupFacilityID(req.Office)
+		if !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Error: fmt.Sprintf("Unknown office: %q. Valid options: Spring Hill, Hollywood, Sweetwater, Crystal River, Coral Springs", req.Office),
+			})
+			return
+		}
+		facilityFilter = facilityID
+	}
+
 	// Filter columns to allowed providers
 	var allowedColumns []domain.SchedulerColumn
 	for _, col := range setup.Columns {
 		if domain.IsAllowedColumn(col.ID) {
+			// If office filter specified, check facility ID
+			if facilityFilter != "" && col.FacilityID != facilityFilter {
+				continue
+			}
 			// If provider filter specified, check if name matches
 			if req.Provider != "" {
 				profile, ok := profileMap[col.ProfileID]
@@ -573,10 +529,26 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Determine location name for response
+	locationName := "All Locations"
+	if facilityFilter != "" {
+		for _, f := range setup.Facilities {
+			if f.ID == facilityFilter {
+				locationName = f.Name
+				break
+			}
+		}
+	} else if len(allowedColumns) > 0 {
+		// Default to first column's facility if no filter
+		if fac, ok := facilityMap[allowedColumns[0].FacilityID]; ok {
+			locationName = fac.Name
+		}
+	}
+
 	if len(allowedColumns) == 0 {
 		json.NewEncoder(w).Encode(domain.AvailabilityResponse{
 			Date:      startDate.Format("Monday, January 2, 2006"),
-			Location:  "Spring Hill",
+			Location:  locationName,
 			Providers: []domain.ProviderAvailability{},
 		})
 		return
@@ -596,6 +568,14 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		appointmentsByColumn = make(map[string][]domain.Appointment)
 	}
 
+	// Get block holds for all columns
+	blockHoldsByColumn, err := h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, columnIDs, req.Date)
+	if err != nil {
+		log.Printf("availability: failed to get block holds: %v", err)
+		// Continue without block holds
+		blockHoldsByColumn = make(map[string][]domain.BlockHold)
+	}
+
 	// Calculate availability for each provider
 	var providers []domain.ProviderAvailability
 
@@ -609,8 +589,8 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 			displayName = profile.Name
 		}
 
-		// Calculate available slots
-		slots := calculateAvailableSlots(col, appointmentsByColumn[col.ID], startDate, days)
+		// Calculate available slots (with block holds)
+		slots := calculateAvailableSlots(col, appointmentsByColumn[col.ID], blockHoldsByColumn[col.ID], startDate, days)
 
 		// Build schedule description
 		schedule := buildScheduleDescription(col)
@@ -631,13 +611,13 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 
 	json.NewEncoder(w).Encode(domain.AvailabilityResponse{
 		Date:      startDate.Format("Monday, January 2, 2006"),
-		Location:  "Spring Hill",
+		Location:  locationName,
 		Providers: providers,
 	})
 }
 
 // calculateAvailableSlots generates available time slots for a column.
-func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.Appointment, startDate time.Time, days int) []domain.AvailableSlot {
+func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.Appointment, blockHolds []domain.BlockHold, startDate time.Time, days int) []domain.AvailableSlot {
 	var slots []domain.AvailableSlot
 
 	// Build appointment count map: datetime string -> count
@@ -669,8 +649,8 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 		}
 
 		for slotTime := workStart; slotTime.Before(workEnd); slotTime = slotTime.Add(interval) {
-			// Skip lunch block (11:00 AM - 12:30 PM)
-			if isLunchTime(slotTime) {
+			// Skip if blocked by a hold (lunch, meetings, etc.)
+			if domain.IsBlockedByHold(slotTime, blockHolds) {
 				continue
 			}
 
@@ -696,25 +676,6 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	}
 
 	return slots
-}
-
-// isLunchTime checks if a time falls within the lunch block (11:00 AM - 12:30 PM).
-func isLunchTime(t time.Time) bool {
-	hour := t.Hour()
-	minute := t.Minute()
-
-	// Before 11:00 AM
-	if hour < lunchStartHour {
-		return false
-	}
-
-	// After 12:30 PM
-	if hour > lunchEndHour || (hour == lunchEndHour && minute >= lunchEndMinute) {
-		return false
-	}
-
-	// Within lunch block
-	return true
 }
 
 // buildScheduleDescription creates a human-readable schedule string.

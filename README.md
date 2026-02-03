@@ -368,9 +368,10 @@ curl -X POST \
 
 1. **Fetches scheduler setup** from AMD (`getschedulersetup` XMLRPC action)
 2. **Fetches existing appointments** from AMD (`GET /scheduler/appointments` REST API)
-3. **Generates time slots** based on provider work hours and interval
-4. **Filters out blocked times:**
-   - **Lunch block**: 11:00 AM - 12:30 PM (hardcoded)
+3. **Fetches block holds** from AMD (`GET /scheduler/blockholds` REST API)
+4. **Generates time slots** based on provider work hours and interval
+5. **Filters out blocked times:**
+   - **Block holds**: Lunch, meetings, and other blocked periods from AMD
    - **Existing appointments**: Slots at or above `maxApptsPerSlot` are excluded
    - **Non-work days**: Provider's workweek schedule is respected
 

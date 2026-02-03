@@ -107,11 +107,12 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 
 1. Calls `getschedulersetup` (XMLRPC) → Gets provider columns, profiles, facilities
 2. Calls `GET /scheduler/appointments` (REST) → Gets existing booked appointments
-3. Calculates available slots based on:
+3. Calls `GET /scheduler/blockholds` (REST) → Gets blocked time periods (lunch, meetings, etc.)
+4. Calculates available slots based on:
    - Provider work hours (from `columnsetting`)
    - Slot interval (15 or 30 min depending on provider)
    - Existing appointments (respects `maxApptsPerSlot`)
-   - **Lunch block: 11:00 AM - 12:30 PM is hardcoded as blocked**
+   - **Block holds** from AMD (lunch, meetings, etc. - dynamically fetched)
    - Provider workweek (e.g., Dr. Licht only works Wed-Thu)
 
 ### AMD Response Structure Quirks

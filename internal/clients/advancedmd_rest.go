@@ -108,3 +108,84 @@ func (c *AdvancedMDRestClient) GetAppointmentsForColumns(ctx context.Context, to
 
 	return result, nil
 }
+
+// AMDBlockHoldResponse represents a block hold from the REST API.
+type AMDBlockHoldResponse struct {
+	ID            int    `json:"id"`
+	StartDateTime string `json:"startdatetime"`
+	Duration      int    `json:"duration"`
+	ColumnID      int    `json:"columnid"`
+	Note          string `json:"note"`
+}
+
+// GetBlockHolds fetches block holds for a column within a date range.
+// startDate should be in YYYY-MM-DD format.
+func (c *AdvancedMDRestClient) GetBlockHolds(ctx context.Context, tokenData *domain.TokenData, columnID string, startDate string) ([]domain.BlockHold, error) {
+	url := fmt.Sprintf("https://%s/scheduler/blockholds?columnId=%s&forView=week&startDate=%s",
+		tokenData.RestApiBase, columnID, startDate)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", tokenData.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var amdHolds []AMDBlockHoldResponse
+	if err := json.Unmarshal(body, &amdHolds); err != nil {
+		return nil, fmt.Errorf("failed to parse block holds: %w", err)
+	}
+
+	holds := make([]domain.BlockHold, len(amdHolds))
+	for i, h := range amdHolds {
+		startTime, err := time.Parse("2006-01-02T15:04:05", h.StartDateTime)
+		if err != nil {
+			startTime, err = time.Parse("2006-01-02T15:04", h.StartDateTime)
+			if err != nil {
+				continue
+			}
+		}
+
+		holds[i] = domain.BlockHold{
+			ID:            h.ID,
+			StartDateTime: startTime,
+			Duration:      h.Duration,
+			ColumnID:      h.ColumnID,
+			Note:          h.Note,
+		}
+	}
+
+	return holds, nil
+}
+
+// GetBlockHoldsForColumns fetches block holds for multiple columns.
+func (c *AdvancedMDRestClient) GetBlockHoldsForColumns(ctx context.Context, tokenData *domain.TokenData, columnIDs []string, startDate string) (map[string][]domain.BlockHold, error) {
+	result := make(map[string][]domain.BlockHold)
+
+	for _, colID := range columnIDs {
+		holds, err := c.GetBlockHolds(ctx, tokenData, colID, startDate)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get block holds for column %s: %w", colID, err)
+		}
+		result[colID] = holds
+	}
+
+	return result, nil
+}
