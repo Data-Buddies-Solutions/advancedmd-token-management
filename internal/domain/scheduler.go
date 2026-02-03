@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,15 @@ type Appointment struct {
 	ColumnID      int       // Column ID
 	ProfileID     int       // Profile ID
 	PatientID     int       // Patient ID
+}
+
+// BlockHold represents a blocked time period from the REST API.
+type BlockHold struct {
+	ID            int       // Block hold ID
+	StartDateTime time.Time // Block start time
+	Duration      int       // Duration in minutes
+	ColumnID      int       // Column ID
+	Note          string    // Optional note (e.g., "Lunch")
 }
 
 // AvailableSlot represents a single available time slot.
@@ -131,4 +141,34 @@ var AllowedColumns = map[string]bool{
 // IsAllowedColumn checks if a column ID is in the allowed list.
 func IsAllowedColumn(columnID string) bool {
 	return AllowedColumns[columnID]
+}
+
+// IsBlockedByHold checks if a time slot falls within any block hold.
+func IsBlockedByHold(slotTime time.Time, holds []BlockHold) bool {
+	for _, hold := range holds {
+		holdEnd := hold.StartDateTime.Add(time.Duration(hold.Duration) * time.Minute)
+		// Slot is blocked if it starts during the hold period
+		if !slotTime.Before(hold.StartDateTime) && slotTime.Before(holdEnd) {
+			return true
+		}
+	}
+	return false
+}
+
+// OfficeFacilityMap maps simple office names to AMD facility IDs.
+var OfficeFacilityMap = map[string]string{
+	"springhill":     "1032", // ABITA EYE GROUP SPRING HILL
+	"spring hill":    "1032",
+	"hollywood":      "4",    // ABITA EYE GROUP HOLLYWOOD
+	"sweetwater":     "1031", // ABITA EYE GROUP SWEETWATER
+	"crystalriver":   "1033", // ABITA EYE GROUP CRYSTAL RIVER
+	"crystal river":  "1033",
+	"coralsprings":   "1034", // ABITA EYE GROUP CORAL SPRINGS
+	"coral springs":  "1034",
+}
+
+// LookupFacilityID returns facility ID for an office name (case-insensitive).
+func LookupFacilityID(office string) (string, bool) {
+	id, ok := OfficeFacilityMap[strings.ToLower(strings.TrimSpace(office))]
+	return id, ok
 }
