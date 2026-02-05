@@ -223,8 +223,8 @@ func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.Tok
 					"@chart":             "AUTO",
 					"@profile":           "3",
 					"address": map[string]interface{}{
-						"@address1": params.Street,
-						"@address2": params.AptSuite,
+						"@address1": params.AptSuite,
+						"@address2": params.Street,
 						"@city":     params.City,
 						"@state":    params.State,
 						"@zip":      params.Zip,
