@@ -249,8 +249,22 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	strippedID := domain.StripPatientPrefix(rawPatientID)
 
+	// Look up carrier ID from name
+	carrierID, ok := domain.LookupCarrierID(req.CarrierID)
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:    "partial",
+			PatientID: strippedID,
+			Name:      patientName,
+			DOB:       normalizedDOB,
+			Message:   "Patient created but insurance carrier not recognized: " + req.CarrierID,
+		})
+		return
+	}
+
 	// Attach insurance
-	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, req.CarrierID, req.SubscriberNum); err != nil {
+	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, carrierID, req.SubscriberNum); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",

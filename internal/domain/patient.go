@@ -65,22 +65,10 @@ func FormatPhone(phone string) string {
 }
 
 // CarrierMap maps insurance provider names (lowercase) to AMD carrier IDs.
-// All values are placeholders — replace with real carrier IDs before going live.
 var CarrierMap = map[string]string{
-	"blue cross blue shield": "carXXXX",
-	"blue cross":             "carXXXX",
-	"blue shield":            "carXXXX",
-	"bluecross blueshield":   "carXXXX",
-	"bcbs":                   "carXXXX",
-	"aetna":                  "carXXXX",
-	"cigna":                  "carXXXX",
-	"united healthcare":      "carXXXX",
-	"unitedhealthcare":       "carXXXX",
-	"united":                 "carXXXX",
-	"uhc":                    "carXXXX",
-	"humana":                 "carXXXX",
-	"medicare":               "carXXXX",
-	"medicaid":               "carXXXX",
+	"cigna":            "car7147",
+	"cigna health":     "car7147",
+	"cigna healthcare": "car7147",
 }
 
 // LookupCarrierID performs a case-insensitive lookup into CarrierMap.
