@@ -131,11 +131,26 @@ func FormatSlotDateTime(t time.Time) string {
 }
 
 // AllowedColumns defines the column IDs we expose for scheduling.
-// Only Dr. Bach, Dr. Licht, and Dr. Noel at Spring Hill.
+// Only columns for Dr. Bach, Dr. Licht, and Dr. Noel across all facilities.
 var AllowedColumns = map[string]bool{
-	"1716": true, // DR. BACH - BP
-	"1723": true, // DR. LICHT
-	"1726": true, // DR. NOEL
+	// Dr. Bach (prof1135)
+	"1707": true, // A BACH HOLLYWOOD
+	"1708": true, // A BACH OVERFLOW (Sweetwater)
+	"1709": true, // A BACH SWEETWATER
+	"1710": true, // A BACH VISION (Hollywood)
+	"1716": true, // DR. BACH - BP (Spring Hill)
+	"1717": true, // DR. BACH HW OVERFLOW (Hollywood)
+	// Dr. Licht (prof1141)
+	"1714": true, // CR SURGERY SUITE (Crystal River)
+	"1715": true, // CRYSTAL RIVER
+	"1723": true, // DR. LICHT (Spring Hill)
+	"1730": true, // LICHT CR (Crystal River)
+	"1731": true, // LICHT WEEK 2 (Crystal River)
+	"1732": true, // LICHT WEEK 2 (Crystal River)
+	"1736": true, // POST OP 1 (Crystal River)
+	"1737": true, // POST OP 2 (Crystal River)
+	// Dr. Noel (prof1137)
+	"1726": true, // DR. NOEL (Spring Hill)
 }
 
 // IsAllowedColumn checks if a column ID is in the allowed list.
