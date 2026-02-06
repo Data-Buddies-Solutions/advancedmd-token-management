@@ -464,10 +464,10 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Default to 7 days if not specified
+	// Default to 3 days if not specified
 	days := req.Days
 	if days <= 0 {
-		days = 7
+		days = 3
 	}
 	if days > 30 {
 		days = 30 // Cap at 30 days
