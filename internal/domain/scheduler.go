@@ -2,7 +2,6 @@ package domain
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -170,20 +169,41 @@ func IsBlockedByHold(slotTime time.Time, holds []BlockHold) bool {
 	return false
 }
 
-// OfficeFacilityMap maps simple office names to AMD facility IDs.
+// OfficeFacilityMap maps normalized office names to AMD facility IDs.
+// Keys are pre-normalized (lowercase, no punctuation) for use with NormalizeForLookup.
 var OfficeFacilityMap = map[string]string{
-	"springhill":     "1032", // ABITA EYE GROUP SPRING HILL
-	"spring hill":    "1032",
-	"hollywood":      "4",    // ABITA EYE GROUP HOLLYWOOD
-	"sweetwater":     "1031", // ABITA EYE GROUP SWEETWATER
-	"crystalriver":   "1033", // ABITA EYE GROUP CRYSTAL RIVER
-	"crystal river":  "1033",
-	"coralsprings":   "1034", // ABITA EYE GROUP CORAL SPRINGS
-	"coral springs":  "1034",
+	"springhill":    "1032", // ABITA EYE GROUP SPRING HILL
+	"spring hill":   "1032",
+	"spring":        "1032",
+	"sh":            "1032",
+	"hollywood":     "4", // ABITA EYE GROUP HOLLYWOOD
+	"hw":            "4",
+	"sweetwater":    "1031", // ABITA EYE GROUP SWEETWATER
+	"sweet water":   "1031",
+	"sw":            "1031",
+	"crystalriver":  "1033", // ABITA EYE GROUP CRYSTAL RIVER
+	"crystal river": "1033",
+	"crystal":       "1033",
+	"cr":            "1033",
+	"coralsprings":  "1034", // ABITA EYE GROUP CORAL SPRINGS
+	"coral springs": "1034",
+	"coral":         "1034",
+	"cs":            "1034",
 }
 
-// LookupFacilityID returns facility ID for an office name (case-insensitive).
+// LookupFacilityID returns facility ID for an office name.
+// Uses NormalizeForLookup for tolerance of punctuation, casing, and spacing variations.
 func LookupFacilityID(office string) (string, bool) {
-	id, ok := OfficeFacilityMap[strings.ToLower(strings.TrimSpace(office))]
+	id, ok := OfficeFacilityMap[NormalizeForLookup(office)]
 	return id, ok
+}
+
+// ValidOfficeNames returns the list of recognized office names for error messages.
+func ValidOfficeNames() []string {
+	return []string{"Spring Hill", "Hollywood", "Sweetwater", "Crystal River", "Coral Springs"}
+}
+
+// ValidProviderNames returns the list of recognized provider names for error messages.
+func ValidProviderNames() []string {
+	return []string{"Dr. Bach", "Dr. Licht", "Dr. Noel"}
 }

@@ -258,7 +258,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 			PatientID: strippedID,
 			Name:      patientName,
 			DOB:       normalizedDOB,
-			Message:   "Patient created but insurance carrier not recognized: " + req.CarrierID,
+			Message:   fmt.Sprintf("Patient created but insurance carrier not recognized: %q. Valid carriers: %s", req.CarrierID, strings.Join(domain.ValidCarrierNames(), ", ")),
 		})
 		return
 	}
@@ -515,7 +515,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		if !ok {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(ErrorResponse{
-				Error: fmt.Sprintf("Unknown office: %q. Valid options: Spring Hill, Hollywood, Sweetwater, Crystal River, Coral Springs", req.Office),
+				Error: fmt.Sprintf("Unknown office: %q. Valid options: %s", req.Office, strings.Join(domain.ValidOfficeNames(), ", ")),
 			})
 			return
 		}
@@ -536,8 +536,9 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 				if !ok {
 					continue
 				}
-				if !strings.Contains(strings.ToUpper(profile.Name), strings.ToUpper(req.Provider)) &&
-					!strings.Contains(strings.ToUpper(col.Name), strings.ToUpper(req.Provider)) {
+				normalizedProvider := strings.ToUpper(domain.NormalizeForLookup(req.Provider))
+				if !strings.Contains(strings.ToUpper(domain.NormalizeForLookup(profile.Name)), normalizedProvider) &&
+					!strings.Contains(strings.ToUpper(domain.NormalizeForLookup(col.Name)), normalizedProvider) {
 					continue
 				}
 			}
@@ -562,6 +563,14 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	}
 
 	if len(allowedColumns) == 0 {
+		if req.Provider != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Error: fmt.Sprintf("No provider found matching %q. Valid providers: %s",
+					req.Provider, strings.Join(domain.ValidProviderNames(), ", ")),
+			})
+			return
+		}
 		json.NewEncoder(w).Encode(domain.AvailabilityResponse{
 			Date:      startDate.Format("Monday, January 2, 2006"),
 			Location:  locationName,

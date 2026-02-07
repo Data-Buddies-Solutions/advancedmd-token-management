@@ -6,6 +6,20 @@ import (
 	"time"
 )
 
+// NormalizeForLookup normalizes input strings for fuzzy map lookups.
+// Strips punctuation (periods, commas), replaces slashes with spaces,
+// collapses multiple spaces, lowercases, and trims whitespace.
+func NormalizeForLookup(input string) string {
+	s := strings.ToLower(strings.TrimSpace(input))
+	s = strings.ReplaceAll(s, ".", "")
+	s = strings.ReplaceAll(s, ",", "")
+	s = strings.ReplaceAll(s, "/", " ")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.TrimSpace(s)
+}
+
 // Patient represents a patient record.
 type Patient struct {
 	ID        string
@@ -64,27 +78,50 @@ func FormatPhone(phone string) string {
 	return phone
 }
 
-// CarrierMap maps insurance provider names (lowercase) to AMD carrier IDs.
+// CarrierMap maps normalized insurance provider names to AMD carrier IDs.
+// Keys are pre-normalized (lowercase, no punctuation) for use with NormalizeForLookup.
 var CarrierMap = map[string]string{
-	"cigna":                    "car7147",
-	"cigna health":             "car7147",
-	"cigna healthcare":         "car7147",
-	"cigna health care":        "car7147",
-	"aetna":                    "car63046",
-	"aetna health":             "car63046",
-	"aetna health care":        "car63046",
-	"aetna healthcare":         "car63046",
-	"medicare":                 "car7129",
-	"bcbs":                     "car7077",
-	"blue cross":               "car7077",
-	"blue cross blue shield":   "car7077",
-	"blue cross blue shield of": "car7077",
+	// Cigna (car7147)
+	"cigna":             "car7147",
+	"cigna health":      "car7147",
+	"cigna healthcare":  "car7147",
+	"cigna health care": "car7147",
+	"cigna insurance":   "car7147",
+	// Aetna (car63046)
+	"aetna":             "car63046",
+	"aetna health":      "car63046",
+	"aetna health care": "car63046",
+	"aetna healthcare":  "car63046",
+	"aetna insurance":   "car63046",
+	// Medicare (car7129)
+	"medicare":               "car7129",
+	"medicare part a":        "car7129",
+	"medicare part b":        "car7129",
+	"medicare parts a and b": "car7129",
+	// BCBS (car7077)
+	"bcbs":                       "car7077",
+	"bc bs":                      "car7077",
+	"bcbs of":                    "car7077",
+	"blue cross":                 "car7077",
+	"blue shield":                "car7077",
+	"blue cross blue shield":     "car7077",
+	"blue cross blue shield of":  "car7077",
+	"bluecross":                  "car7077",
+	"blueshield":                 "car7077",
+	"bluecross blueshield":       "car7077",
+	"blue cross and blue shield": "car7077",
 }
 
-// LookupCarrierID performs a case-insensitive lookup into CarrierMap.
+// LookupCarrierID performs a normalized lookup into CarrierMap.
+// Handles variations like "B.C.B.S.", "Blue Cross/Blue Shield", etc.
 func LookupCarrierID(providerName string) (string, bool) {
-	id, ok := CarrierMap[strings.ToLower(strings.TrimSpace(providerName))]
+	id, ok := CarrierMap[NormalizeForLookup(providerName)]
 	return id, ok
+}
+
+// ValidCarrierNames returns the list of recognized carrier names for error messages.
+func ValidCarrierNames() []string {
+	return []string{"Cigna", "Aetna", "Medicare", "BCBS (Blue Cross Blue Shield)"}
 }
 
 // NormalizeSex converts various sex inputs to AMD's expected format (M/F/U).

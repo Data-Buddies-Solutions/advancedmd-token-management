@@ -51,6 +51,64 @@ func TestNormalizeDOB(t *testing.T) {
 	}
 }
 
+func TestNormalizeForLookup(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"lowercase and trim", "  Cigna  ", "cigna"},
+		{"strips periods", "B.C.B.S.", "bcbs"},
+		{"strips commas", "Blue Cross, Blue Shield", "blue cross blue shield"},
+		{"replaces slashes with space", "Blue Cross/Blue Shield", "blue cross blue shield"},
+		{"collapses multiple spaces", "blue   cross", "blue cross"},
+		{"combined normalizations", " B.C.B.S. / of Florida ", "bcbs of florida"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeForLookup(tt.input)
+			if got != tt.expected {
+				t.Errorf("NormalizeForLookup(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestLookupCarrierID(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantID     string
+		wantFound  bool
+	}{
+		{"exact match lowercase", "cigna", "car7147", true},
+		{"case insensitive", "CIGNA", "car7147", true},
+		{"with periods (BCBS)", "B.C.B.S.", "car7077", true},
+		{"slash variation", "Blue Cross/Blue Shield", "car7077", true},
+		{"with whitespace", "  Aetna  ", "car63046", true},
+		{"medicare part b", "Medicare Part B", "car7129", true},
+		{"blue cross blue shield", "Blue Cross Blue Shield", "car7077", true},
+		{"cigna healthcare", "Cigna Healthcare", "car7147", true},
+		{"aetna insurance", "Aetna Insurance", "car63046", true},
+		{"unknown carrier", "unknown", "", false},
+		{"empty string", "", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotID, gotFound := LookupCarrierID(tt.input)
+			if gotFound != tt.wantFound {
+				t.Errorf("LookupCarrierID(%q) found = %v, want %v", tt.input, gotFound, tt.wantFound)
+			}
+			if gotID != tt.wantID {
+				t.Errorf("LookupCarrierID(%q) id = %q, want %q", tt.input, gotID, tt.wantID)
+			}
+		})
+	}
+}
+
 func TestParseFirstName(t *testing.T) {
 	tests := []struct {
 		input    string
