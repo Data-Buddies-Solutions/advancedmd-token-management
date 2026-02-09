@@ -105,6 +105,7 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		"amd_ehr_api_base":  resp.EhrApiBase,
 		"patient_verified":  "",
 		"patient_id":        "1",
+		"booking_confirmed": "1",
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
