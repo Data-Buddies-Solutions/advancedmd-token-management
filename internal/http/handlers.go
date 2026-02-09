@@ -23,7 +23,7 @@ type ErrorResponse struct {
 // ElevenLabsWebhookResponse is the response format for ElevenLabs conversation initiation webhook.
 type ElevenLabsWebhookResponse struct {
 	Type             string            `json:"type"`
-	DynamicVariables map[string]string `json:"dynamic_variables"`
+	DynamicVariables map[string]interface{} `json:"dynamic_variables"`
 }
 
 // VerifyPatientRequest is the expected JSON body for patient verification.
@@ -97,7 +97,7 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	resp := tokenData.ToResponse()
 
 	// Return only auth token variables
-	dynamicVars := map[string]string{
+	dynamicVars := map[string]interface{}{
 		"amd_token":         resp.Token,
 		"amd_cookie_token":  resp.CookieToken,
 		"amd_xmlrpc_url":    resp.XmlrpcURL,
@@ -105,7 +105,7 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		"amd_ehr_api_base":  resp.EhrApiBase,
 		"patient_verified":  "",
 		"patient_id":        "1",
-		"booking_confirmed": "1",
+		"booking_confirmed": 0,
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
