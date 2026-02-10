@@ -240,7 +240,12 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		Sex:       normalizedSex,
 	})
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("add-patient: AMD error: %v", err)
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "error from AMD") {
+			status = http.StatusConflict // 409 for AMD-reported errors (e.g., duplicate patient)
+		}
+		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: "Failed to create patient: " + err.Error(),
