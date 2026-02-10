@@ -243,6 +243,28 @@ func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.Tok
 		return "", "", "", fmt.Errorf("addpatient request failed: %w", err)
 	}
 
+	// Check for error in response first (e.g., duplicate patient)
+	var errResp struct {
+		PPMDResults struct {
+			Error interface{} `json:"Error"`
+		} `json:"PPMDResults"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.PPMDResults.Error != nil {
+		switch e := errResp.PPMDResults.Error.(type) {
+		case string:
+			if e != "" {
+				return "", "", "", fmt.Errorf("addpatient error from AMD: %s", e)
+			}
+		case map[string]interface{}:
+			if msg, ok := e["@message"]; ok {
+				return "", "", "", fmt.Errorf("addpatient error from AMD: %v", msg)
+			}
+			return "", "", "", fmt.Errorf("addpatient error from AMD: %v", e)
+		default:
+			return "", "", "", fmt.Errorf("addpatient error from AMD: %v", e)
+		}
+	}
+
 	// Try single patient response first (most likely for addpatient)
 	var singleResp AMDLookupResponseSingle
 	if err := json.Unmarshal(body, &singleResp); err == nil {
