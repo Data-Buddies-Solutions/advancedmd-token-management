@@ -103,7 +103,7 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		"amd_xmlrpc_url":    resp.XmlrpcURL,
 		"amd_rest_api_base": resp.RestApiBase,
 		"amd_ehr_api_base":  resp.EhrApiBase,
-		"patient_verified":  "",
+		"patient_verified":  "not_found",
 		"patient_id":        "1",
 		"booking_confirmed": 0,
 	}
