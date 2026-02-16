@@ -38,7 +38,7 @@ type AMDAppointmentResponse struct {
 // GetAppointments fetches appointments for a column within a date range.
 // startDate should be in YYYY-MM-DD format.
 func (c *AdvancedMDRestClient) GetAppointments(ctx context.Context, tokenData *domain.TokenData, columnID string, startDate string) ([]domain.Appointment, error) {
-	url := fmt.Sprintf("https://%s/scheduler/appointments?columnId=%s&forView=week&isLegacy=true&startDate=%s",
+	url := fmt.Sprintf("https://%s/scheduler/appointments?columnId=%s&forView=day&isLegacy=true&startDate=%s",
 		tokenData.RestApiBase, columnID, startDate)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -121,7 +121,7 @@ type AMDBlockHoldResponse struct {
 // GetBlockHolds fetches block holds for a column within a date range.
 // startDate should be in YYYY-MM-DD format.
 func (c *AdvancedMDRestClient) GetBlockHolds(ctx context.Context, tokenData *domain.TokenData, columnID string, startDate string) ([]domain.BlockHold, error) {
-	url := fmt.Sprintf("https://%s/scheduler/blockholds?columnId=%s&forView=week&startDate=%s",
+	url := fmt.Sprintf("https://%s/scheduler/blockholds?columnId=%s&forView=day&startDate=%s",
 		tokenData.RestApiBase, columnID, startDate)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -189,3 +189,4 @@ func (c *AdvancedMDRestClient) GetBlockHoldsForColumns(ctx context.Context, toke
 
 	return result, nil
 }
+
