@@ -61,7 +61,6 @@ type BlockHold struct {
 
 // AvailableSlot represents a single available time slot.
 type AvailableSlot struct {
-	Date     string `json:"date"`     // Human-readable date (e.g., "Monday, February 3")
 	Time     string `json:"time"`     // Human-readable time (e.g., "9:00 AM")
 	DateTime string `json:"datetime"` // ISO format for booking (e.g., "2026-02-03T09:00")
 }
@@ -72,16 +71,19 @@ type ProviderAvailability struct {
 	ColumnID       int             `json:"columnId"`
 	ProfileID      int             `json:"profileId"`
 	Facility       string          `json:"facility"`
-	Schedule       string          `json:"schedule"`
 	SlotDuration   int             `json:"slotDuration"`
-	AvailableSlots []AvailableSlot `json:"availableSlots"`
+	TotalAvailable int             `json:"totalAvailable"`
+	FirstAvailable string          `json:"firstAvailable,omitempty"`
+	LastAvailable  string          `json:"lastAvailable,omitempty"`
+	Slots          []AvailableSlot `json:"slots"`
 }
 
 // AvailabilityResponse is the response structure for the availability endpoint.
 type AvailabilityResponse struct {
-	Date      string                 `json:"date"`
-	Location  string                 `json:"location"`
-	Providers []ProviderAvailability `json:"providers"`
+	SearchedDate string                 `json:"searchedDate"`
+	Date         string                 `json:"date"`
+	Location     string                 `json:"location"`
+	Providers    []ProviderAvailability `json:"providers"`
 }
 
 // WorksOnDay checks if the column works on a given weekday.
@@ -117,11 +119,6 @@ func (c *SchedulerColumn) ParseWorkHours(date time.Time) (start, end time.Time, 
 // FormatSlotTime formats a time for the AvailableSlot response.
 func FormatSlotTime(t time.Time) string {
 	return t.Format("3:04 PM")
-}
-
-// FormatSlotDate formats a date for the AvailableSlot response.
-func FormatSlotDate(t time.Time) string {
-	return t.Format("Monday, January 2")
 }
 
 // FormatSlotDateTime formats a time for ISO booking format.

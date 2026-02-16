@@ -426,7 +426,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 type AvailabilityRequest struct {
 	Date     string `json:"date"`     // Required: YYYY-MM-DD format
 	Provider string `json:"provider"` // Optional: filter by provider name
-	Days     int    `json:"days"`     // Optional: how many days to search (default 7)
 	Office   string `json:"office"`   // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
 }
 
@@ -470,16 +469,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Default to 3 days if not specified
-	days := req.Days
-	if days <= 0 {
-		days = 3
-	}
-	if days > 30 {
-		days = 30 // Cap at 30 days
-	}
-
-	log.Printf("availability: date=%s provider=%q days=%d office=%q", req.Date, req.Provider, days, req.Office)
+	log.Printf("availability: date=%s provider=%q office=%q", req.Date, req.Provider, req.Office)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -492,7 +482,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get scheduler setup
+	// Get scheduler setup (1 XMLRPC call)
 	setup, err := h.amdClient.GetSchedulerSetup(r.Context(), tokenData)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -532,11 +522,9 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	var allowedColumns []domain.SchedulerColumn
 	for _, col := range setup.Columns {
 		if domain.IsAllowedColumn(col.ID) {
-			// If office filter specified, check facility ID
 			if facilityFilter != "" && col.FacilityID != facilityFilter {
 				continue
 			}
-			// If provider filter specified, check if name matches
 			if req.Provider != "" {
 				profile, ok := profileMap[col.ProfileID]
 				if !ok {
@@ -562,7 +550,6 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	} else if len(allowedColumns) > 0 {
-		// Default to first column's facility if no filter
 		if fac, ok := facilityMap[allowedColumns[0].FacilityID]; ok {
 			locationName = fac.Name
 		}
@@ -578,172 +565,176 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		json.NewEncoder(w).Encode(domain.AvailabilityResponse{
-			Date:      startDate.Format("Monday, January 2, 2006"),
-			Location:  locationName,
-			Providers: []domain.ProviderAvailability{},
+			SearchedDate: req.Date,
+			Date:         startDate.Format("Monday, January 2, 2006"),
+			Location:     locationName,
+			Providers:    []domain.ProviderAvailability{},
 		})
 		return
 	}
 
-	// Get column IDs for appointments query
-	columnIDs := make([]string, len(allowedColumns))
-	for i, col := range allowedColumns {
-		columnIDs[i] = col.ID
-	}
-
-	// Get existing appointments for all columns
-	appointmentsByColumn, err := h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, columnIDs, req.Date)
+	// Load Eastern timezone for past-slot filtering
+	eastern, err := time.LoadLocation("America/New_York")
 	if err != nil {
-		log.Printf("availability: failed to get appointments: %v", err)
-		// Continue without appointments - will show all slots as available
-		appointmentsByColumn = make(map[string][]domain.Appointment)
+		eastern = time.FixedZone("EST", -5*3600)
 	}
+	nowEastern := time.Now().In(eastern)
 
-	// Get block holds for all columns
-	blockHoldsByColumn, err := h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, columnIDs, req.Date)
-	if err != nil {
-		log.Printf("availability: failed to get block holds: %v", err)
-		// Continue without block holds
-		blockHoldsByColumn = make(map[string][]domain.BlockHold)
-	}
-
-	// Calculate availability for each provider
+	// Try the requested date first, then auto-search forward up to 14 days
+	searchDate := startDate
 	var providers []domain.ProviderAvailability
 
-	for _, col := range allowedColumns {
-		profile := profileMap[col.ProfileID]
-		facility := facilityMap[col.FacilityID]
+	for attempt := 0; attempt <= 14; attempt++ {
+		dateStr := searchDate.Format("2006-01-02")
 
-		// Get display name
-		displayName := providerDisplayNames[col.ProfileID]
-		if displayName == "" {
-			displayName = profile.Name
+		// Fetch appointments and block holds per column
+		columnIDs := make([]string, len(allowedColumns))
+		for i, col := range allowedColumns {
+			columnIDs[i] = col.ID
 		}
 
-		// Calculate available slots (with block holds)
-		slots := calculateAvailableSlots(col, appointmentsByColumn[col.ID], blockHoldsByColumn[col.ID], startDate, days)
+		appointmentsByColumn, err := h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, columnIDs, dateStr)
+		if err != nil {
+			log.Printf("availability: failed to get appointments: %v", err)
+			appointmentsByColumn = make(map[string][]domain.Appointment)
+		}
 
-		// Build schedule description
-		schedule := buildScheduleDescription(col)
+		blockHoldsByColumn, err := h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, columnIDs, dateStr)
+		if err != nil {
+			log.Printf("availability: failed to get block holds: %v", err)
+			blockHoldsByColumn = make(map[string][]domain.BlockHold)
+		}
 
-		colID, _ := strconv.Atoi(col.ID)
-		profID, _ := strconv.Atoi(col.ProfileID)
+		// Calculate availability for each provider
+		providers = nil
+		for _, col := range allowedColumns {
+			profile := profileMap[col.ProfileID]
+			facility := facilityMap[col.FacilityID]
 
-		providers = append(providers, domain.ProviderAvailability{
-			Name:           displayName,
-			ColumnID:       colID,
-			ProfileID:      profID,
-			Facility:       facility.Name,
-			Schedule:       schedule,
-			SlotDuration:   col.Interval,
-			AvailableSlots: slots,
-		})
+			displayName := providerDisplayNames[col.ProfileID]
+			if displayName == "" {
+				displayName = profile.Name
+			}
+
+			allSlots := calculateAvailableSlots(col, appointmentsByColumn[col.ID], blockHoldsByColumn[col.ID], searchDate, nowEastern)
+
+			colID, _ := strconv.Atoi(col.ID)
+			profID, _ := strconv.Atoi(col.ProfileID)
+
+			pa := domain.ProviderAvailability{
+				Name:           displayName,
+				ColumnID:       colID,
+				ProfileID:      profID,
+				Facility:       facility.Name,
+				SlotDuration:   col.Interval,
+				TotalAvailable: len(allSlots),
+			}
+
+			if len(allSlots) > 0 {
+				pa.FirstAvailable = allSlots[0].Time
+				pa.LastAvailable = allSlots[len(allSlots)-1].Time
+				if len(allSlots) > 5 {
+					pa.Slots = allSlots[:5]
+				} else {
+					pa.Slots = allSlots
+				}
+			} else {
+				pa.Slots = []domain.AvailableSlot{}
+			}
+
+			providers = append(providers, pa)
+		}
+
+		// Check if any provider has availability
+		hasAvailability := false
+		for _, p := range providers {
+			if p.TotalAvailable > 0 {
+				hasAvailability = true
+				break
+			}
+		}
+
+		if hasAvailability || attempt == 14 {
+			break
+		}
+
+		// No availability — try the next day
+		searchDate = searchDate.AddDate(0, 0, 1)
+		log.Printf("availability: no slots on %s, searching forward to %s", dateStr, searchDate.Format("2006-01-02"))
 	}
 
 	json.NewEncoder(w).Encode(domain.AvailabilityResponse{
-		Date:      startDate.Format("Monday, January 2, 2006"),
-		Location:  locationName,
-		Providers: providers,
+		SearchedDate: req.Date,
+		Date:         searchDate.Format("Monday, January 2, 2006"),
+		Location:     locationName,
+		Providers:    providers,
 	})
 }
 
-// calculateAvailableSlots generates available time slots for a column.
-func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.Appointment, blockHolds []domain.BlockHold, startDate time.Time, days int) []domain.AvailableSlot {
+// calculateAvailableSlots generates available time slots for a column on a single day.
+// nowEastern is used to filter out past slots when the date is today.
+func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.Appointment, blockHolds []domain.BlockHold, date time.Time, nowEastern time.Time) []domain.AvailableSlot {
 	var slots []domain.AvailableSlot
 
-	// Build appointment count map: datetime string -> count
+	// Skip if provider doesn't work this day
+	if !col.WorksOnDay(date.Weekday()) {
+		return slots
+	}
+
+	// Get work hours
+	workStart, workEnd, err := col.ParseWorkHours(date)
+	if err != nil {
+		return slots
+	}
+
+	// Build appointment count map
 	apptCounts := make(map[string]int)
 	for _, appt := range appointments {
 		key := appt.StartDateTime.Format("2006-01-02T15:04")
 		apptCounts[key]++
 	}
 
-	// Generate slots for each day
-	for d := 0; d < days; d++ {
-		date := startDate.AddDate(0, 0, d)
+	// Determine cutoff for past slots: if date is today, skip slots before now + 30 min
+	today := nowEastern.Format("2006-01-02")
+	isToday := date.Format("2006-01-02") == today
+	cutoff := nowEastern.Add(30 * time.Minute)
 
-		// Skip if provider doesn't work this day
-		if !col.WorksOnDay(date.Weekday()) {
-			continue
-		}
+	interval := time.Duration(col.Interval) * time.Minute
+	if interval == 0 {
+		interval = 15 * time.Minute
+	}
 
-		// Get work hours
-		workStart, workEnd, err := col.ParseWorkHours(date)
-		if err != nil {
-			continue
-		}
-
-		// Generate slots at interval
-		interval := time.Duration(col.Interval) * time.Minute
-		if interval == 0 {
-			interval = 15 * time.Minute // Default to 15 min
-		}
-
-		for slotTime := workStart; slotTime.Before(workEnd); slotTime = slotTime.Add(interval) {
-			// Skip if blocked by a hold (lunch, meetings, etc.)
-			if domain.IsBlockedByHold(slotTime, blockHolds) {
+	for slotTime := workStart; slotTime.Before(workEnd); slotTime = slotTime.Add(interval) {
+		// Filter past slots
+		if isToday {
+			slotInEastern := time.Date(slotTime.Year(), slotTime.Month(), slotTime.Day(),
+				slotTime.Hour(), slotTime.Minute(), 0, 0, nowEastern.Location())
+			if slotInEastern.Before(cutoff) {
 				continue
 			}
-
-			// Check if slot is available (count < max)
-			slotKey := slotTime.Format("2006-01-02T15:04")
-			count := apptCounts[slotKey]
-
-			maxAppts := col.MaxApptsPerSlot
-			if maxAppts == 0 {
-				maxAppts = 1 // Treat 0 as 1 for safety
-			}
-
-			if count >= maxAppts {
-				continue // Slot is full
-			}
-
-			slots = append(slots, domain.AvailableSlot{
-				Date:     domain.FormatSlotDate(slotTime),
-				Time:     domain.FormatSlotTime(slotTime),
-				DateTime: domain.FormatSlotDateTime(slotTime),
-			})
 		}
+
+		if domain.IsBlockedByHold(slotTime, blockHolds) {
+			continue
+		}
+
+		slotKey := slotTime.Format("2006-01-02T15:04")
+		count := apptCounts[slotKey]
+
+		maxAppts := col.MaxApptsPerSlot
+		if maxAppts == 0 {
+			maxAppts = 1
+		}
+
+		if count >= maxAppts {
+			continue
+		}
+
+		slots = append(slots, domain.AvailableSlot{
+			Time:     domain.FormatSlotTime(slotTime),
+			DateTime: domain.FormatSlotDateTime(slotTime),
+		})
 	}
 
 	return slots
-}
-
-// buildScheduleDescription creates a human-readable schedule string.
-func buildScheduleDescription(col domain.SchedulerColumn) string {
-	// Parse work days from workweek bitmask
-	days := []string{}
-	dayNames := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
-
-	for i := 0; i < 7; i++ {
-		if col.Workweek&(1<<i) != 0 {
-			days = append(days, dayNames[i])
-		}
-	}
-
-	daysStr := "Varies"
-	if len(days) > 0 {
-		if len(days) == 5 && days[0] == "Monday" && days[4] == "Friday" {
-			daysStr = "Monday-Friday"
-		} else if len(days) == 2 {
-			daysStr = days[0] + "-" + days[1]
-		} else {
-			daysStr = strings.Join(days, ", ")
-		}
-	}
-
-	// Format times
-	startTime := formatTimeForDisplay(col.StartTime)
-	endTime := formatTimeForDisplay(col.EndTime)
-
-	return fmt.Sprintf("%s, %s - %s", daysStr, startTime, endTime)
-}
-
-// formatTimeForDisplay converts 24h time to 12h format.
-func formatTimeForDisplay(t string) string {
-	parsed, err := time.Parse("15:04", t)
-	if err != nil {
-		return t
-	}
-	return parsed.Format("3:04 PM")
 }

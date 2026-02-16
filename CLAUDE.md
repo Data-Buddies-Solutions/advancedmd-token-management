@@ -106,14 +106,29 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 ### How It Works
 
 1. Calls `getschedulersetup` (XMLRPC) → Gets provider columns, profiles, facilities
-2. Calls `GET /scheduler/appointments` (REST) → Gets existing booked appointments
-3. Calls `GET /scheduler/blockholds` (REST) → Gets blocked time periods (lunch, meetings, etc.)
+2. Calls `GET /scheduler/appointments` per column (REST, `forView=day`) → Gets existing booked appointments
+3. Calls `GET /scheduler/blockholds` per column (REST, `forView=day`) → Gets blocked time periods
 4. Calculates available slots based on:
    - Provider work hours (from `columnsetting`)
    - Slot interval (15 or 30 min depending on provider)
    - Existing appointments (respects `maxApptsPerSlot`)
-   - **Block holds** from AMD (lunch, meetings, etc. - dynamically fetched)
+   - **Block holds** from AMD (lunch, meetings, out of office, etc.)
    - Provider workweek (e.g., Dr. Licht only works Wed-Thu)
+   - **Past-slot filter**: If date is today, slots before `now + 30 min` Eastern are excluded
+5. If ALL providers have zero availability, **auto-searches forward** day-by-day (up to 14 days) until openings are found
+
+### Response Format
+
+The response is optimized for ElevenLabs LLM token efficiency:
+- Max **5 slots** returned per provider (with `totalAvailable` count for the full day)
+- `firstAvailable` / `lastAvailable` summary fields
+- `searchedDate` (original request) vs `date` (actual result — may differ if auto-expanded)
+- No redundant `date` field on individual slots (single-day search)
+- No `schedule` field (was verbose, not useful for the LLM)
+
+### AMD API Constraint: columnId Required
+
+AMD's `/scheduler/appointments` and `/scheduler/blockholds` endpoints **require `columnId`** — bulk calls without it return HTTP 400. So we make per-column calls (N appointments + N block holds per day searched).
 
 ### AMD Response Structure Quirks
 
