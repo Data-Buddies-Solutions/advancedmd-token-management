@@ -180,6 +180,8 @@ Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` t
 
 5. **Scheduler setup prefixes**: Column, profile, and facility IDs have prefixes (`col`, `prof`, `fac`) that must be stripped
 
+6. **Block hold `duration` is unreliable for multi-day holds**: For multi-day block holds (e.g., "OUT OF THE OFFICE" spanning Feb 17-20), AMD returns a `duration` that doesn't always cover the full day. Use the `enddatetime` field instead of computing end from `startdatetime + duration`. See `IsBlockedByHold` in `domain/scheduler.go`.
+
 ## ElevenLabs Integration Notes
 
 When creating ElevenLabs tools that call AdvancedMD:

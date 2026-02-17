@@ -24,16 +24,22 @@ Refactored `/api/scheduler/availability` to produce a cleaner, more token-effici
 
 - **Removed `days` request parameter** — The endpoint now always searches a single day (with auto-forward on fully booked days), replacing the old multi-day range approach.
 
+#### Fixed
+
+- **Multi-day block holds now fully block all covered days** — AMD's `duration` field on block holds is unreliable for multi-day holds (e.g., a 4-day "OUT OF OFFICE" hold returns `duration: 510` which only covers 8.5 hours, leaving end-of-day slots falsely available). Now uses AMD's `enddatetime` field instead of computing end from `startdatetime + duration`. Previously, a provider marked out Feb 17-20 would still show 4:30/4:45 PM as available on those days.
+
 #### Discovered
 
 - **AMD requires `columnId`** on `/scheduler/appointments` and `/scheduler/blockholds` — bulk calls without it return HTTP 400. Per-column calls remain necessary.
+
+- **AMD block hold `duration` is unreliable** — For multi-day holds, the `duration` field varies depending on which day you query and doesn't consistently cover the provider's full work hours. The `enddatetime` field is the source of truth.
 
 #### Files Modified
 
 | File | Summary |
 |------|---------|
-| `internal/domain/scheduler.go` | Updated `AvailableSlot`, `ProviderAvailability`, `AvailabilityResponse` structs; removed `FormatSlotDate` |
-| `internal/clients/advancedmd_rest.go` | Changed `forView=week` → `forView=day` on appointments and block holds calls |
+| `internal/domain/scheduler.go` | Updated `AvailableSlot`, `ProviderAvailability`, `AvailabilityResponse` structs; removed `FormatSlotDate`; `BlockHold` now uses `EndDateTime` instead of `Duration`; `IsBlockedByHold` uses `EndDateTime` directly |
+| `internal/clients/advancedmd_rest.go` | Changed `forView=week` → `forView=day`; parse `enddatetime` from AMD block hold response |
 | `internal/http/handlers.go` | Added past-slot filter, auto-search loop, slot cap; removed `buildScheduleDescription`, `formatTimeForDisplay`, `days` parameter |
 
 #### Response Before vs After

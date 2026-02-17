@@ -376,7 +376,7 @@ curl -X POST \
 4. **Generates time slots** based on provider work hours and interval
 5. **Filters out:**
    - **Past slots**: If date is today, slots before now + 30 minutes (Eastern time) are excluded
-   - **Block holds**: Lunch, meetings, out-of-office, and other blocked periods
+   - **Block holds**: Lunch, meetings, out-of-office, and other blocked periods (uses AMD's `enddatetime` field for accurate multi-day hold coverage)
    - **Existing appointments**: Slots at or above `maxApptsPerSlot` are excluded
    - **Non-work days**: Provider's workweek schedule is respected
 6. **Auto-search forward**: If all providers have zero availability, searches the next day (up to 14 days ahead) until openings are found

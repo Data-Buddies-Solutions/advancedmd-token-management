@@ -54,7 +54,7 @@ type Appointment struct {
 type BlockHold struct {
 	ID            int       // Block hold ID
 	StartDateTime time.Time // Block start time
-	Duration      int       // Duration in minutes
+	EndDateTime   time.Time // Block end time (from AMD enddatetime)
 	ColumnID      int       // Column ID
 	Note          string    // Optional note (e.g., "Lunch")
 }
@@ -157,9 +157,8 @@ func IsAllowedColumn(columnID string) bool {
 // IsBlockedByHold checks if a time slot falls within any block hold.
 func IsBlockedByHold(slotTime time.Time, holds []BlockHold) bool {
 	for _, hold := range holds {
-		holdEnd := hold.StartDateTime.Add(time.Duration(hold.Duration) * time.Minute)
 		// Slot is blocked if it starts during the hold period
-		if !slotTime.Before(hold.StartDateTime) && slotTime.Before(holdEnd) {
+		if !slotTime.Before(hold.StartDateTime) && slotTime.Before(hold.EndDateTime) {
 			return true
 		}
 	}

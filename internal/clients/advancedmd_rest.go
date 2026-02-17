@@ -113,6 +113,7 @@ func (c *AdvancedMDRestClient) GetAppointmentsForColumns(ctx context.Context, to
 type AMDBlockHoldResponse struct {
 	ID            int    `json:"id"`
 	StartDateTime string `json:"startdatetime"`
+	EndDateTime   string `json:"enddatetime"`
 	Duration      int    `json:"duration"`
 	ColumnID      int    `json:"columnid"`
 	Note          string `json:"note"`
@@ -163,10 +164,19 @@ func (c *AdvancedMDRestClient) GetBlockHolds(ctx context.Context, tokenData *dom
 			}
 		}
 
+		endTime, err := time.Parse("2006-01-02T15:04:05", h.EndDateTime)
+		if err != nil {
+			endTime, err = time.Parse("2006-01-02T15:04", h.EndDateTime)
+			if err != nil {
+				// Fall back to computing from duration
+				endTime = startTime.Add(time.Duration(h.Duration) * time.Minute)
+			}
+		}
+
 		holds[i] = domain.BlockHold{
 			ID:            h.ID,
 			StartDateTime: startTime,
-			Duration:      h.Duration,
+			EndDateTime:   endTime,
 			ColumnID:      h.ColumnID,
 			Note:          h.Note,
 		}
