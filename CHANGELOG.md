@@ -1,6 +1,40 @@
 # Changelog
 
-## [Unreleased] - 2026-02-16
+## [Unreleased] - 2026-02-19
+
+### Live AMD Keys for Spring Hill
+
+Updated all hardcoded IDs from the test environment to live AMD system (office 139464).
+
+#### Changed
+
+- **AllowedColumns** (`domain/scheduler.go`) — Replaced test column IDs with live Spring Hill columns:
+  - Dr. Bach: `1716` → `1513` (profile `1135` → `620`)
+  - Dr. Licht: `1723` → `1551` (profile `1141` → `2064`)
+  - Dr. Noel: `1726` → `1550` (profile `1137` → `2076`)
+  - Removed all non-Spring Hill columns (Hollywood, Sweetwater, Crystal River)
+
+- **Spring Hill facility ID** (`domain/scheduler.go`) — `1032` → `1568`
+
+- **Provider display names** (`http/handlers.go`) — Updated profile ID keys to match live system
+
+- **Booking payload example** (`README.md`) — Updated `columnid`, `profileid`, and `type` format to match live AMD
+
+#### Added
+
+- **`INSURANCE_MAPPING.md`** — Complete insurance-to-provider routing reference for Spring Hill, derived from the Abita Insurance List PDF (rev 9/4/2025) and validated against live AMD carrier data
+
+#### Discovered
+
+- **`getdemographic`** (class=demographics) returns full patient record including insurance (`insplanlist`) and carrier details (`carrierlist`)
+- **`lookupcarrier`** (class=api) returns the practice's carrier master list — searchable by name prefix
+- **`getappttypes`** (class=masterfiles) returns appointment types when `appttype` field and `@msgtime` are included
+- **Live appointment type IDs**: 1006 (New Adult), 1004 (New Pediatric), 1007 (Established Follow Up), 1005 (Established Pediatric), 1008 (Post Op)
+- **MaxApptsPerSlot**: Licht and Noel allow 2 per slot in live (was 0 in test). Bach is 0 (unlimited). Current code treats 0 as 1 — may need revisiting.
+
+---
+
+## [Previous] - 2026-02-16
 
 ### Availability Endpoint Improvements
 

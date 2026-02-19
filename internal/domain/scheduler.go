@@ -126,27 +126,11 @@ func FormatSlotDateTime(t time.Time) string {
 	return t.Format("2006-01-02T15:04")
 }
 
-// AllowedColumns defines the column IDs we expose for scheduling.
-// Only columns for Dr. Bach, Dr. Licht, and Dr. Noel across all facilities.
+// AllowedColumns defines the column IDs we expose for scheduling (Spring Hill only).
 var AllowedColumns = map[string]bool{
-	// Dr. Bach (prof1135)
-	"1707": true, // A BACH HOLLYWOOD
-	"1708": true, // A BACH OVERFLOW (Sweetwater)
-	"1709": true, // A BACH SWEETWATER
-	"1710": true, // A BACH VISION (Hollywood)
-	"1716": true, // DR. BACH - BP (Spring Hill)
-	"1717": true, // DR. BACH HW OVERFLOW (Hollywood)
-	// Dr. Licht (prof1141)
-	"1714": true, // CR SURGERY SUITE (Crystal River)
-	"1715": true, // CRYSTAL RIVER
-	"1723": true, // DR. LICHT (Spring Hill)
-	"1730": true, // LICHT CR (Crystal River)
-	"1731": true, // LICHT WEEK 2 (Crystal River)
-	"1732": true, // LICHT WEEK 2 (Crystal River)
-	"1736": true, // POST OP 1 (Crystal River)
-	"1737": true, // POST OP 2 (Crystal River)
-	// Dr. Noel (prof1137)
-	"1726": true, // DR. NOEL (Spring Hill)
+	"1513": true, // DR. BACH - BP (Spring Hill) - prof620
+	"1551": true, // DR. LICHT (Spring Hill) - prof2064
+	"1550": true, // DR. NOEL (Spring Hill) - prof2076
 }
 
 // IsAllowedColumn checks if a column ID is in the allowed list.
@@ -168,10 +152,10 @@ func IsBlockedByHold(slotTime time.Time, holds []BlockHold) bool {
 // OfficeFacilityMap maps normalized office names to AMD facility IDs.
 // Keys are pre-normalized (lowercase, no punctuation) for use with NormalizeForLookup.
 var OfficeFacilityMap = map[string]string{
-	"springhill":    "1032", // ABITA EYE GROUP SPRING HILL
-	"spring hill":   "1032",
-	"spring":        "1032",
-	"sh":            "1032",
+	"springhill":    "1568", // ABITA EYE GROUP SPRING HILL
+	"spring hill":   "1568",
+	"spring":        "1568",
+	"sh":            "1568",
 	"hollywood":     "4", // ABITA EYE GROUP HOLLYWOOD
 	"hw":            "4",
 	"sweetwater":    "1031", // ABITA EYE GROUP SWEETWATER

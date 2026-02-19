@@ -431,9 +431,9 @@ type AvailabilityRequest struct {
 
 // providerDisplayNames maps profile IDs to friendly display names.
 var providerDisplayNames = map[string]string{
-	"1135": "Dr. Austin Bach",
-	"1141": "Dr. J. Licht",
-	"1137": "Dr. D. Noel",
+	"620":  "Dr. Austin Bach",
+	"2064": "Dr. J. Licht",
+	"2076": "Dr. D. Noel",
 }
 
 // HandleGetAvailability returns available appointment slots for providers.

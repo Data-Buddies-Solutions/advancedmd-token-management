@@ -133,17 +133,17 @@ AMD's `/scheduler/appointments` and `/scheduler/blockholds` endpoints **require 
 ### AMD Response Structure Quirks
 
 The `getschedulersetup` response has prefixed IDs that must be stripped:
-- Column IDs: `col1716` → `1716`
-- Profile IDs: `prof1135` → `1135`
-- Facility IDs: `fac1032` → `1032`
+- Column IDs: `col1513` → `1513`
+- Profile IDs: `prof620` → `620`
+- Facility IDs: `fac1568` → `1568`
 
 Times are nested inside `columnsetting`:
 ```json
 {
-  "@id": "col1716",
+  "@id": "col1513",
   "@name": "DR. BACH - BP",
-  "@profile": "prof1135",
-  "@facility": "fac1032",
+  "@profile": "prof620",
+  "@facility": "fac1568",
   "columnsetting": {
     "@start": "08:00",
     "@end": "17:00",
@@ -156,15 +156,37 @@ Times are nested inside `columnsetting`:
 
 Workweek format: 7 chars for Mon-Sun where `1` = works, `0` = off.
 
-### Allowed Providers (Spring Hill)
+### Allowed Providers (Spring Hill) — LIVE IDs
+
+Updated 2026-02-19 from live AMD system (office 139464).
 
 Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` to change):
 
-| Column ID | Name | Profile ID | Hours | Interval |
-|-----------|------|------------|-------|----------|
-| 1716 | Dr. Bach | 1135 | 8:00-17:00 | 15 min |
-| 1723 | Dr. Licht | 1141 | 9:00-12:30 | 15 min |
-| 1726 | Dr. Noel | 1137 | 8:30-16:30 | 30 min |
+| Column ID | Name | Profile ID | Facility ID | Hours | Interval | Max/Slot | Workweek |
+|-----------|------|------------|-------------|-------|----------|----------|----------|
+| 1513 | DR. BACH - BP | 620 | 1568 | 8:00-17:00 | 15 min | 0 (unlimited) | Mon-Fri |
+| 1551 | DR. LICHT | 2064 | 1568 | 9:00-12:30 | 15 min | 2 | Wed-Thu |
+| 1550 | DR. NOEL | 2076 | 1568 | 8:30-16:30 | 30 min | 2 | Mon-Fri |
+
+Spring Hill facility ID: **1568** (was 1032 in test env)
+
+### Appointment Type IDs (LIVE)
+
+| Type | AMD ID | AMD Name |
+|------|--------|----------|
+| New Adult Medical | 1006 | NEW ADULT MEDICAL |
+| New Pediatric Medical | 1004 | NEW PEDIATRIC MEDICAL |
+| Established Adult Medical (Follow Up) | 1007 | ESTABLISH ADULT MEDICAL |
+| Established Pediatric Medical (Follow Up) | 1005 | ESTABLISH PEDIATRIC MED |
+| Post Op | 1008 | POST OP |
+
+### Insurance Routing
+
+See `INSURANCE_MAPPING.md` for the complete carrier-to-provider mapping derived from the Abita Insurance List PDF. Key points:
+- Use `getdemographic` (class=demographics) to pull a patient's insurance after verifying them
+- The `insplanlist.insplan.@carrier` field gives the carrier ID (e.g., `car40887`)
+- The `carrierlist.carrier.@name` field gives the human-readable name (e.g., `AETNA`)
+- Use `lookupcarrier` (class=api, @name=search) to search the carrier master list
 
 ## AdvancedMD API Quirks to Know
 
