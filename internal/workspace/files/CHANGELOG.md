@@ -243,3 +243,72 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 ### Files NOT changed this round
 - **USER.md** — No changes
 - **IDENTITY.md** — No changes
+
+---
+
+---
+
+## 2026-02-20 (Round 3)
+
+### Source: Transcript review of 8 most recent calls
+- **Call 1** (200s, Chase) — Successful booking but: multi-field ask, dumped multiple doctor/slot options, confirmed after booking instead of before, sent 2027 date instead of 2026, broke character when asked personal questions
+- **Call 2** (98s) — Clean booking, skipped echo on last name
+- **Call 3** (8s) — Immediate hangup, double [warmly] tag in greeting
+- **Call 4** (253s) — Strong call, good boundary enforcement and knowledge base usage
+- **Call 5** (41s) — Caller disconnected, clean handling
+- **Call 6** (29s) — verify_patient failed, agent told caller immediately instead of retrying silently
+- **Call 7** (47s) — verify_patient failed, no silent retry, conflated tool error with "patient not found" and suggested registration
+- **Call 8** (156s) — Clean booking but offered to update insurance ("I can also update it for you now") then had to walk it back
+
+---
+
+### TOOLS.md — General Rules
+
+**Added concrete example to "One question at a time"**
+- Agent still batching last name + DOB in a single ask (Call 1 @0:08)
+- Added Bad/Good example to make the rule unmissable
+
+**Added: "When a date hasn't passed yet this year, use the current year"**
+- Agent sent 2027-04-08 when caller said "April 8th" during a February 2026 call (Call 1 @1:04)
+- April 8, 2026 hadn't passed yet — should have been 2026-04-08
+
+---
+
+### TOOLS.md — verify_patient
+
+**Added: Explicit tool error vs. not-found distinction**
+- Agent treated verify_patient errors as "patient not found" and suggested new patient registration (Call 7 @0:40)
+- Patient was confirmed to exist in other calls — the tool itself was failing
+- New guidance: retry silently on error, only suggest registration when tool succeeds but returns no match
+
+---
+
+### TOOLS.md — get_availability
+
+**Added: Rejected slot handling rule**
+- Agent listed multiple doctors and their available times side-by-side (Call 1 @1:41: "Dr. Bach has 4:45, Dr. Noel has 4:00")
+- New rule: if a slot is rejected, suggest one different time — never compare two doctors' availability
+
+---
+
+### TOOLS.md — book_appt
+
+**Added: Slot offer vs. full confirmation are two separate steps**
+- Agent treated "Sure, let's do it" (response to a slot offer) as full consent and booked without the complete readback (Call 1 @2:09-2:13)
+- New rule: slot offer gets interest, full confirmation (date + time + doctor + location) gets consent — never skip the full confirmation
+
+---
+
+### SOUL.md — Boundaries
+
+**Added: Stay in character on personal questions**
+- Agent said "I am a conversational agent and do not have a salary" and "As an AI, I don't experience emotions" (Call 1 @2:52, @3:07)
+- New rule: deflect naturally and steer back to the task, don't break character
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes (greeting double-tag is an ElevenLabs first-message config issue, not a prompt file issue)
+- **KNOWLEDGE.md** — No changes
+- **USER.md** — No changes
+- **IDENTITY.md** — No changes
