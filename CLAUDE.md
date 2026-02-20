@@ -51,13 +51,15 @@ advancedmd-token-management/
 │   │   └── config.go            # Environment variable loading
 │   ├── domain/
 │   │   ├── token.go             # Token model + URL transforms
-│   │   └── patient.go           # Patient model + DOB normalization
+│   │   ├── patient.go           # Patient model + DOB normalization
+│   │   └── scheduler.go         # Scheduler models + availability logic
 │   ├── auth/
 │   │   ├── authenticator.go     # 2-step AdvancedMD authentication
 │   │   └── token_manager.go     # Background refresh + caching
 │   ├── clients/
 │   │   ├── redis.go             # Pooled Redis client
-│   │   └── advancedmd_xmlrpc.go # XMLRPC client for patient lookup
+│   │   ├── advancedmd_xmlrpc.go # XMLRPC client (patients, scheduler setup)
+│   │   └── advancedmd_rest.go   # REST client (appointments)
 │   └── http/
 │       ├── router.go            # chi router setup
 │       ├── handlers.go          # Request handlers
@@ -97,6 +99,73 @@ railway link
 railway up
 ```
 
+## Scheduler Availability Endpoint
+
+The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls to return available appointment slots.
+
+### How It Works
+
+1. Calls `getschedulersetup` (XMLRPC) → Gets provider columns, profiles, facilities
+2. Calls `GET /scheduler/appointments` per column (REST, `forView=day`) → Gets existing booked appointments
+3. Calls `GET /scheduler/blockholds` per column (REST, `forView=day`) → Gets blocked time periods
+4. Calculates available slots based on:
+   - Provider work hours (from `columnsetting`)
+   - Slot interval (15 or 30 min depending on provider)
+   - Existing appointments (respects `maxApptsPerSlot`)
+   - **Block holds** from AMD (lunch, meetings, out of office, etc.)
+   - Provider workweek (e.g., Dr. Licht only works Wed-Thu)
+   - **Past-slot filter**: If date is today, slots before `now + 30 min` Eastern are excluded
+5. If ALL providers have zero availability, **auto-searches forward** day-by-day (up to 14 days) until openings are found
+
+### Response Format
+
+The response is optimized for ElevenLabs LLM token efficiency:
+- Max **5 slots** returned per provider (with `totalAvailable` count for the full day)
+- `firstAvailable` / `lastAvailable` summary fields
+- `searchedDate` (original request) vs `date` (actual result — may differ if auto-expanded)
+- No redundant `date` field on individual slots (single-day search)
+- No `schedule` field (was verbose, not useful for the LLM)
+
+### AMD API Constraint: columnId Required
+
+AMD's `/scheduler/appointments` and `/scheduler/blockholds` endpoints **require `columnId`** — bulk calls without it return HTTP 400. So we make per-column calls (N appointments + N block holds per day searched).
+
+### AMD Response Structure Quirks
+
+The `getschedulersetup` response has prefixed IDs that must be stripped:
+- Column IDs: `col1716` → `1716`
+- Profile IDs: `prof1135` → `1135`
+- Facility IDs: `fac1032` → `1032`
+
+Times are nested inside `columnsetting`:
+```json
+{
+  "@id": "col1716",
+  "@name": "DR. BACH - BP",
+  "@profile": "prof1135",
+  "@facility": "fac1032",
+  "columnsetting": {
+    "@start": "08:00",
+    "@end": "17:00",
+    "@interval": "15",
+    "@maxapptsperslot": "0",
+    "@workweek": "1111100"
+  }
+}
+```
+
+Workweek format: 7 chars for Mon-Sun where `1` = works, `0` = off.
+
+### Allowed Providers (Spring Hill)
+
+Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` to change):
+
+| Column ID | Name | Profile ID | Hours | Interval |
+|-----------|------|------------|-------|----------|
+| 1716 | Dr. Bach | 1135 | 8:00-17:00 | 15 min |
+| 1723 | Dr. Licht | 1141 | 9:00-12:30 | 15 min |
+| 1726 | Dr. Noel | 1137 | 8:30-16:30 | 30 min |
+
 ## AdvancedMD API Quirks to Know
 
 1. **Step 1 returns "error"**: The first login step returns `success="0"` with an error code, but this is expected - the webserver URL is still in the response
@@ -112,6 +181,10 @@ railway up
 5. **getdemographic class matters**: Using `class="api"` omits insurance data entirely. Use `class="demographics"` to get `insplanlist` and `carrierlist` in the response
 
 6. **Carrier IDs**: Real carrier IDs are mapped in `internal/domain/patient.go` CarrierMap. Use `lookupcarrier` XMLRPC action to find new carrier IDs (180 carriers across 4 pages)
+
+7. **Scheduler setup prefixes**: Column, profile, and facility IDs have prefixes (`col`, `prof`, `fac`) that must be stripped
+
+8. **Block hold `duration` is unreliable for multi-day holds**: For multi-day block holds (e.g., "OUT OF THE OFFICE" spanning Feb 17-20), AMD returns a `duration` that doesn't always cover the full day. Use the `enddatetime` field instead of computing end from `startdatetime + duration`. See `IsBlockedByHold` in `domain/scheduler.go`.
 
 ## ElevenLabs Integration Notes
 

@@ -2,30 +2,13 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
-	"advancedmd-token-management/internal/domain"
 )
-
-// mockTokenManager provides a test double for TokenManager
-type mockTokenManager struct {
-	tokenData *domain.TokenData
-	err       error
-}
-
-func (m *mockTokenManager) GetToken(ctx context.Context) (*domain.TokenData, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.tokenData, nil
-}
 
 func TestHandleHealth(t *testing.T) {
 	handlers := &Handlers{}
@@ -47,38 +30,19 @@ func TestHandleHealth(t *testing.T) {
 	}
 }
 
-func TestHandleGetToken_Success(t *testing.T) {
-	tokenData := &domain.TokenData{
-		Token:        "Bearer test-token",
-		CookieToken:  "token=test-token",
-		WebserverURL: "test.com/processrequest/api-801/app",
-		XmlrpcURL:    "test.com/processrequest/api-801/app/xmlrpc/processrequest.aspx",
-		RestApiBase:  "test.com/api/api-801/app",
-		EhrApiBase:   "test.com/ehr-api/api-801/app",
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-	}
+func TestHandleGetToken_MethodNotAllowed(t *testing.T) {
+	// HandleGetToken requires POST for ElevenLabs webhook
+	handlers := &Handlers{}
 
-	// Create a real token manager with mocked data
-	tm := &auth.TokenManager{}
-	// We can't easily mock this without interfaces, so we'll test the handler directly
-
-	// Instead, let's test through the router with a full integration
-	amdClient := clients.NewAdvancedMDClient(&http.Client{})
-	handlers := NewHandlers(tm, amdClient)
-
-	// Test method not allowed
-	req := httptest.NewRequest("POST", "/api/token", nil)
+	// Test that GET is not allowed (POST is required)
+	req := httptest.NewRequest("GET", "/api/token", nil)
 	w := httptest.NewRecorder()
 	handlers.HandleGetToken(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status 405 for POST, got %d", resp.StatusCode)
+		t.Errorf("Expected status 405 for GET, got %d", resp.StatusCode)
 	}
-
-	// Test with GET - this would need the token manager to work
-	// For now, we just verify the handler exists and routes correctly
-	_ = tokenData // Used in a real integration test
 }
 
 func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
@@ -235,7 +199,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 func TestRouter(t *testing.T) {
 	// Create minimal handlers for testing
 	amdClient := clients.NewAdvancedMDClient(&http.Client{})
-	handlers := NewHandlers(nil, amdClient) // nil token manager - can't test full flow
+	handlers := NewHandlers(nil, amdClient, nil) // nil token manager - can't test full flow
 
 	router := NewRouter(handlers, "test-secret")
 

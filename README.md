@@ -24,10 +24,11 @@ A high-performance Go microservice that handles AdvancedMD's 2-step authenticati
 │          │                        │                             │
 │  ┌───────┴─────────────────────────┴───────┐                    │
 │  │              Go Gateway                  │                    │
-│  │  • GET  /health         (no auth)       │                    │
-│  │  • GET  /api/token      (auth required) │                    │
-│  │  • POST /api/verify-patient (auth req)  │                    │
-│  │  • POST /api/add-patient    (auth req)  │                    │
+│  │  • GET  /health              (no auth)  │                    │
+│  │  • POST /api/token           (auth req) │                    │
+│  │  • POST /api/verify-patient  (auth req) │                    │
+│  │  • POST /api/add-patient     (auth req) │                    │
+│  │  • POST /api/scheduler/availability     │                    │
 │  └─────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -49,13 +50,15 @@ advancedmd-token-management/
 │   │   └── config.go            # Environment variable loading
 │   ├── domain/
 │   │   ├── token.go             # Token model + URL transforms
-│   │   └── patient.go           # Patient model + DOB normalization
+│   │   ├── patient.go           # Patient model + DOB normalization
+│   │   └── scheduler.go         # Scheduler models + availability
 │   ├── auth/
 │   │   ├── authenticator.go     # 2-step AdvancedMD authentication
 │   │   └── token_manager.go     # Background refresh + caching
 │   ├── clients/
 │   │   ├── redis.go             # Pooled Redis client
-│   │   └── advancedmd_xmlrpc.go # XMLRPC client for patient lookup
+│   │   ├── advancedmd_xmlrpc.go # XMLRPC client (patients, scheduler setup)
+│   │   └── advancedmd_rest.go   # REST client (appointments)
 │   └── http/
 │       ├── router.go            # chi router setup
 │       ├── handlers.go          # Request handlers
@@ -293,6 +296,133 @@ All 7 fields are required.
 | addpatient fails | 500 | `error` |
 | addpatient OK, addinsurance fails | 500 | `partial` (includes patientId) |
 | Both succeed | 200 | `created` |
+
+### POST /api/scheduler/availability
+
+Returns available appointment slots for providers. Orchestrates multiple AdvancedMD API calls internally and calculates available slots. If the requested date is fully booked, automatically searches forward up to 14 days to find the next available day.
+
+**Request:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer YOUR_API_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"date":"2026-02-03","provider":"Bach","office":"spring hill"}' \
+     https://your-app.railway.app/api/scheduler/availability
+```
+
+**Request Body:**
+```json
+{
+  "date": "2026-02-03",
+  "provider": "Bach",
+  "office": "spring hill"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `date` | Yes | Date in YYYY-MM-DD format |
+| `provider` | No | Filter by provider name (partial match, case-insensitive) |
+| `office` | No | Filter by office (e.g., "Spring Hill", "Hollywood", "Crystal River") |
+
+**Response:**
+```json
+{
+  "searchedDate": "2026-02-03",
+  "date": "Wednesday, February 4, 2026",
+  "location": "ABITA EYE GROUP SPRING HILL",
+  "providers": [
+    {
+      "name": "Dr. Austin Bach",
+      "columnId": 1716,
+      "profileId": 1135,
+      "facility": "ABITA EYE GROUP SPRING HILL",
+      "slotDuration": 15,
+      "totalAvailable": 28,
+      "firstAvailable": "8:00 AM",
+      "lastAvailable": "4:45 PM",
+      "slots": [
+        {
+          "time": "8:00 AM",
+          "datetime": "2026-02-04T08:00"
+        },
+        {
+          "time": "8:15 AM",
+          "datetime": "2026-02-04T08:15"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Response Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `searchedDate` | The date originally requested (YYYY-MM-DD) |
+| `date` | The date with results (may differ from searchedDate if auto-expanded forward) |
+| `columnId` | AMD scheduler column ID - **required for booking** |
+| `profileId` | AMD provider profile ID - **required for booking** |
+| `slotDuration` | Appointment slot length in minutes |
+| `totalAvailable` | Total number of available slots for the day |
+| `firstAvailable` | Earliest available time (e.g., "8:00 AM") |
+| `lastAvailable` | Latest available time (e.g., "4:45 PM") |
+| `slots` | First 5 available time slots (use `totalAvailable` for full count) |
+| `slots[].datetime` | ISO format for booking API (e.g., `2026-02-03T09:00`) |
+
+#### How Availability Is Calculated
+
+1. **Fetches scheduler setup** from AMD (`getschedulersetup` XMLRPC action)
+2. **Fetches existing appointments** per column (`GET /scheduler/appointments` with `forView=day`)
+3. **Fetches block holds** per column (`GET /scheduler/blockholds` with `forView=day`)
+4. **Generates time slots** based on provider work hours and interval
+5. **Filters out:**
+   - **Past slots**: If date is today, slots before now + 30 minutes (Eastern time) are excluded
+   - **Block holds**: Lunch, meetings, out-of-office, and other blocked periods (uses AMD's `enddatetime` field for accurate multi-day hold coverage)
+   - **Existing appointments**: Slots at or above `maxApptsPerSlot` are excluded
+   - **Non-work days**: Provider's workweek schedule is respected
+6. **Auto-search forward**: If all providers have zero availability, searches the next day (up to 14 days ahead) until openings are found
+
+#### Provider Filtering
+
+Only the following providers at Spring Hill are exposed:
+
+| Column ID | Provider | Schedule |
+|-----------|----------|----------|
+| 1716 | Dr. Austin Bach | Mon-Fri, 8:00 AM - 5:00 PM, 15-min slots |
+| 1723 | Dr. J. Licht | Wed-Thu, 9:00 AM - 12:30 PM, 15-min slots |
+| 1726 | Dr. D. Noel | Mon-Fri, 8:30 AM - 4:30 PM, 30-min slots |
+
+To add/remove providers, edit `AllowedColumns` in `internal/domain/scheduler.go`.
+
+#### Booking Appointments
+
+The ElevenLabs agent books directly via the AMD REST API using data from this response:
+
+```
+POST https://{amd_rest_api_base}/scheduler/Appointments
+Authorization: {amd_token}
+
+{
+  "patientid": 5984942,
+  "columnid": 1716,
+  "profileid": 1135,
+  "startdatetime": "2026-02-03T09:15",
+  "clientdatetime": "2026-02-03T09:00",
+  "duration": 15,
+  "color": "BLUE",
+  "type": [13]
+}
+```
+
+| Field | Source |
+|-------|--------|
+| `columnid` | `columnId` from availability response |
+| `profileid` | `profileId` from availability response |
+| `startdatetime` | `datetime` from selected slot |
+| `duration` | `slotDuration` from provider |
+| `type` | Appointment type ID (hardcoded in agent prompt) |
 
 ## ElevenLabs Integration
 

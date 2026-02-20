@@ -3,10 +3,11 @@ package http
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"strings"
-
 	"log"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
@@ -17,6 +18,12 @@ import (
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Details string `json:"details,omitempty"`
+}
+
+// ElevenLabsWebhookResponse is the response format for ElevenLabs conversation initiation webhook.
+type ElevenLabsWebhookResponse struct {
+	Type             string            `json:"type"`
+	DynamicVariables map[string]interface{} `json:"dynamic_variables"`
 }
 
 // VerifyPatientRequest is the expected JSON body for patient verification.
@@ -45,15 +52,17 @@ type PatientMatch struct {
 
 // Handlers holds the dependencies for HTTP handlers.
 type Handlers struct {
-	tokenManager *auth.TokenManager
-	amdClient    *clients.AdvancedMDClient
+	tokenManager  *auth.TokenManager
+	amdClient     *clients.AdvancedMDClient
+	amdRestClient *clients.AdvancedMDRestClient
 }
 
 // NewHandlers creates a new Handlers instance.
-func NewHandlers(tm *auth.TokenManager, amdClient *clients.AdvancedMDClient) *Handlers {
+func NewHandlers(tm *auth.TokenManager, amdClient *clients.AdvancedMDClient, amdRestClient *clients.AdvancedMDRestClient) *Handlers {
 	return &Handlers{
-		tokenManager: tm,
-		amdClient:    amdClient,
+		tokenManager:  tm,
+		amdClient:     amdClient,
+		amdRestClient: amdRestClient,
 	}
 }
 
@@ -63,15 +72,18 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-// HandleGetToken returns the cached AdvancedMD token.
+// HandleGetToken returns the cached AdvancedMD token for ElevenLabs agents.
+// Accepts POST only (for ElevenLabs conversation initiation webhook).
 func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed"})
 		return
 	}
+
+	log.Printf("token: received webhook request")
 
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
@@ -83,7 +95,24 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(tokenData.ToResponse())
+	resp := tokenData.ToResponse()
+
+	// Return only auth token variables
+	dynamicVars := map[string]interface{}{
+		"amd_token":         resp.Token,
+		"amd_cookie_token":  resp.CookieToken,
+		"amd_xmlrpc_url":    resp.XmlrpcURL,
+		"amd_rest_api_base": resp.RestApiBase,
+		"amd_ehr_api_base":  resp.EhrApiBase,
+		"patient_verified":  "not_found",
+		"patient_id":        "1",
+		"booking_confirmed": 0,
+	}
+
+	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
+		Type:             "conversation_initiation_client_data",
+		DynamicVariables: dynamicVars,
+	})
 }
 
 // AddPatientRequest is the expected JSON body for patient creation.
@@ -91,10 +120,17 @@ type AddPatientRequest struct {
 	FirstName         string `json:"firstName"`
 	LastName          string `json:"lastName"`
 	DOB               string `json:"dob"`
-	Email             string `json:"email"`
 	Phone             string `json:"phone"`
-	InsuranceProvider string `json:"insuranceProvider"`
-	SubscriberNum     string `json:"subscriberNum"`
+	Email             string `json:"email"`
+	Street            string `json:"street"`
+	AptSuite          string `json:"aptSuite"`
+	City              string `json:"city"`
+	State             string `json:"state"`
+	Zip               string `json:"zip"`
+	Sex               string `json:"sex"`
+	CarrierID      string `json:"carrierId"`
+	SubscriberName string `json:"subscriberName"`
+	SubscriberNum  string `json:"subscriberNum"`
 }
 
 // AddPatientResponse is returned after creating a patient.
@@ -112,6 +148,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	var req AddPatientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("add-patient: failed to decode JSON: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
@@ -120,7 +157,10 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
+	log.Printf("add-patient: received request: firstName=%q lastName=%q dob=%q phone=%q email=%q street=%q aptSuite=%q city=%q state=%q zip=%q sex=%q carrierId=%q subscriberName=%q subscriberNum=%q",
+		req.FirstName, req.LastName, req.DOB, req.Phone, req.Email, req.Street, req.AptSuite, req.City, req.State, req.Zip, req.Sex, req.CarrierID, req.SubscriberName, req.SubscriberNum)
+
+	// Validate required fields (aptSuite is optional)
 	missing := []string{}
 	if req.FirstName == "" {
 		missing = append(missing, "firstName")
@@ -131,14 +171,32 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	if req.DOB == "" {
 		missing = append(missing, "dob")
 	}
-	if req.Email == "" {
-		missing = append(missing, "email")
-	}
 	if req.Phone == "" {
 		missing = append(missing, "phone")
 	}
-	if req.InsuranceProvider == "" {
-		missing = append(missing, "insuranceProvider")
+	if req.Email == "" {
+		missing = append(missing, "email")
+	}
+	if req.Street == "" {
+		missing = append(missing, "street")
+	}
+	if req.City == "" {
+		missing = append(missing, "city")
+	}
+	if req.State == "" {
+		missing = append(missing, "state")
+	}
+	if req.Zip == "" {
+		missing = append(missing, "zip")
+	}
+	if req.Sex == "" {
+		missing = append(missing, "sex")
+	}
+	if req.CarrierID == "" {
+		missing = append(missing, "carrierId")
+	}
+	if req.SubscriberName == "" {
+		missing = append(missing, "subscriberName")
 	}
 	if req.SubscriberNum == "" {
 		missing = append(missing, "subscriberNum")
@@ -155,17 +213,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	// Normalize inputs
 	normalizedDOB := domain.NormalizeDOB(req.DOB)
 	formattedPhone := domain.FormatPhone(req.Phone)
-
-	// Look up carrier ID
-	carrierID, ok := domain.LookupCarrierID(req.InsuranceProvider)
-	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Unknown insurance provider: %s", req.InsuranceProvider),
-		})
-		return
-	}
+	normalizedSex := domain.NormalizeSex(req.Sex)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -179,9 +227,26 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create patient in AMD
-	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, req.FirstName, req.LastName, normalizedDOB, formattedPhone, req.Email)
+	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, clients.AddPatientParams{
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		DOB:       normalizedDOB,
+		Phone:     formattedPhone,
+		Email:     req.Email,
+		Street:    req.Street,
+		AptSuite:  req.AptSuite,
+		City:      req.City,
+		State:     strings.ToUpper(req.State),
+		Zip:       req.Zip,
+		Sex:       normalizedSex,
+	})
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("add-patient: AMD error: %v", err)
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "error from AMD") {
+			status = http.StatusConflict // 409 for AMD-reported errors (e.g., duplicate patient)
+		}
+		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: "Failed to create patient: " + err.Error(),
@@ -190,6 +255,20 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	strippedID := domain.StripPatientPrefix(rawPatientID)
+
+	// Look up carrier ID from name
+	carrierID, ok := domain.LookupCarrierID(req.CarrierID)
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:    "partial",
+			PatientID: strippedID,
+			Name:      patientName,
+			DOB:       normalizedDOB,
+			Message:   fmt.Sprintf("Patient created but insurance carrier not recognized: %q. Valid carriers: %s", req.CarrierID, strings.Join(domain.ValidCarrierNames(), ", ")),
+		})
+		return
+	}
 
 	// Attach insurance
 	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, carrierID, req.SubscriberNum); err != nil {
@@ -352,4 +431,321 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			Matches: matches,
 		})
 	}
+}
+
+// AvailabilityRequest is the expected JSON body for availability lookup.
+type AvailabilityRequest struct {
+	Date     string `json:"date"`     // Required: YYYY-MM-DD format
+	Provider string `json:"provider"` // Optional: filter by provider name
+	Office   string `json:"office"`   // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
+}
+
+// providerDisplayNames maps profile IDs to friendly display names.
+var providerDisplayNames = map[string]string{
+	"1135": "Dr. Austin Bach",
+	"1141": "Dr. J. Licht",
+	"1137": "Dr. D. Noel",
+}
+
+// HandleGetAvailability returns available appointment slots for providers.
+func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed. Use POST."})
+		return
+	}
+
+	// Parse request body
+	var req AvailabilityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON body"})
+		return
+	}
+
+	// Validate required date field
+	if req.Date == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "date is required (YYYY-MM-DD format)"})
+		return
+	}
+
+	// Parse start date
+	startDate, err := time.Parse("2006-01-02", req.Date)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid date format. Use YYYY-MM-DD."})
+		return
+	}
+
+	log.Printf("availability: date=%s provider=%q office=%q", req.Date, req.Provider, req.Office)
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Error:   "Failed to get authentication token",
+			Details: err.Error(),
+		})
+		return
+	}
+
+	// Get scheduler setup (1 XMLRPC call)
+	setup, err := h.amdClient.GetSchedulerSetup(r.Context(), tokenData)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Error:   "Failed to get scheduler setup",
+			Details: err.Error(),
+		})
+		return
+	}
+
+	// Build lookup maps
+	profileMap := make(map[string]domain.SchedulerProfile)
+	for _, p := range setup.Profiles {
+		profileMap[p.ID] = p
+	}
+
+	facilityMap := make(map[string]domain.SchedulerFacility)
+	for _, f := range setup.Facilities {
+		facilityMap[f.ID] = f
+	}
+
+	// Resolve office filter to facility ID if provided
+	var facilityFilter string
+	if req.Office != "" {
+		facilityID, ok := domain.LookupFacilityID(req.Office)
+		if !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Error: fmt.Sprintf("Unknown office: %q. Valid options: %s", req.Office, strings.Join(domain.ValidOfficeNames(), ", ")),
+			})
+			return
+		}
+		facilityFilter = facilityID
+	}
+
+	// Filter columns to allowed providers
+	var allowedColumns []domain.SchedulerColumn
+	for _, col := range setup.Columns {
+		if domain.IsAllowedColumn(col.ID) {
+			if facilityFilter != "" && col.FacilityID != facilityFilter {
+				continue
+			}
+			if req.Provider != "" {
+				profile, ok := profileMap[col.ProfileID]
+				if !ok {
+					continue
+				}
+				normalizedProvider := strings.ToUpper(domain.NormalizeForLookup(req.Provider))
+				if !strings.Contains(strings.ToUpper(domain.NormalizeForLookup(profile.Name)), normalizedProvider) &&
+					!strings.Contains(strings.ToUpper(domain.NormalizeForLookup(col.Name)), normalizedProvider) {
+					continue
+				}
+			}
+			allowedColumns = append(allowedColumns, col)
+		}
+	}
+
+	// Determine location name for response
+	locationName := "All Locations"
+	if facilityFilter != "" {
+		for _, f := range setup.Facilities {
+			if f.ID == facilityFilter {
+				locationName = f.Name
+				break
+			}
+		}
+	} else if len(allowedColumns) > 0 {
+		if fac, ok := facilityMap[allowedColumns[0].FacilityID]; ok {
+			locationName = fac.Name
+		}
+	}
+
+	if len(allowedColumns) == 0 {
+		if req.Provider != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Error: fmt.Sprintf("No provider found matching %q. Valid providers: %s",
+					req.Provider, strings.Join(domain.ValidProviderNames(), ", ")),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(domain.AvailabilityResponse{
+			SearchedDate: req.Date,
+			Date:         startDate.Format("Monday, January 2, 2006"),
+			Location:     locationName,
+			Providers:    []domain.ProviderAvailability{},
+		})
+		return
+	}
+
+	// Load Eastern timezone for past-slot filtering
+	eastern, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		eastern = time.FixedZone("EST", -5*3600)
+	}
+	nowEastern := time.Now().In(eastern)
+
+	// Try the requested date first, then auto-search forward up to 14 days
+	searchDate := startDate
+	var providers []domain.ProviderAvailability
+
+	for attempt := 0; attempt <= 14; attempt++ {
+		dateStr := searchDate.Format("2006-01-02")
+
+		// Fetch appointments and block holds per column
+		columnIDs := make([]string, len(allowedColumns))
+		for i, col := range allowedColumns {
+			columnIDs[i] = col.ID
+		}
+
+		appointmentsByColumn, err := h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, columnIDs, dateStr)
+		if err != nil {
+			log.Printf("availability: failed to get appointments: %v", err)
+			appointmentsByColumn = make(map[string][]domain.Appointment)
+		}
+
+		blockHoldsByColumn, err := h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, columnIDs, dateStr)
+		if err != nil {
+			log.Printf("availability: failed to get block holds: %v", err)
+			blockHoldsByColumn = make(map[string][]domain.BlockHold)
+		}
+
+		// Calculate availability for each provider
+		providers = nil
+		for _, col := range allowedColumns {
+			profile := profileMap[col.ProfileID]
+			facility := facilityMap[col.FacilityID]
+
+			displayName := providerDisplayNames[col.ProfileID]
+			if displayName == "" {
+				displayName = profile.Name
+			}
+
+			allSlots := calculateAvailableSlots(col, appointmentsByColumn[col.ID], blockHoldsByColumn[col.ID], searchDate, nowEastern)
+
+			colID, _ := strconv.Atoi(col.ID)
+			profID, _ := strconv.Atoi(col.ProfileID)
+
+			pa := domain.ProviderAvailability{
+				Name:           displayName,
+				ColumnID:       colID,
+				ProfileID:      profID,
+				Facility:       facility.Name,
+				SlotDuration:   col.Interval,
+				TotalAvailable: len(allSlots),
+			}
+
+			if len(allSlots) > 0 {
+				pa.FirstAvailable = allSlots[0].Time
+				pa.LastAvailable = allSlots[len(allSlots)-1].Time
+				if len(allSlots) > 5 {
+					pa.Slots = allSlots[:5]
+				} else {
+					pa.Slots = allSlots
+				}
+			} else {
+				pa.Slots = []domain.AvailableSlot{}
+			}
+
+			providers = append(providers, pa)
+		}
+
+		// Check if any provider has availability
+		hasAvailability := false
+		for _, p := range providers {
+			if p.TotalAvailable > 0 {
+				hasAvailability = true
+				break
+			}
+		}
+
+		if hasAvailability || attempt == 14 {
+			break
+		}
+
+		// No availability — try the next day
+		searchDate = searchDate.AddDate(0, 0, 1)
+		log.Printf("availability: no slots on %s, searching forward to %s", dateStr, searchDate.Format("2006-01-02"))
+	}
+
+	json.NewEncoder(w).Encode(domain.AvailabilityResponse{
+		SearchedDate: req.Date,
+		Date:         searchDate.Format("Monday, January 2, 2006"),
+		Location:     locationName,
+		Providers:    providers,
+	})
+}
+
+// calculateAvailableSlots generates available time slots for a column on a single day.
+// nowEastern is used to filter out past slots when the date is today.
+func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.Appointment, blockHolds []domain.BlockHold, date time.Time, nowEastern time.Time) []domain.AvailableSlot {
+	var slots []domain.AvailableSlot
+
+	// Skip if provider doesn't work this day
+	if !col.WorksOnDay(date.Weekday()) {
+		return slots
+	}
+
+	// Get work hours
+	workStart, workEnd, err := col.ParseWorkHours(date)
+	if err != nil {
+		return slots
+	}
+
+	// Build appointment count map
+	apptCounts := make(map[string]int)
+	for _, appt := range appointments {
+		key := appt.StartDateTime.Format("2006-01-02T15:04")
+		apptCounts[key]++
+	}
+
+	// Determine cutoff for past slots: if date is today, skip slots before now + 30 min
+	today := nowEastern.Format("2006-01-02")
+	isToday := date.Format("2006-01-02") == today
+	cutoff := nowEastern.Add(30 * time.Minute)
+
+	interval := time.Duration(col.Interval) * time.Minute
+	if interval == 0 {
+		interval = 15 * time.Minute
+	}
+
+	for slotTime := workStart; slotTime.Before(workEnd); slotTime = slotTime.Add(interval) {
+		// Filter past slots
+		if isToday {
+			slotInEastern := time.Date(slotTime.Year(), slotTime.Month(), slotTime.Day(),
+				slotTime.Hour(), slotTime.Minute(), 0, 0, nowEastern.Location())
+			if slotInEastern.Before(cutoff) {
+				continue
+			}
+		}
+
+		if domain.IsBlockedByHold(slotTime, blockHolds) {
+			continue
+		}
+
+		slotKey := slotTime.Format("2006-01-02T15:04")
+		count := apptCounts[slotKey]
+
+		maxAppts := col.MaxApptsPerSlot
+		if maxAppts == 0 {
+			maxAppts = 1
+		}
+
+		if count >= maxAppts {
+			continue
+		}
+
+		slots = append(slots, domain.AvailableSlot{
+			Time:     domain.FormatSlotTime(slotTime),
+			DateTime: domain.FormatSlotDateTime(slotTime),
+		})
+	}
+
+	return slots
 }

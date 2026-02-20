@@ -71,14 +71,22 @@ Keep all answers short and focused.
 - `firstName` (required): Patient's first name
 - `lastName` (required): Patient's last name
 - `dob` (required): Date of birth in MM/DD/YYYY format
-- `phone` (required): 10-digit phone number, digits only
+- `phone` (required): 10-digit cell phone number, digits only
 - `email` (required): Email address
-- `insuranceProvider` (required): Insurance company name
-- `subscriberNum` (required): Insurance member/subscriber ID
+- `street` (required): Street address
+- `aptSuite` (optional): Apartment or suite number
+- `city` (required): City
+- `state` (required): State (2-letter abbreviation)
+- `zip` (required): Zip code
+- `sex` (required): Patient's sex (male or female)
+- `insuranceProvider` (required): Insurance carrier name
+- `subscriberName` (required): Name of the insurance subscriber (may be the patient or someone else)
+- `subscriberNum` (required): Insurance subscriber/member ID
 
 **Usage:**
-1. Collect all 7 fields from the caller one at a time
-2. Call this tool once all fields are collected
+1. Collect all fields from the caller one at a time
+2. Ask for apartment or suite number but accept if they say none
+3. Call this tool once all fields are collected
 
 **Error handling:** NEVER retry this tool - retrying can create duplicate records. If it fails, redirect to staff.
 
