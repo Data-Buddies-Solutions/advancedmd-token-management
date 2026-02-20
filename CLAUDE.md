@@ -25,7 +25,7 @@ AdvancedMD has **three different API types**, each with different URL patterns a
 
 | API Type | URL Pattern | Request Format | Use Cases |
 |----------|-------------|----------------|-----------|
-| **XMLRPC** | `{webserver}/xmlrpc/processrequest.aspx` | `ppmdmsg` wrapper with `@action` | addpatient, getpatient, scheduling |
+| **XMLRPC** | `{webserver}/xmlrpc/processrequest.aspx` | `ppmdmsg` wrapper with `@action` | addpatient, getpatient, getdemographic, scheduling |
 | **REST (Practice Manager)** | Replace `/processrequest/` with `/api/` | Standard JSON | profiles, master files |
 | **EHR REST** | Replace `/processrequest/` with `/ehr-api/` | Standard JSON | documents, files |
 
@@ -109,6 +109,10 @@ railway up
 
 4. **URL transformations**: Different API types require transforming the webserver URL by replacing path segments
 
+5. **getdemographic class matters**: Using `class="api"` omits insurance data entirely. Use `class="demographics"` to get `insplanlist` and `carrierlist` in the response
+
+6. **Carrier IDs**: Real carrier IDs are mapped in `internal/domain/patient.go` CarrierMap. Use `lookupcarrier` XMLRPC action to find new carrier IDs (180 carriers across 4 pages)
+
 ## ElevenLabs Integration Notes
 
 When creating ElevenLabs tools that call AdvancedMD:
@@ -124,9 +128,19 @@ When creating ElevenLabs tools that call AdvancedMD:
    - REST APIs: `Authorization: {amd_token}`
    - XMLRPC APIs: `Cookie: {amd_cookie_token}`
 
+## XMLRPC Actions Reference
+
+| Action | Class | Description |
+|--------|-------|-------------|
+| `lookuppatient` | `api` | Search patients by last name |
+| `addpatient` | `api` | Create a new patient |
+| `addinsurance` | `api` | Attach insurance to a patient |
+| `getdemographic` | `demographics` | Get patient demographics + insurance (must use `demographics` class, not `api`) |
+| `lookupcarrier` | `api` | Search insurance carriers (paginated, 50 per page) |
+
 ## Future Documentation Goals
 
 - Document each AdvancedMD API endpoint as we use them
-- Create example payloads for common operations (addpatient, getpatient, scheduling)
+- Create example payloads for common operations (scheduling)
 - Document error codes and their meanings
 - Build out ElevenLabs tool configurations for specific use cases

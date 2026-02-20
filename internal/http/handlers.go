@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"log"
+
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
@@ -26,13 +28,14 @@ type VerifyPatientRequest struct {
 
 // VerifyPatientResponse is returned on successful patient verification.
 type VerifyPatientResponse struct {
-	Status    string         `json:"status"`
-	PatientID string         `json:"patientId,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	DOB       string         `json:"dob,omitempty"`
-	Phone     string         `json:"phone,omitempty"`
-	Message   string         `json:"message,omitempty"`
-	Matches   []PatientMatch `json:"matches,omitempty"`
+	Status           string         `json:"status"`
+	PatientID        string         `json:"patientId,omitempty"`
+	Name             string         `json:"name,omitempty"`
+	DOB              string         `json:"dob,omitempty"`
+	Phone            string         `json:"phone,omitempty"`
+	InsuranceCarrier string         `json:"insuranceCarrier,omitempty"`
+	Message          string         `json:"message,omitempty"`
+	Matches          []PatientMatch `json:"matches,omitempty"`
 }
 
 // PatientMatch provides minimal info for disambiguation.
@@ -296,12 +299,17 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 
 	case 1:
 		p := matchingPatients[0]
+		insuranceCarrier, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
+		if err != nil {
+			log.Printf("WARNING: failed to get demographics for patient %s: %v", p.ID, err)
+		}
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
-			Status:    "verified",
-			PatientID: p.ID,
-			Name:      p.FullName,
-			DOB:       p.DOB,
-			Phone:     p.Phone,
+			Status:           "verified",
+			PatientID:        p.ID,
+			Name:             p.FullName,
+			DOB:              p.DOB,
+			Phone:            p.Phone,
+			InsuranceCarrier: insuranceCarrier,
 		})
 		return
 
@@ -311,12 +319,17 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			upperFirstName := strings.ToUpper(req.FirstName)
 			for _, p := range matchingPatients {
 				if strings.HasPrefix(p.FirstName, upperFirstName) {
+					insuranceCarrier, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
+					if err != nil {
+						log.Printf("WARNING: failed to get demographics for patient %s: %v", p.ID, err)
+					}
 					json.NewEncoder(w).Encode(VerifyPatientResponse{
-						Status:    "verified",
-						PatientID: p.ID,
-						Name:      p.FullName,
-						DOB:       p.DOB,
-						Phone:     p.Phone,
+						Status:           "verified",
+						PatientID:        p.ID,
+						Name:             p.FullName,
+						DOB:              p.DOB,
+						Phone:            p.Phone,
+						InsuranceCarrier: insuranceCarrier,
 					})
 					return
 				}
