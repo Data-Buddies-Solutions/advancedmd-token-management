@@ -63,6 +63,15 @@ advancedmd-token-management/
 │       ├── router.go            # chi router setup
 │       ├── handlers.go          # Request handlers
 │       └── middleware.go        # Auth, logging, request ID
+│   └── workspace/
+│       ├── workspace.go           # go:embed loader for prompt files
+│       └── files/                 # Embedded workspace MD files
+│           ├── IDENTITY.md        # Agent identity
+│           ├── SOUL.md            # Personality + boundaries
+│           ├── KNOWLEDGE.md       # Practice info (Abita Eye)
+│           ├── TOOLS.md           # API tool instructions
+│           ├── USER.md            # Caller context
+│           └── VOICE.md           # Speaking style
 ├── Dockerfile                   # Multi-stage build for Railway
 ├── go.mod
 └── README.md
@@ -135,40 +144,50 @@ curl https://your-app.railway.app/health
 {"status":"ok"}
 ```
 
-### GET /api/token
+### POST /api/token (Precall Webhook)
 
-Returns a valid AdvancedMD session token. Called by ElevenLabs agents.
+ElevenLabs precall webhook endpoint. Returns AMD authentication tokens **and** workspace prompt files as dynamic variables in a single call.
 
 **Request:**
 ```bash
-curl -H "Authorization: Bearer YOUR_API_SECRET" \
+curl -X POST \
+     -H "Authorization: Bearer YOUR_API_SECRET" \
      https://your-app.railway.app/api/token
 ```
 
 **Response:**
 ```json
 {
-  "token": "Bearer 991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
-  "cookieToken": "token=991NNNzxrAdklblLlx2CAZrB9H1+Grco7wa1Vmxmpo...",
-  "webserverUrl": "providerapi.advancedmd.com/processrequest/api-101/YOURAPP",
-  "xmlrpcUrl": "providerapi.advancedmd.com/processrequest/api-101/YOURAPP/xmlrpc/processrequest.aspx",
-  "restApiBase": "providerapi.advancedmd.com/api/api-101/YOURAPP",
-  "ehrApiBase": "providerapi.advancedmd.com/ehr-api/api-101/YOURAPP",
-  "createdAt": "2024-01-09T10:00:00Z"
+  "type": "conversation_initiation_client_data",
+  "dynamic_variables": {
+    "amd_token": "Bearer 991NNN...",
+    "amd_rest_api_base": "providerapi.advancedmd.com/api/api-101/YOURAPP",
+    "patient_verified": "not_found",
+    "patient_id": "1",
+    "identity": "[contents of IDENTITY.md]",
+    "soul": "[contents of SOUL.md]",
+    "user_context": "[contents of USER.md]",
+    "tools": "[contents of TOOLS.md]",
+    "voice": "[contents of VOICE.md]"
+  }
 }
 ```
 
-**Response Fields:**
+**Dynamic Variables:**
 
-| Field | Description | Use Case |
-|-------|-------------|----------|
-| `token` | Pre-formatted Bearer token | Use directly as `Authorization: {amd_token}` header for REST APIs |
-| `cookieToken` | Pre-formatted Cookie token | Use directly as `Cookie: {amd_cookie_token}` header for XMLRPC APIs |
-| `webserverUrl` | Base path from login (no https://) | Reference only |
-| `xmlrpcUrl` | XMLRPC endpoint path (no https://) | Use as `https://{amd_xmlrpc_url}` |
-| `restApiBase` | Practice Manager REST base (no https://) | Use as `https://{amd_rest_api_base}/endpoint` |
-| `ehrApiBase` | EHR REST API base (no https://) | Use as `https://{amd_ehr_api_base}/endpoint` |
-| `createdAt` | Token generation timestamp | For debugging/monitoring token freshness |
+| Variable | Description |
+|----------|-------------|
+| `amd_token` | Pre-formatted Bearer token for REST API `Authorization` header |
+| `amd_rest_api_base` | REST API base path (use as `https://{amd_rest_api_base}/endpoint`) |
+| `patient_verified` | Initial patient state (`not_found`) |
+| `patient_id` | Initial patient ID placeholder |
+| `identity` | Agent identity prompt (from `IDENTITY.md`) |
+| `soul` | Personality and boundaries prompt (from `SOUL.md`) |
+| `user_context` | Caller context prompt (from `USER.md`) |
+| `tools` | API tool instructions prompt (from `TOOLS.md`) |
+| `voice` | Speaking style prompt (from `VOICE.md`) |
+
+The workspace files are embedded into the Go binary at build time using `go:embed`, so no filesystem access is needed at runtime.
 
 > **Note for ElevenLabs:** URLs are returned WITHOUT the `https://` prefix so they can be used as template variables (e.g., `https://{amd_rest_api_base}/scheduler/Columns/openings`).
 
