@@ -201,9 +201,12 @@ curl -X POST \
   "patientId": "12345",
   "name": "SMITH,JOHN",
   "dob": "01/15/1980",
-  "phone": "555-123-4567"
+  "phone": "555-123-4567",
+  "insuranceCarrier": "BLUE CROSS BLUE SHIELD OF"
 }
 ```
+
+> **Note:** `insuranceCarrier` is populated by calling AdvancedMD's `getdemographic` API (with `class="demographics"`) after patient verification. If the patient has no insurance on file, this field is omitted.
 
 **Response (multiple matches):**
 ```json
@@ -253,7 +256,7 @@ curl -X POST \
 
 All 7 fields are required.
 
-**Supported Insurance Providers:** `blue cross blue shield`, `bcbs`, `aetna`, `cigna`, `united healthcare`, `uhc`, `humana`, `medicare`, `medicaid` (case-insensitive). Carrier IDs are placeholders — replace with real AMD carrier IDs before going live.
+**Supported Insurance Providers:** `blue cross blue shield`, `bcbs`, `bcbs federal`, `bcbs ma`, `aetna`, `cigna`, `united healthcare`, `uhc`, `medicare`, `medicaid`, `tricare`, `tricare for life` (case-insensitive).
 
 **Response (success):**
 ```json
@@ -564,12 +567,12 @@ Unlike serverless deployments, Railway runs a persistent process:
 |----------|-------------------|-----------------|
 | `GET /health` | ~20µs | ~280-360ms |
 | `GET /api/token` | ~80-110µs | ~280-350ms |
-| `POST /api/verify-patient` | ~350ms | ~350-400ms |
+| `POST /api/verify-patient` | ~700ms | ~700-800ms |
 | `POST /api/add-patient` | ~700ms | ~700-800ms |
 
 - **Server processing**: Sub-millisecond for cached token retrieval
 - **Round-trip**: Includes network latency to Railway's us-east4 region
-- **verify-patient**: Includes AdvancedMD XMLRPC call (~350ms)
+- **verify-patient**: Includes AdvancedMD XMLRPC lookuppatient + getdemographic calls
 
 ## Security
 

@@ -98,6 +98,8 @@ var CarrierMap = map[string]string{
 	"medicare part a":        "car7129",
 	"medicare part b":        "car7129",
 	"medicare parts a and b": "car7129",
+	// Medicaid (car7489)
+	"medicaid": "car7489",
 	// BCBS (car7077)
 	"bcbs":                       "car7077",
 	"bc bs":                      "car7077",
@@ -110,6 +112,17 @@ var CarrierMap = map[string]string{
 	"blueshield":                 "car7077",
 	"bluecross blueshield":       "car7077",
 	"blue cross and blue shield": "car7077",
+	// BCBS Regional
+	"bcbs federal": "car7554",
+	"bcbs ma":      "car7555",
+	// United Healthcare (car7545)
+	"united healthcare": "car7545",
+	"uhc":               "car7545",
+	"united health":     "car7545",
+	"united health care": "car7545",
+	// Tricare (car7524)
+	"tricare":          "car7524",
+	"tricare for life": "car7160",
 }
 
 // LookupCarrierID performs a normalized lookup into CarrierMap.
@@ -121,7 +134,7 @@ func LookupCarrierID(providerName string) (string, bool) {
 
 // ValidCarrierNames returns the list of recognized carrier names for error messages.
 func ValidCarrierNames() []string {
-	return []string{"Cigna", "Aetna", "Medicare", "BCBS (Blue Cross Blue Shield)"}
+	return []string{"Cigna", "Aetna", "Medicare", "Medicaid", "BCBS (Blue Cross Blue Shield)", "United Healthcare", "Tricare"}
 }
 
 // NormalizeSex converts various sex inputs to AMD's expected format (M/F/U).
