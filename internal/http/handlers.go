@@ -12,6 +12,7 @@ import (
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
+	"advancedmd-token-management/internal/workspace"
 )
 
 // ErrorResponse is the JSON response structure for error conditions.
@@ -97,16 +98,25 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 
 	resp := tokenData.ToResponse()
 
-	// Return only auth token variables
 	dynamicVars := map[string]interface{}{
 		"amd_token":         resp.Token,
-		"amd_cookie_token":  resp.CookieToken,
-		"amd_xmlrpc_url":    resp.XmlrpcURL,
+		// "amd_cookie_token":  resp.CookieToken,
+		// "amd_xmlrpc_url":    resp.XmlrpcURL,
 		"amd_rest_api_base": resp.RestApiBase,
-		"amd_ehr_api_base":  resp.EhrApiBase,
+		// "amd_ehr_api_base":  resp.EhrApiBase,
 		"patient_verified":  "not_found",
 		"patient_id":        "1",
-		"booking_confirmed": 0,
+		// "booking_confirmed": 0,
+	}
+
+	// Load workspace prompt files into dynamic variables
+	wsVars, err := workspace.Variables()
+	if err != nil {
+		log.Printf("warning: failed to load workspace files: %v", err)
+	} else {
+		for k, v := range wsVars {
+			dynamicVars[k] = v
+		}
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{

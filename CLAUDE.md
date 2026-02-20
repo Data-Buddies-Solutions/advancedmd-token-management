@@ -31,13 +31,17 @@ AdvancedMD has **three different API types**, each with different URL patterns a
 
 ### Token Format for ElevenLabs
 
-The `/api/token` endpoint returns pre-formatted values optimized for ElevenLabs dynamic variables:
+The `/api/token` endpoint serves as the **precall webhook** for ElevenLabs. It returns both AMD tokens and workspace prompt files as dynamic variables:
 
-- `token`: Includes "Bearer " prefix → Use directly as `Authorization: {amd_token}`
-- `cookieToken`: Includes "token=" prefix → Use directly as `Cookie: {amd_cookie_token}`
-- URLs: Exclude "https://" prefix → Use as `https://{amd_rest_api_base}/endpoint`
+- `amd_token`: Includes "Bearer " prefix → Use directly as `Authorization: {amd_token}`
+- `amd_rest_api_base`: Excludes "https://" prefix → Use as `https://{amd_rest_api_base}/endpoint`
+- `identity`, `soul`, `user_context`, `tools`, `voice`: Workspace prompt files loaded via `go:embed`
 
 This is because ElevenLabs doesn't support string concatenation in dynamic variables.
+
+### Workspace Files
+
+Prompt files live in `internal/workspace/files/` and are embedded into the binary at build time. The `workspace.Variables()` function returns them as a `map[string]string` keyed by ElevenLabs variable name. To update prompts, edit the MD files and redeploy.
 
 ## Project Structure
 
@@ -60,10 +64,19 @@ advancedmd-token-management/
 │   │   ├── redis.go             # Pooled Redis client
 │   │   ├── advancedmd_xmlrpc.go # XMLRPC client (patients, scheduler setup)
 │   │   └── advancedmd_rest.go   # REST client (appointments)
-│   └── http/
-│       ├── router.go            # chi router setup
-│       ├── handlers.go          # Request handlers
-│       └── middleware.go        # Auth, logging, request ID
+│   ├── http/
+│   │   ├── router.go            # chi router setup
+│   │   ├── handlers.go          # Request handlers
+│   │   └── middleware.go        # Auth, logging, request ID
+│   └── workspace/
+│       ├── workspace.go         # go:embed loader for prompt files
+│       └── files/               # Embedded MD prompt files
+│           ├── IDENTITY.md      # Agent identity
+│           ├── SOUL.md          # Personality + boundaries
+│           ├── KNOWLEDGE.md     # Practice info (Abita Eye)
+│           ├── TOOLS.md         # API tool instructions
+│           ├── USER.md          # Caller context
+│           └── VOICE.md         # Speaking style
 ├── Dockerfile                   # Multi-stage build for Railway
 └── README.md                    # User-facing documentation
 ```
