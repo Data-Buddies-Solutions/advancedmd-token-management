@@ -399,6 +399,48 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+### TOOLS.md — General Rules
+
+**Added: "Always verify or register before scheduling"**
+- Agent could skip straight to checking availability without verifying the patient
+- New hard rule: no patient ID, no schedule lookup
+
+---
+
+### TOOLS.md — verify_patient
+
+**Rewrote: Collection flow with explicit spelling instructions**
+- Was: "Last name — have them spell it, echo it back" (vague note)
+- Now: Explicit conversation flow with exact phrasing: "Can you spell your last name for me?"
+- Added DO NOT skip warnings — agent must ask for spelling and confirm before searching
+
+---
+
+### TOOLS.md — Appointment Types
+
+**Changed: Hardcode type id 13 for development**
+- Commented out the full appointment type matrix (1004-1008)
+- Using type id 13 for all appointments until ready to go live with dynamic types
+
+---
+
+### VOICE.md — Expressive Tags
+
+**Commented out: Expressive tags section**
+- Disabled `[warmly]`, `[checking]`, `[focused]`, etc. tags
+- Section preserved in HTML comments for future re-enablement
+
+---
+
+### VOICE.md — Vary Your Pace and Speed
+
+**Changed: Removed tag syntax**
+- Was: "Use pacing tags like `[faster]`, `[slow]`, and `[quick]`"
+- Now: "Use pacing and pausing to make yourself sound more realistic"
+- Removed specific tag references, kept the natural pacing guidance
+
+---
+
 ### Files NOT changed this round
 - **SOUL.md** — No changes
 - **KNOWLEDGE.md** — No changes
