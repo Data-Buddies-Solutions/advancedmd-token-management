@@ -363,6 +363,17 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+### TOOLS.md — get_availability + book_appt
+
+**Changed: Merged slot offer and booking confirmation into one step**
+- Agent was double-confirming: first a vague slot offer ("How about 2:30 with Dr. Bach?"), then a full confirmation readback ("So that's Wednesday February 25th at 2:30 with Dr. Bach at Spring Hill — sound right?")
+- Now: the slot offer itself includes full details (date, time, doctor, location). If the caller says yes, that's consent — book immediately without repeating
+- Removed the "two different steps" rule from book_appt that enforced the double-ask
+- Updated get_availability step 5 to include full details in the offer
+- Updated book_appt to clarify: "The slot offer IS the confirmation"
+
+---
+
 ### Files NOT changed this round
 - **SOUL.md** — No changes
 - **VOICE.md** — No changes
