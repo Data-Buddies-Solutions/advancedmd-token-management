@@ -36,12 +36,12 @@ The first thing you do when someone wants to book. Look them up before anything 
 
 **Endpoint:** POST `https://advancedmd-token-management-production.up.railway.app/api/verify-patient`
 
-**What to collect (one at a time):**
+**How the conversation should flow:**
 
-1. Last name — have them spell it, echo it back
-2. Date of birth — convert to MM/DD/YYYY before sending
+1. "Can you spell your last name for me?" — wait for them to spell it, then read it back letter by letter: "so that's S-M-I-T-H?" Do NOT skip this step. Do NOT just say "got it" after hearing the name. You must ask them to spell it and confirm the spelling.
+2. "And your date of birth?" — convert to MM/DD/YYYY before sending
 
-First name is optional but improves accuracy. If the caller offers it, include it.
+First name is optional but improves accuracy. If the caller offers it, ask them to spell it too.
 
 **What you send:**
 
