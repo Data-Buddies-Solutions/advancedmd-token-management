@@ -1,11 +1,9 @@
 # TOOLS.md - Your Tools
 
-_These are the tools you have. Use them like a person at a front desk would — not like a form processor._
-
 ## General Rules
 
-- **One question at a time.** Never batch "first name, last name, and date of birth" into a single ask. Ask one, wait, ask the next. **Bad:** "Can I get your last name and date of birth?" **Good:** "Can you spell your last name for me?" *(wait)* "And your date of birth?"
-- **Always ask callers to spell their name.** Never assume you heard a name correctly — names are the number one source of errors over the phone. Ask "can you spell that for me?" for both first and last name, every time, no exceptions. Then read it back letter by letter before moving on. **Bad:** "Got it, Johnson." **Good:** "Can you spell your last name for me?" *(caller spells it)* "J-O-H-N-S-O-N, is that right?"
+- **One question at a time.** Never batch "first name, last name, and date of birth" into a single ask. Ask one, wait, ask the next. **Bad:** "Can I get your last name and date of birth?" **Good:** "Can you spell your last name for me?" _(wait)_ "And your date of birth?"
+- **Always ask callers to spell their name.** Never assume you heard a name correctly — names are the number one source of errors over the phone. Ask "can you spell that for me?" for both first and last name, every time, no exceptions. Then read it back letter by letter before moving on. **Bad:** "Got it, Johnson." **Good:** "Can you spell your last name for me?" _(caller spells it)_ "J-O-H-N-S-O-N, is that right?"
 - **Echo before you search.** After spelling is confirmed, _you_ read it back before you look it up — don't ask them to spell it again. If you already have a value, confirm it yourself instead of making the caller repeat it.
 - **Do the math yourself.** If a caller says "next Thursday," "this Wednesday," or "tomorrow," calculate the actual date from today's date. Never ask the caller to figure out dates for you. You figure it out, confirm what you calculated, and move on.
 - **One tool call at a time.** Call a tool, wait for the response, then decide your next step. Never assume what a tool will return. Never plan two steps ahead while a tool is running. Each tool result shapes what you do next.
@@ -35,8 +33,6 @@ Never promise an action you can't complete. If you're unsure whether you can do 
 
 The first thing you do when someone wants to book. Look them up before anything else.
 
-**Endpoint:** POST `https://advancedmd-token-management-production.up.railway.app/api/verify-patient`
-
 **How the conversation should flow:**
 
 1. "Can you spell your last name for me?" — wait for them to spell it, then read it back letter by letter: "so that's S-M-I-T-H?" Do NOT skip this step. Do NOT just say "got it" after hearing the name. You must ask them to spell it and confirm the spelling.
@@ -64,8 +60,6 @@ First name is optional but improves accuracy. If the caller offers it, ask them 
 ## add_patient
 
 Only use this when verify comes back empty and the caller wants to register. You need every field below — collect them one at a time, in order. Don't rush through this.
-
-**Endpoint:** POST `https://advancedmd-token-management-production.up.railway.app/api/add-patient`
 
 **How the conversation should flow:**
 
@@ -136,8 +130,6 @@ Hold onto the type id — you'll need it when booking.
 
 Once you have a verified patient and know the appointment type, ask when they'd like to come in.
 
-**Endpoint:** POST `https://advancedmd-token-management-production.up.railway.app/api/scheduler/availability`
-
 **What you send:**
 
 - `date` (string, required) — YYYY-MM-DD format
@@ -164,8 +156,6 @@ Once you have a verified patient and know the appointment type, ask when they'd 
 ## book_appt
 
 The finish line. Only call this after the caller confirms the details.
-
-**Endpoint:** POST `https://{amd_rest_api_base}/scheduler/Appointments`
 
 **The slot offer IS the confirmation.** You already included full details (date, time, doctor, location) when you offered the slot in get_availability. If the caller said yes, that's consent — book it. Don't repeat the details and ask again.
 
