@@ -312,3 +312,60 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 - **KNOWLEDGE.md** — No changes
 - **USER.md** — No changes
 - **IDENTITY.md** — No changes
+
+---
+
+---
+
+## 2026-02-20 (Round 4)
+
+### Source: Agent behavior review (Chase)
+- Agent was making multiple tool calls without waiting for responses
+- Agent wasn't asking existing patients what kind of appointment (follow-up vs post-op)
+- Appointment type was hardcoded to id 13 instead of using correct AMD type IDs
+- No distinction between adult and pediatric appointment types
+
+---
+
+### TOOLS.md — General Rules
+
+**Added: "One tool call at a time"**
+- Agent was batching tool calls or continuing conversation before receiving tool results
+- New rule: call a tool, wait for the response, then decide your next step
+- Never assume what a tool will return or plan ahead while a tool is running
+
+---
+
+### TOOLS.md — New "Determine Appointment Type" section
+
+**Added: Decision step between add_patient and get_availability**
+- Agent needs to determine the correct appointment type before checking availability
+- Uses DOB (already collected) to calculate age silently — never asks the patient their age
+- New patient: type is automatic based on age (1006 adult / 1004 pediatric)
+- Existing patient: agent asks "is this a follow-up visit or a post-op visit?"
+  - Follow-up: 1007 adult / 1005 pediatric based on age
+  - Post-op: 1008 regardless of age
+- Agent holds the type id for use when booking
+
+---
+
+### TOOLS.md — book_appt
+
+**Changed: Dynamic appointment type instead of hardcoded id 13**
+- Was: `type` (array) — always `[{ "id": 13 }]`
+- Now: `type` (array) — `[{ "id": <appointment_type_id> }]` using the type id determined earlier (1004, 1005, 1006, 1007, or 1008)
+- Maps to AMD appointment types:
+  - 1004 = NEW PEDIATRIC MEDICAL
+  - 1005 = ESTABLISH PEDIATRIC MED
+  - 1006 = NEW ADULT MEDICAL
+  - 1007 = ESTABLISH ADULT MEDICAL
+  - 1008 = POST OP
+
+---
+
+### Files NOT changed this round
+- **SOUL.md** — No changes
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+- **USER.md** — No changes
+- **IDENTITY.md** — No changes
