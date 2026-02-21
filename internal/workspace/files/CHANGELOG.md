@@ -388,6 +388,17 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+### TOOLS.md — General Rules
+
+**Added: "Always ask callers to spell their name" as a top-level rule**
+- Agent was still not asking callers to spell names despite per-tool guidance
+- Promoted from tool-specific instructions to a hard general rule with Bad/Good examples
+- Applies to both first and last name, every time, no exceptions
+- Clarified the two-step process: ask them to spell it, then YOU read it back letter by letter
+- Separated from the "echo before you search" rule to make the spelling ask unmissable
+
+---
+
 ### Files NOT changed this round
 - **SOUL.md** — No changes
 - **KNOWLEDGE.md** — No changes
