@@ -374,9 +374,22 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+### VOICE.md — New "Before a Tool Call" section
+
+**Added: Spoken transition phrases before each tool call**
+- Agent was going silent while tools ran — no verbal signal to the caller
+- New section with natural phrases mapped to each tool:
+  - verify_patient: "one moment while I pull up your chart"
+  - add_patient: "ok, one moment while I get you set up"
+  - get_availability: "let me check what's available"
+  - book_appt: "one moment while I get that booked for you"
+- Two example phrases per tool for variety
+- Rule: keep it to one short sentence, then let the tool run
+
+---
+
 ### Files NOT changed this round
 - **SOUL.md** — No changes
-- **VOICE.md** — No changes
 - **KNOWLEDGE.md** — No changes
 - **USER.md** — No changes
 - **IDENTITY.md** — No changes
