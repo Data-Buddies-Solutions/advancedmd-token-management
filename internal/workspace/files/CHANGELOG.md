@@ -446,3 +446,79 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 - **KNOWLEDGE.md** — No changes
 - **USER.md** — No changes
 - **IDENTITY.md** — No changes
+
+---
+
+---
+
+## 2026-02-22
+
+### Source: Kyle UX review — agent spelling and confirmation pacing
+
+- Agent spells names back too fast — letters blur together and callers can't follow
+- Agent rushes to the next question after confirming a name without waiting for the caller to actually say yes
+
+---
+
+### VOICE.md
+
+**Added: "Slow down when spelling"**
+- Agent was rattling off letters in one breath when reading back names
+- New rule: pause between every two or three letters — "S… M… I… T… H" not "S-M-I-T-H"
+- Gives the caller time to follow along and catch mistakes
+
+**Added: "Wait after confirming"**
+- Agent was moving to the next question immediately after spelling something back, without waiting for confirmation
+- New rule: after spelling back or confirming a detail, stop — don't move to the next question until the caller says yes
+- If silence, a gentle "does that look right?" is enough
+
+**Changed: Renamed "Vibe" section to "Phrasing"**
+- SOUL.md already has a "Vibe" section covering personality and rhythm
+- VOICE.md's "Vibe" was about phrasing style (simple words, no corporate filler)
+- Renamed to "Phrasing" to avoid duplicate section names across files
+
+---
+
+### TOOLS.md — verify_patient
+
+**Added: Explicit "Wait" step after spelling back last name**
+- Flow was: spell back → immediately ask DOB
+- Now: spell back → **step 2: Wait** → only proceed after caller confirms
+- Includes gentle prompt if caller is silent: "does that look right?"
+
+**Changed: Spelling example uses pauses**
+- Was: "so that's S-M-I-T-H?"
+- Now: "so that's S… M… I… T… H?"
+- Reinforces the pacing rule from VOICE.md at the exact moment it matters
+
+---
+
+### TOOLS.md — add_patient
+
+**Changed: Steps 1 and 2 now include explicit wait-for-confirmation**
+- Was: "spell your first name" → "echo it back" → next field
+- Now: "spell your first name" → spell it back with pauses → **wait for them to confirm** → next field
+- Same change for last name (step 2)
+
+**Changed: Bottom "Important" note reinforced**
+- Added "wait for confirmation before moving to the next field" to the existing spell-confirm reminder
+
+---
+
+### SOUL.md — Redundancy cleanup
+
+**Changed: Trimmed "Match the caller's energy" line**
+- Removed "Calm with calm. Direct with direct." — VOICE.md now owns all pacing details
+- Kept: "Warm when warmth is offered. Don't overpower the conversation."
+
+**Removed: "Move at their rhythm" from Vibe section**
+- Was: "Move at their rhythm. If they pause, pause. If they speak slowly, match their pace. Calm cadence builds trust."
+- Removed entirely — VOICE.md's "Match the caller's speed" section already covers this
+- Avoids the agent receiving the same instruction from two different files with slightly different wording
+
+---
+
+### Files NOT changed this round
+- **KNOWLEDGE.md** — No changes
+- **USER.md** — No changes
+- **IDENTITY.md** — No changes
