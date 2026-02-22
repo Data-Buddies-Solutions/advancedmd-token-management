@@ -462,15 +462,10 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ### VOICE.md
 
-**Added: "Slow down when spelling"**
-- Agent was rattling off letters in one breath when reading back names
-- New rule: pause between every two or three letters — "S… M… I… T… H" not "S-M-I-T-H"
-- Gives the caller time to follow along and catch mistakes
-
-**Added: "Wait after confirming"**
-- Agent was moving to the next question immediately after spelling something back, without waiting for confirmation
-- New rule: after spelling back or confirming a detail, stop — don't move to the next question until the caller says yes
-- If silence, a gentle "does that look right?" is enough
+**Added: "Slow down slightly when spelling back"**
+- Agent was spelling names back too fast for callers to follow
+- Light rule: ease up on speed when spelling, and wait for confirmation before moving on
+- Kept it brief — one line, not a whole section
 
 **Changed: Renamed "Vibe" section to "Phrasing"**
 - SOUL.md already has a "Vibe" section covering personality and rhythm
@@ -486,10 +481,9 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 - Now: spell back → **step 2: Wait** → only proceed after caller confirms
 - Includes gentle prompt if caller is silent: "does that look right?"
 
-**Changed: Spelling example uses pauses**
-- Was: "so that's S-M-I-T-H?"
-- Now: "so that's S… M… I… T… H?"
-- Reinforces the pacing rule from VOICE.md at the exact moment it matters
+**Added: Explicit wait step after spelling back**
+- Kept original spelling example as-is (no forced pauses)
+- Added step 2: wait for caller to confirm before asking DOB
 
 ---
 
@@ -497,7 +491,7 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 **Changed: Steps 1 and 2 now include explicit wait-for-confirmation**
 - Was: "spell your first name" → "echo it back" → next field
-- Now: "spell your first name" → spell it back with pauses → **wait for them to confirm** → next field
+- Now: "spell your first name" → spell it back → **wait for them to confirm** → next field
 - Same change for last name (step 2)
 
 **Changed: Bottom "Important" note reinforced**

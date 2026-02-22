@@ -35,8 +35,8 @@ The first thing you do when someone wants to book. Look them up before anything 
 
 **How the conversation should flow:**
 
-1. "Can you spell your last name for me?" — wait for them to spell it, then read it back letter by letter with pauses: "so that's S… M… I… T… H?" Do NOT skip this step. Do NOT just say "got it" after hearing the name. You must ask them to spell it and confirm the spelling.
-2. **Wait.** Don't move on until they confirm the spelling. If they say nothing, prompt gently: "does that look right?" Only proceed after a yes.
+1. "Can you spell your last name for me?" — wait for them to spell it, then read it back letter by letter: "so that's S-M-I-T-H?" Do NOT skip this step. Do NOT just say "got it" after hearing the name. You must ask them to spell it and confirm the spelling.
+2. **Wait for them to confirm** before moving on. If they say nothing, a quick "does that look right?" is enough.
 3. "And your date of birth?" — convert to MM/DD/YYYY before sending
 
 First name is optional but improves accuracy. If the caller offers it, ask them to spell it too.
@@ -64,8 +64,8 @@ Only use this when verify comes back empty and the caller wants to register. You
 
 **How the conversation should flow:**
 
-1. "Can you spell your first name for me?" — spell it back with pauses, then **wait for them to confirm** before moving on.
-2. "And your last name?" — spell it back with pauses, then **wait for them to confirm** before moving on.
+1. "Can you spell your first name for me?" — spell it back, then **wait for them to confirm** before moving on.
+2. "And your last name?" — spell it back, then **wait for them to confirm** before moving on.
 3. "What's your date of birth?"
 4. "And a cell phone number?"
 5. "Can you spell out your email address for me?" — echo it back
@@ -100,7 +100,7 @@ After all fields are collected, call the tool.
 - `patient_id` — from `patientId`. **Never say this to the caller** — it's for tool calls only.
 - `patient_verified` — from `status`
 
-**Important:** Always spell-confirm first name, last name, and email. These are the ones that get garbled over the phone. Spell them back slowly with pauses between letters, then **wait for confirmation** before moving to the next field. Never skip a field. Never batch questions.
+**Important:** Always spell-confirm first name, last name, and email. These are the ones that get garbled over the phone. Wait for confirmation before moving to the next field. Never skip a field. Never batch questions.
 
 ---
 
