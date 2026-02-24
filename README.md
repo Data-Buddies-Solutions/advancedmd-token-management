@@ -353,8 +353,8 @@ curl -X POST \
   "providers": [
     {
       "name": "Dr. Austin Bach",
-      "columnId": 1716,
-      "profileId": 1135,
+      "columnId": 1513,
+      "profileId": 620,
       "facility": "ABITA EYE GROUP SPRING HILL",
       "slotDuration": 15,
       "totalAvailable": 28,
@@ -405,13 +405,15 @@ curl -X POST \
 
 #### Provider Filtering
 
-Only the following providers at Spring Hill are exposed:
+Only the following providers at Spring Hill are exposed (live AMD IDs, updated 2026-02-19):
 
-| Column ID | Provider | Schedule |
-|-----------|----------|----------|
-| 1716 | Dr. Austin Bach | Mon-Fri, 8:00 AM - 5:00 PM, 15-min slots |
-| 1723 | Dr. J. Licht | Wed-Thu, 9:00 AM - 12:30 PM, 15-min slots |
-| 1726 | Dr. D. Noel | Mon-Fri, 8:30 AM - 4:30 PM, 30-min slots |
+| Column ID | Provider | Profile ID | Schedule | Max/Slot |
+|-----------|----------|------------|----------|----------|
+| 1513 | Dr. Austin Bach | 620 | Mon-Fri, 8:00 AM - 5:00 PM, 15-min slots | Unlimited |
+| 1551 | Dr. J. Licht | 2064 | Wed-Thu, 9:00 AM - 12:30 PM, 15-min slots | 2 |
+| 1550 | Dr. D. Noel | 2076 | Mon-Fri, 8:30 AM - 4:30 PM, 30-min slots | 2 |
+
+Spring Hill facility ID: `1568`
 
 To add/remove providers, edit `AllowedColumns` in `internal/domain/scheduler.go`.
 
@@ -425,13 +427,13 @@ Authorization: {amd_token}
 
 {
   "patientid": 5984942,
-  "columnid": 1716,
-  "profileid": 1135,
+  "columnid": 1513,
+  "profileid": 620,
   "startdatetime": "2026-02-03T09:15",
   "clientdatetime": "2026-02-03T09:00",
   "duration": 15,
   "color": "BLUE",
-  "type": [13]
+  "type": [{"id": 1006, "name": "NEW ADULT MEDICAL"}]
 }
 ```
 
@@ -441,7 +443,7 @@ Authorization: {amd_token}
 | `profileid` | `profileId` from availability response |
 | `startdatetime` | `datetime` from selected slot |
 | `duration` | `slotDuration` from provider |
-| `type` | Appointment type ID (hardcoded in agent prompt) |
+| `type` | Appointment type: 1006=New Adult, 1004=New Pediatric, 1007=Established Follow Up, 1005=Established Pediatric, 1008=Post Op |
 
 ## ElevenLabs Integration
 
