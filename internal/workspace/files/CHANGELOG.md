@@ -559,6 +559,20 @@ Replaced the generic 7-carrier map (test-environment IDs) with 44 plan-specific 
 
 ---
 
+### TOOLS.md — Appointment Types
+
+**Changed: Activated live appointment type IDs**
+- Removed hardcoded type id `13` override and HTML comment block
+- Uncommented full appointment type matrix:
+  - New Adult Medical → 1006
+  - New Pediatric Medical → 1004
+  - Established Adult Medical → 1007
+  - Established Pediatric Medical → 1005
+  - Post Op → 1008
+- Agent now determines type from patient age (DOB) and visit reason
+
+---
+
 ### Files NOT changed this round
 - **SOUL.md** — No changes
 - **VOICE.md** — No changes
