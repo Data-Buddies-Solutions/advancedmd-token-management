@@ -9,10 +9,10 @@ func TestLookupFacilityID(t *testing.T) {
 		wantID    string
 		wantFound bool
 	}{
-		{"exact match", "spring hill", "1032", true},
-		{"case insensitive", "Spring Hill", "1032", true},
-		{"abbreviation sh", "SH", "1032", true},
-		{"no space", "springhill", "1032", true},
+		{"exact match", "spring hill", "1568", true},
+		{"case insensitive", "Spring Hill", "1568", true},
+		{"abbreviation sh", "SH", "1568", true},
+		{"no space", "springhill", "1568", true},
 		{"hollywood", "Hollywood", "4", true},
 		{"abbreviation hw", "hw", "4", true},
 		{"sweetwater", "Sweetwater", "1031", true},
@@ -22,7 +22,7 @@ func TestLookupFacilityID(t *testing.T) {
 		{"abbreviation cr", "CR", "1033", true},
 		{"coral springs", "Coral Springs", "1034", true},
 		{"abbreviation cs", "CS", "1034", true},
-		{"with periods", "S.H.", "1032", true},
+		{"with periods", "S.H.", "1568", true},
 		{"unknown office", "unknown", "", false},
 		{"empty string", "", "", false},
 	}

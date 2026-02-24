@@ -516,3 +516,52 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 - **KNOWLEDGE.md** — No changes
 - **USER.md** — No changes
 - **IDENTITY.md** — No changes
+
+---
+
+---
+
+## 2026-02-24
+
+### Source: Insurance crosswalk implementation (INSURANCE_CROSSWALK.md)
+
+Replaced the generic 7-carrier map (test-environment IDs) with 44 plan-specific entries using live Spring Hill carrier IDs, and added server-side insurance routing that restricts which providers a patient can see based on their insurance plan.
+
+---
+
+### TOOLS.md — verify_patient
+
+**Added: Insurance routing fields in response**
+- `routing` — the routing rule (`all_three`, `bach_only`, `bach_licht`, `not_accepted`)
+- `allowedProviders` — display names of doctors this patient can see
+- `routingAmbiguous` — if true, carrier ID is shared across plans; agent should ask clarifying question
+- If `routing` is `not_accepted`, agent must tell patient immediately and not proceed to scheduling
+
+---
+
+### TOOLS.md — add_patient
+
+**Changed: `carrierId` field replaced with `insurance`**
+- Was: `carrierId` (string) — one of 4 generic carriers (`cigna`, `blue cross blue shield`, `aetna`, `medicare`)
+- Now: `insurance` (string) — one of 44 specific plan names from the insurance crosswalk
+- Added full list of accepted insurance names inline in TOOLS.md
+- Response now includes `routing` and `allowedProviders` fields
+- If insurance is `not_accepted`, patient is created but routing is rejected with a clear message
+
+---
+
+### TOOLS.md — get_availability
+
+**Added: `routing` parameter**
+- Optional parameter passed through from verify/add-patient response
+- Server uses it to filter which doctors' slots are returned (enforced server-side)
+- If `routing` is `not_accepted`, agent must NOT call this tool — tell the patient immediately
+
+---
+
+### Files NOT changed this round
+- **SOUL.md** — No changes
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+- **USER.md** — No changes
+- **IDENTITY.md** — No changes

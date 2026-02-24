@@ -56,6 +56,7 @@ advancedmd-token-management/
 │   ├── domain/
 │   │   ├── token.go             # Token model + URL transforms
 │   │   ├── patient.go           # Patient model + DOB normalization
+│   │   ├── insurance.go         # Insurance routing rules + carrier maps
 │   │   └── scheduler.go         # Scheduler models + availability logic
 │   ├── auth/
 │   │   ├── authenticator.go     # 2-step AdvancedMD authentication
@@ -195,11 +196,19 @@ Spring Hill facility ID: **1568** (was 1032 in test env)
 
 ### Insurance Routing
 
-See `INSURANCE_MAPPING.md` for the complete carrier-to-provider mapping derived from the Abita Insurance List PDF. Key points:
-- Use `getdemographic` (class=demographics) to pull a patient's insurance after verifying them
-- The `insplanlist.insplan.@carrier` field gives the carrier ID (e.g., `car40887`)
-- The `carrierlist.carrier.@name` field gives the human-readable name (e.g., `AETNA`)
-- Use `lookupcarrier` (class=api, @name=search) to search the carrier master list
+Insurance-based provider routing is enforced server-side. See `INSURANCE_CROSSWALK.md` for the complete reference and `internal/domain/insurance.go` for the implementation.
+
+**How it works:**
+- 44 insurance plans mapped to carrier IDs + routing rules in `InsuranceNameMap`
+- 4 routing tiers: `not_accepted`, `bach_only`, `bach_licht`, `all_three`
+- **Existing patients**: `verify-patient` calls `GetDemographic` → gets carrier ID → `RoutingForCarrierID()` returns routing + ambiguity flag
+- **New patients**: `add-patient` receives insurance name from LLM → `LookupInsurance()` returns carrier ID + routing
+- **Scheduling**: `get_availability` accepts optional `routing` param → `ColumnsForRouting()` filters columns before any AMD API calls
+- 5 ambiguous carrier IDs (Aetna, FL Blue, Molina, UHC, Cigna HMO) default to `all_three` with `routingAmbiguous: true` flag so the agent can ask a clarifying question
+
+**Key files:**
+- `internal/domain/insurance.go` — `InsuranceNameMap`, `CarrierRoutingMap`, `AmbiguousCarriers`, routing functions
+- `INSURANCE_CROSSWALK.md` — Source reference with all 44 plans, routing rules, and shared carrier ID documentation
 
 ## AdvancedMD API Quirks to Know
 
@@ -215,7 +224,7 @@ See `INSURANCE_MAPPING.md` for the complete carrier-to-provider mapping derived 
 
 5. **getdemographic class matters**: Using `class="api"` omits insurance data entirely. Use `class="demographics"` to get `insplanlist` and `carrierlist` in the response
 
-6. **Carrier IDs**: Real carrier IDs are mapped in `internal/domain/patient.go` CarrierMap. Use `lookupcarrier` XMLRPC action to find new carrier IDs (180 carriers across 4 pages)
+6. **Carrier IDs**: Insurance name → carrier ID mapping lives in `internal/domain/insurance.go` `InsuranceNameMap` (44 plans). Use `lookupcarrier` XMLRPC action to find new carrier IDs (180 carriers across 4 pages)
 
 7. **Scheduler setup prefixes**: Column, profile, and facility IDs have prefixes (`col`, `prof`, `fac`) that must be stripped
 

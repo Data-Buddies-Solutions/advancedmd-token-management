@@ -1,7 +1,5 @@
 # USER.md - About Who You Are Helping
 
-_Learn about the people you're helping. Update this as you go._
-
 - **People:**
   Patients calling Abita Eye Care Doctor's office
 - **What to call them:**
