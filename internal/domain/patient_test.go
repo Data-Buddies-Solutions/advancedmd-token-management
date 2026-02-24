@@ -76,34 +76,37 @@ func TestNormalizeForLookup(t *testing.T) {
 	}
 }
 
-func TestLookupCarrierID(t *testing.T) {
+func TestLookupInsurance(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      string
-		wantID     string
-		wantFound  bool
+		name        string
+		input       string
+		wantID      string
+		wantRouting RoutingRule
+		wantFound   bool
 	}{
-		{"exact match lowercase", "cigna", "car7147", true},
-		{"case insensitive", "CIGNA", "car7147", true},
-		{"with periods (BCBS)", "B.C.B.S.", "car7077", true},
-		{"slash variation", "Blue Cross/Blue Shield", "car7077", true},
-		{"with whitespace", "  Aetna  ", "car63046", true},
-		{"medicare part b", "Medicare Part B", "car7129", true},
-		{"blue cross blue shield", "Blue Cross Blue Shield", "car7077", true},
-		{"cigna healthcare", "Cigna Healthcare", "car7147", true},
-		{"aetna insurance", "Aetna Insurance", "car63046", true},
-		{"unknown carrier", "unknown", "", false},
-		{"empty string", "", "", false},
+		{"exact match lowercase", "humana medicare", "car40906", RoutingBachOnly, true},
+		{"case insensitive", "HUMANA MEDICARE", "car40906", RoutingBachOnly, true},
+		{"with whitespace", "  Aetna  ", "car40887", RoutingAll, true},
+		{"all three default", "Florida Blue", "car40897", RoutingAll, true},
+		{"bach + licht", "Tricare Prime", "car284327", RoutingBachLicht, true},
+		{"not accepted", "Molina Marketplace", "car40912", RoutingNotAccepted, true},
+		{"unknown carrier", "unknown", "", "", false},
+		{"empty string", "", "", "", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotID, gotFound := LookupCarrierID(tt.input)
+			entry, gotFound := LookupInsurance(tt.input)
 			if gotFound != tt.wantFound {
-				t.Errorf("LookupCarrierID(%q) found = %v, want %v", tt.input, gotFound, tt.wantFound)
+				t.Errorf("LookupInsurance(%q) found = %v, want %v", tt.input, gotFound, tt.wantFound)
 			}
-			if gotID != tt.wantID {
-				t.Errorf("LookupCarrierID(%q) id = %q, want %q", tt.input, gotID, tt.wantID)
+			if gotFound {
+				if entry.CarrierID != tt.wantID {
+					t.Errorf("LookupInsurance(%q) carrierID = %q, want %q", tt.input, entry.CarrierID, tt.wantID)
+				}
+				if entry.Routing != tt.wantRouting {
+					t.Errorf("LookupInsurance(%q) routing = %q, want %q", tt.input, entry.Routing, tt.wantRouting)
+				}
 			}
 		})
 	}

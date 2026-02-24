@@ -51,6 +51,7 @@ advancedmd-token-management/
 │   ├── domain/
 │   │   ├── token.go             # Token model + URL transforms
 │   │   ├── patient.go           # Patient model + DOB normalization
+│   │   ├── insurance.go         # Insurance routing rules + carrier maps
 │   │   └── scheduler.go         # Scheduler models + availability
 │   ├── auth/
 │   │   ├── authenticator.go     # 2-step AdvancedMD authentication
@@ -221,11 +222,15 @@ curl -X POST \
   "name": "SMITH,JOHN",
   "dob": "01/15/1980",
   "phone": "555-123-4567",
-  "insuranceCarrier": "BLUE CROSS BLUE SHIELD OF"
+  "insuranceCarrier": "HUMANA MEDICARE",
+  "insuranceCarrierId": "car40906",
+  "routing": "bach_only",
+  "allowedProviders": ["Dr. Bach"],
+  "routingAmbiguous": false
 }
 ```
 
-> **Note:** `insuranceCarrier` is populated by calling AdvancedMD's `getdemographic` API (with `class="demographics"`) after patient verification. If the patient has no insurance on file, this field is omitted.
+> **Note:** Insurance data is populated by calling AdvancedMD's `getdemographic` API (with `class="demographics"`) after patient verification. The `routing` field determines which providers the patient can see based on their insurance. If `routingAmbiguous` is `true`, the carrier ID is shared across plans and the agent should ask a clarifying question.
 
 **Response (multiple matches):**
 ```json
@@ -256,7 +261,7 @@ Creates a new patient in AdvancedMD and attaches insurance. Makes two sequential
 curl -X POST \
      -H "Authorization: Bearer YOUR_API_SECRET" \
      -H "Content-Type: application/json" \
-     -d '{"firstName":"John","lastName":"Smith","dob":"01/15/1990","email":"john@example.com","phone":"8015551234","insuranceProvider":"aetna","subscriberNum":"ABC123"}' \
+     -d '{"firstName":"John","lastName":"Smith","dob":"01/15/1990","email":"john@example.com","phone":"8015551234","street":"123 Main St","city":"Spring Hill","state":"FL","zip":"34609","sex":"male","insurance":"Humana Medicare","subscriberName":"John Smith","subscriberNum":"H12345678"}' \
      https://your-app.railway.app/api/add-patient
 ```
 
@@ -266,16 +271,21 @@ curl -X POST \
   "firstName": "John",
   "lastName": "Smith",
   "dob": "01/15/1990",
-  "email": "john@example.com",
   "phone": "8015551234",
-  "insuranceProvider": "aetna",
-  "subscriberNum": "ABC123"
+  "email": "john@example.com",
+  "street": "123 Main St",
+  "aptSuite": "",
+  "city": "Spring Hill",
+  "state": "FL",
+  "zip": "34609",
+  "sex": "male",
+  "insurance": "Humana Medicare",
+  "subscriberName": "John Smith",
+  "subscriberNum": "H12345678"
 }
 ```
 
-All 7 fields are required.
-
-**Supported Insurance Providers:** `blue cross blue shield`, `bcbs`, `bcbs federal`, `bcbs ma`, `aetna`, `cigna`, `united healthcare`, `uhc`, `medicare`, `medicaid`, `tricare`, `tricare for life` (case-insensitive).
+**Supported Insurance Plans:** 44 accepted plans mapped to carrier IDs and routing rules. See `INSURANCE_CROSSWALK.md` for the full list. The `insurance` field accepts the plan name (case-insensitive, e.g., "Humana Medicare", "Florida Blue", "Aetna").
 
 **Response (success):**
 ```json
@@ -284,6 +294,8 @@ All 7 fields are required.
   "patientId": "6034372",
   "name": "SMITH,JOHN",
   "dob": "01/15/1990",
+  "routing": "bach_only",
+  "allowedProviders": ["Dr. Bach"],
   "message": "Patient created and insurance attached successfully"
 }
 ```
@@ -310,7 +322,8 @@ All 7 fields are required.
 | Scenario | HTTP | Status |
 |----------|------|--------|
 | Missing/invalid input | 400 | `error` |
-| Unknown insurance provider | 400 | `error` |
+| Unknown insurance name | 400 | `partial` (patient created, insurance not attached) |
+| Insurance not accepted at Spring Hill | 400 | `partial` (patient created, routing rejected) |
 | Token retrieval fails | 500 | `error` |
 | addpatient fails | 500 | `error` |
 | addpatient OK, addinsurance fails | 500 | `partial` (includes patientId) |
@@ -334,7 +347,8 @@ curl -X POST \
 {
   "date": "2026-02-03",
   "provider": "Bach",
-  "office": "spring hill"
+  "office": "spring hill",
+  "routing": "bach_only"
 }
 ```
 
@@ -343,6 +357,7 @@ curl -X POST \
 | `date` | Yes | Date in YYYY-MM-DD format |
 | `provider` | No | Filter by provider name (partial match, case-insensitive) |
 | `office` | No | Filter by office (e.g., "Spring Hill", "Hollywood", "Crystal River") |
+| `routing` | No | Insurance routing rule from verify/add-patient (e.g., `bach_only`, `bach_licht`, `all_three`). Filters providers server-side. |
 
 **Response:**
 ```json
@@ -416,6 +431,19 @@ Only the following providers at Spring Hill are exposed (live AMD IDs, updated 2
 Spring Hill facility ID: `1568`
 
 To add/remove providers, edit `AllowedColumns` in `internal/domain/scheduler.go`.
+
+#### Insurance-Based Routing
+
+When the `routing` parameter is provided, the availability endpoint filters providers server-side based on the patient's insurance plan:
+
+| Routing Rule | Allowed Providers |
+|-------------|-------------------|
+| `not_accepted` | None (should not call availability) |
+| `bach_only` | Dr. Bach only |
+| `bach_licht` | Dr. Bach + Dr. Licht |
+| `all_three` | All 3 providers (default) |
+
+The routing value comes from the `verify-patient` or `add-patient` response. See `INSURANCE_CROSSWALK.md` for the complete plan-to-routing mapping.
 
 #### Booking Appointments
 
@@ -533,7 +561,8 @@ Create a server tool for adding patients with insurance. This calls the middlewa
   "dob": "{{date_of_birth}}",
   "email": "{{email}}",
   "phone": "{{phone}}",
-  "insuranceProvider": "{{insurance_provider}}",
+  "insurance": "{{insurance_name}}",
+  "subscriberName": "{{subscriber_name}}",
   "subscriberNum": "{{subscriber_number}}"
 }
 ```

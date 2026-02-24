@@ -374,7 +374,8 @@ type AMDCarrier struct {
 }
 
 // GetDemographic fetches patient demographic info including insurance.
-func (c *AdvancedMDClient) GetDemographic(ctx context.Context, tokenData *domain.TokenData, patientID string) (string, error) {
+// Returns the carrier name (human-readable) and carrier ID (e.g., "car40906").
+func (c *AdvancedMDClient) GetDemographic(ctx context.Context, tokenData *domain.TokenData, patientID string) (carrierName string, carrierID string, err error) {
 	msgTime := time.Now().Format("01/02/2006 03:04:05 PM")
 
 	payload := map[string]interface{}{
@@ -388,64 +389,64 @@ func (c *AdvancedMDClient) GetDemographic(ctx context.Context, tokenData *domain
 
 	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
 	if err != nil {
-		return "", fmt.Errorf("getdemographic request failed: %w", err)
+		return "", "", fmt.Errorf("getdemographic request failed: %w", err)
 	}
 
 	var resp AMDDemographicResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse demographic response: %w", err)
+		return "", "", fmt.Errorf("failed to parse demographic response: %w", err)
 	}
 
 	if resp.PPMDResults.Error != nil {
 		if errStr, ok := resp.PPMDResults.Error.(string); ok && errStr != "" {
-			return "", fmt.Errorf("getdemographic error: %s", errStr)
+			return "", "", fmt.Errorf("getdemographic error: %s", errStr)
 		}
 	}
 
 	// Parse insplanlist to get the carrier ID
 	if resp.PPMDResults.Results.PatientList.Patient.InsPlanList == nil {
-		return "", nil
+		return "", "", nil
 	}
 
 	var planList AMDInsPlanList
 	if err := json.Unmarshal(resp.PPMDResults.Results.PatientList.Patient.InsPlanList, &planList); err != nil {
-		return "", nil
+		return "", "", nil
 	}
 	if planList.InsPlan == nil {
-		return "", nil
+		return "", "", nil
 	}
 
 	// Get carrier ID from first insurance plan
-	var carrierID string
+	var rawCarrierID string
 	var single AMDInsPlan
 	if err := json.Unmarshal(planList.InsPlan, &single); err == nil && single.Carrier != "" {
-		carrierID = single.Carrier
+		rawCarrierID = single.Carrier
 	} else {
 		var plans []AMDInsPlan
 		if err := json.Unmarshal(planList.InsPlan, &plans); err == nil && len(plans) > 0 {
-			carrierID = plans[0].Carrier
+			rawCarrierID = plans[0].Carrier
 		}
 	}
 
-	if carrierID == "" {
-		return "", nil
+	if rawCarrierID == "" {
+		return "", "", nil
 	}
 
 	// Look up carrier name from carrierlist
 	if resp.PPMDResults.Results.CarrierList == nil {
-		return carrierID, nil
+		return rawCarrierID, rawCarrierID, nil
 	}
 
 	var carrierList AMDCarrierList
 	if err := json.Unmarshal(resp.PPMDResults.Results.CarrierList, &carrierList); err != nil {
-		return carrierID, nil
+		return rawCarrierID, rawCarrierID, nil
 	}
 
 	// Try single carrier
 	var singleCarrier AMDCarrier
 	if err := json.Unmarshal(carrierList.Carrier, &singleCarrier); err == nil {
-		if singleCarrier.ID == carrierID {
-			return singleCarrier.Name, nil
+		if singleCarrier.ID == rawCarrierID {
+			return singleCarrier.Name, rawCarrierID, nil
 		}
 	}
 
@@ -453,13 +454,13 @@ func (c *AdvancedMDClient) GetDemographic(ctx context.Context, tokenData *domain
 	var carriers []AMDCarrier
 	if err := json.Unmarshal(carrierList.Carrier, &carriers); err == nil {
 		for _, c := range carriers {
-			if c.ID == carrierID {
-				return c.Name, nil
+			if c.ID == rawCarrierID {
+				return c.Name, rawCarrierID, nil
 			}
 		}
 	}
 
-	return carrierID, nil
+	return rawCarrierID, rawCarrierID, nil
 }
 
 // convertPatients converts AMD patient records to domain patients.

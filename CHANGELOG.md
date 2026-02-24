@@ -1,6 +1,51 @@
 # Changelog
 
-## [Unreleased] - 2026-02-19
+## [Unreleased] - 2026-02-24
+
+### Insurance Crosswalk — Server-Side Provider Routing
+
+Replaced the generic 7-carrier map (test-environment IDs) with 44 plan-specific entries using live Spring Hill carrier IDs. Insurance routing is now enforced server-side on the availability endpoint.
+
+#### Added
+
+- **`internal/domain/insurance.go`** — New file with all routing logic:
+  - `RoutingRule` type with 4 tiers: `not_accepted`, `bach_only`, `bach_licht`, `all_three`
+  - `InsuranceNameMap` — 44 insurance plan names → carrier ID + routing rule
+  - `CarrierRoutingMap` — carrier ID → routing rule for existing patients (unambiguous carriers only)
+  - `AmbiguousCarriers` — 5 shared carrier IDs that span multiple routing tiers
+  - `ColumnsForRouting()` — returns allowed column IDs for a routing rule
+  - `ProvidersForRouting()` — returns display names for a routing rule
+  - `LookupInsurance()` — normalized name lookup for new patients
+  - `RoutingForCarrierID()` — returns routing + ambiguity flag for existing patients
+  - `ParseRoutingRule()` — parses routing string from request param
+
+- **`verify-patient` response** — New fields: `insuranceCarrierId`, `routing`, `allowedProviders`, `routingAmbiguous`
+
+- **`add-patient` response** — New fields: `routing`, `allowedProviders`
+
+- **`availability` request** — New `routing` parameter filters columns server-side before AMD API calls
+
+#### Changed
+
+- **`internal/domain/patient.go`** — Removed `CarrierMap`, `LookupCarrierID`, `ValidCarrierNames` (replaced by `insurance.go`)
+
+- **`internal/clients/advancedmd_xmlrpc.go`** — `GetDemographic` now returns `(carrierName, carrierID, error)` instead of `(string, error)`
+
+- **`internal/http/handlers.go`**:
+  - verify-patient: Populates routing fields from `RoutingForCarrierID()`
+  - add-patient: `carrierId` field → `insurance` field; uses `LookupInsurance()` for carrier ID + routing; rejects `not_accepted` insurance
+  - availability: Applies `ColumnsForRouting()` filter before fetching AMD data
+
+- **`internal/workspace/files/TOOLS.md`** — Updated verify_patient (routing fields), add_patient (44-name insurance list, `insurance` field), get_availability (`routing` parameter)
+
+#### Fixed
+
+- **`internal/domain/scheduler_test.go`** — Updated stale Spring Hill facility IDs from test env (`1032`) to live (`1568`)
+- **`internal/domain/patient_test.go`** — Replaced `TestLookupCarrierID` with `TestLookupInsurance`
+
+---
+
+## [Previous] - 2026-02-19
 
 ### Live AMD Keys for Spring Hill
 

@@ -36,14 +36,18 @@ type VerifyPatientRequest struct {
 
 // VerifyPatientResponse is returned on successful patient verification.
 type VerifyPatientResponse struct {
-	Status           string         `json:"status"`
-	PatientID        string         `json:"patientId,omitempty"`
-	Name             string         `json:"name,omitempty"`
-	DOB              string         `json:"dob,omitempty"`
-	Phone            string         `json:"phone,omitempty"`
-	InsuranceCarrier string         `json:"insuranceCarrier,omitempty"`
-	Message          string         `json:"message,omitempty"`
-	Matches          []PatientMatch `json:"matches,omitempty"`
+	Status             string         `json:"status"`
+	PatientID          string         `json:"patientId,omitempty"`
+	Name               string         `json:"name,omitempty"`
+	DOB                string         `json:"dob,omitempty"`
+	Phone              string         `json:"phone,omitempty"`
+	InsuranceCarrier   string         `json:"insuranceCarrier,omitempty"`
+	InsuranceCarrierID string         `json:"insuranceCarrierId,omitempty"`
+	Routing            string         `json:"routing,omitempty"`
+	AllowedProviders   []string       `json:"allowedProviders,omitempty"`
+	RoutingAmbiguous   bool           `json:"routingAmbiguous,omitempty"`
+	Message            string         `json:"message,omitempty"`
+	Matches            []PatientMatch `json:"matches,omitempty"`
 }
 
 // PatientMatch provides minimal info for disambiguation.
@@ -127,29 +131,31 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 
 // AddPatientRequest is the expected JSON body for patient creation.
 type AddPatientRequest struct {
-	FirstName         string `json:"firstName"`
-	LastName          string `json:"lastName"`
-	DOB               string `json:"dob"`
-	Phone             string `json:"phone"`
-	Email             string `json:"email"`
-	Street            string `json:"street"`
-	AptSuite          string `json:"aptSuite"`
-	City              string `json:"city"`
-	State             string `json:"state"`
-	Zip               string `json:"zip"`
-	Sex               string `json:"sex"`
-	CarrierID      string `json:"carrierId"`
+	FirstName      string `json:"firstName"`
+	LastName       string `json:"lastName"`
+	DOB            string `json:"dob"`
+	Phone          string `json:"phone"`
+	Email          string `json:"email"`
+	Street         string `json:"street"`
+	AptSuite       string `json:"aptSuite"`
+	City           string `json:"city"`
+	State          string `json:"state"`
+	Zip            string `json:"zip"`
+	Sex            string `json:"sex"`
+	Insurance      string `json:"insurance"`
 	SubscriberName string `json:"subscriberName"`
 	SubscriberNum  string `json:"subscriberNum"`
 }
 
 // AddPatientResponse is returned after creating a patient.
 type AddPatientResponse struct {
-	Status    string `json:"status"`
-	PatientID string `json:"patientId,omitempty"`
-	Name      string `json:"name,omitempty"`
-	DOB       string `json:"dob,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Status           string   `json:"status"`
+	PatientID        string   `json:"patientId,omitempty"`
+	Name             string   `json:"name,omitempty"`
+	DOB              string   `json:"dob,omitempty"`
+	Routing          string   `json:"routing,omitempty"`
+	AllowedProviders []string `json:"allowedProviders,omitempty"`
+	Message          string   `json:"message,omitempty"`
 }
 
 // HandleAddPatient creates a new patient in AdvancedMD and attaches insurance.
@@ -167,8 +173,8 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("add-patient: received request: firstName=%q lastName=%q dob=%q phone=%q email=%q street=%q aptSuite=%q city=%q state=%q zip=%q sex=%q carrierId=%q subscriberName=%q subscriberNum=%q",
-		req.FirstName, req.LastName, req.DOB, req.Phone, req.Email, req.Street, req.AptSuite, req.City, req.State, req.Zip, req.Sex, req.CarrierID, req.SubscriberName, req.SubscriberNum)
+	log.Printf("add-patient: received request: firstName=%q lastName=%q dob=%q phone=%q email=%q street=%q aptSuite=%q city=%q state=%q zip=%q sex=%q insurance=%q subscriberName=%q subscriberNum=%q",
+		req.FirstName, req.LastName, req.DOB, req.Phone, req.Email, req.Street, req.AptSuite, req.City, req.State, req.Zip, req.Sex, req.Insurance, req.SubscriberName, req.SubscriberNum)
 
 	// Validate required fields (aptSuite is optional)
 	missing := []string{}
@@ -202,8 +208,8 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	if req.Sex == "" {
 		missing = append(missing, "sex")
 	}
-	if req.CarrierID == "" {
-		missing = append(missing, "carrierId")
+	if req.Insurance == "" {
+		missing = append(missing, "insurance")
 	}
 	if req.SubscriberName == "" {
 		missing = append(missing, "subscriberName")
@@ -266,8 +272,8 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	strippedID := domain.StripPatientPrefix(rawPatientID)
 
-	// Look up carrier ID from name
-	carrierID, ok := domain.LookupCarrierID(req.CarrierID)
+	// Look up insurance entry from name
+	insEntry, ok := domain.LookupInsurance(req.Insurance)
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
@@ -275,13 +281,26 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 			PatientID: strippedID,
 			Name:      patientName,
 			DOB:       normalizedDOB,
-			Message:   fmt.Sprintf("Patient created but insurance carrier not recognized: %q. Valid carriers: %s", req.CarrierID, strings.Join(domain.ValidCarrierNames(), ", ")),
+			Message:   fmt.Sprintf("Patient created but insurance not recognized: %q. Please use an insurance name from the accepted list.", req.Insurance),
+		})
+		return
+	}
+
+	// Reject insurance not accepted at Spring Hill
+	if insEntry.Routing == domain.RoutingNotAccepted {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:    "partial",
+			PatientID: strippedID,
+			Name:      patientName,
+			DOB:       normalizedDOB,
+			Message:   fmt.Sprintf("%s is not accepted at Spring Hill. The patient may self-pay or contact the office for options.", req.Insurance),
 		})
 		return
 	}
 
 	// Attach insurance
-	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, carrierID, req.SubscriberNum); err != nil {
+	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, insEntry.CarrierID, req.SubscriberNum); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",
@@ -294,11 +313,13 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(AddPatientResponse{
-		Status:    "created",
-		PatientID: strippedID,
-		Name:      patientName,
-		DOB:       normalizedDOB,
-		Message:   "Patient created and insurance attached successfully",
+		Status:           "created",
+		PatientID:        strippedID,
+		Name:             patientName,
+		DOB:              normalizedDOB,
+		Routing:          string(insEntry.Routing),
+		AllowedProviders: domain.ProvidersForRouting(insEntry.Routing),
+		Message:          "Patient created and insurance attached successfully",
 	})
 }
 
@@ -388,18 +409,29 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 
 	case 1:
 		p := matchingPatients[0]
-		insuranceCarrier, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
+		carrierName, carrierID, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
 		if err != nil {
 			log.Printf("WARNING: failed to get demographics for patient %s: %v", p.ID, err)
 		}
-		json.NewEncoder(w).Encode(VerifyPatientResponse{
+
+		resp := VerifyPatientResponse{
 			Status:           "verified",
 			PatientID:        p.ID,
 			Name:             p.FullName,
 			DOB:              p.DOB,
 			Phone:            p.Phone,
-			InsuranceCarrier: insuranceCarrier,
-		})
+			InsuranceCarrier: carrierName,
+		}
+
+		if carrierID != "" {
+			resp.InsuranceCarrierID = carrierID
+			routing, ambiguous := domain.RoutingForCarrierID(carrierID)
+			resp.Routing = string(routing)
+			resp.AllowedProviders = domain.ProvidersForRouting(routing)
+			resp.RoutingAmbiguous = ambiguous
+		}
+
+		json.NewEncoder(w).Encode(resp)
 		return
 
 	default:
@@ -408,18 +440,29 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			upperFirstName := strings.ToUpper(req.FirstName)
 			for _, p := range matchingPatients {
 				if strings.HasPrefix(p.FirstName, upperFirstName) {
-					insuranceCarrier, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
+					carrierName, carrierID, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
 					if err != nil {
 						log.Printf("WARNING: failed to get demographics for patient %s: %v", p.ID, err)
 					}
-					json.NewEncoder(w).Encode(VerifyPatientResponse{
+
+					resp := VerifyPatientResponse{
 						Status:           "verified",
 						PatientID:        p.ID,
 						Name:             p.FullName,
 						DOB:              p.DOB,
 						Phone:            p.Phone,
-						InsuranceCarrier: insuranceCarrier,
-					})
+						InsuranceCarrier: carrierName,
+					}
+
+					if carrierID != "" {
+						resp.InsuranceCarrierID = carrierID
+						routing, ambiguous := domain.RoutingForCarrierID(carrierID)
+						resp.Routing = string(routing)
+						resp.AllowedProviders = domain.ProvidersForRouting(routing)
+						resp.RoutingAmbiguous = ambiguous
+					}
+
+					json.NewEncoder(w).Encode(resp)
 					return
 				}
 			}
@@ -448,6 +491,7 @@ type AvailabilityRequest struct {
 	Date     string `json:"date"`     // Required: YYYY-MM-DD format
 	Provider string `json:"provider"` // Optional: filter by provider name
 	Office   string `json:"office"`   // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
+	Routing  string `json:"routing"`  // Optional: routing rule from verify/add-patient (e.g., "bach_only")
 }
 
 // providerDisplayNames maps profile IDs to friendly display names.
@@ -490,7 +534,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	log.Printf("availability: date=%s provider=%q office=%q", req.Date, req.Provider, req.Office)
+	log.Printf("availability: date=%s provider=%q office=%q routing=%q", req.Date, req.Provider, req.Office, req.Routing)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -558,6 +602,24 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 				}
 			}
 			allowedColumns = append(allowedColumns, col)
+		}
+	}
+
+	// Apply routing filter (insurance-based provider restriction)
+	if req.Routing != "" {
+		rule := domain.ParseRoutingRule(req.Routing)
+		routingColumns := domain.ColumnsForRouting(rule)
+		if routingColumns != nil {
+			var filtered []domain.SchedulerColumn
+			for _, col := range allowedColumns {
+				if routingColumns[col.ID] {
+					filtered = append(filtered, col)
+				}
+			}
+			allowedColumns = filtered
+		} else {
+			// RoutingNotAccepted — no columns allowed
+			allowedColumns = nil
 		}
 	}
 
