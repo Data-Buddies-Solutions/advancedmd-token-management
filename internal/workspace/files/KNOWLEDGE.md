@@ -1,5 +1,7 @@
-# Abita Eye Clinic – Spring Hill
+# Knowledge Base: Abita Eye Clinic, Spring Hill
+
 ## Scheduling & General Knowledge Base
+
 Location Scope: Spring Hill only
 Purpose: General practice information only. No diagnosis or medical advice.
 
@@ -19,6 +21,10 @@ To determine the urgency of a standard patient inquiry, the following informatio
 2. **Duration:** How long has the symptom been present?
 3. **Vision Loss:** Is the patient experiencing any sudden or gradual loss of vision?
 
+If a patient reports new flashes or floaters, treat this as urgent and offer the next available appointment, then proceed to follow-up.
+
+If flashes or floaters are not new or unchanged, continue with standard scheduling flow without urgent emphasis.
+
 ---
 
 ## Location + Contact Information
@@ -29,8 +35,8 @@ Email: newpatient@abitaeye.com
 Phone Number: (727) 591-9997
 Fax: (305)-675-3370
 
-
 Hours of Operation:
+
 - Monday – Friday: 8:30 AM – 4:30 PM
 - Closed Saturday and Sunday
 
@@ -57,17 +63,20 @@ This list is general and not exhaustive.
 ## Providers and Area of Expertise – Spring Hill
 
 ### Dr. Bach
+
 - Pediatrics
 - Adult Strabismus
 - Double Vision
 
 ### Dr. Noel
+
 - Comprehensive Ophthalmology
 - Retina
 - Uveitis
 - Glaucoma
 
 ### Dr. Licht
+
 - Comprehensive Ophthalmology
 - Oculoplastic (Eyelid Surgery)
 - Glaucoma
