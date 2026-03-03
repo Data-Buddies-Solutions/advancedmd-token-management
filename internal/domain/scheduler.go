@@ -83,6 +83,7 @@ type AvailabilityResponse struct {
 	SearchedDate string                 `json:"searchedDate"`
 	Date         string                 `json:"date"`
 	Location     string                 `json:"location"`
+	Message      string                 `json:"message,omitempty"`
 	Providers    []ProviderAvailability `json:"providers"`
 }
 

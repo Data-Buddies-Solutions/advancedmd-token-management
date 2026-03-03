@@ -729,6 +729,26 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		log.Printf("availability: no slots on %s, searching forward to %s", dateStr, searchDate.Format("2006-01-02"))
 	}
 
+	// Check if any provider has availability after the search loop
+	hasAnyAvailability := false
+	for _, p := range providers {
+		if p.TotalAvailable > 0 {
+			hasAnyAvailability = true
+			break
+		}
+	}
+
+	if !hasAnyAvailability {
+		json.NewEncoder(w).Encode(domain.AvailabilityResponse{
+			SearchedDate: req.Date,
+			Date:         "",
+			Location:     locationName,
+			Message:      "No availability found within 14 days of requested date",
+			Providers:    []domain.ProviderAvailability{},
+		})
+		return
+	}
+
 	json.NewEncoder(w).Encode(domain.AvailabilityResponse{
 		SearchedDate: req.Date,
 		Date:         searchDate.Format("Monday, January 2, 2006"),

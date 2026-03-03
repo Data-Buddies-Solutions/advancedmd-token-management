@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"advancedmd-token-management/internal/clients"
+	"advancedmd-token-management/internal/domain"
 )
 
 func TestHandleHealth(t *testing.T) {
@@ -172,6 +174,125 @@ func TestRequestIDMiddleware(t *testing.T) {
 			t.Errorf("Expected 'existing-id-123', got '%s'", requestID)
 		}
 	})
+}
+
+func TestCalculateAvailableSlots_AllBlocked(t *testing.T) {
+	eastern, _ := time.LoadLocation("America/New_York")
+	// Use a future Monday so it's not "today"
+	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern)
+	nowEastern := time.Date(2026, 3, 3, 10, 0, 0, 0, eastern)
+
+	col := domain.SchedulerColumn{
+		ID:              "1513",
+		Name:            "DR. BACH - BP",
+		StartTime:       "08:00",
+		EndTime:         "17:00",
+		Interval:        15,
+		MaxApptsPerSlot: 0,
+		Workweek:        62, // Mon-Fri
+	}
+
+	// Block hold covering the entire work day
+	blockHolds := []domain.BlockHold{
+		{
+			StartDateTime: time.Date(2026, 6, 1, 8, 0, 0, 0, eastern),
+			EndDateTime:   time.Date(2026, 6, 1, 17, 0, 0, 0, eastern),
+			Note:          "OUT OF THE OFFICE",
+		},
+	}
+
+	slots := calculateAvailableSlots(col, nil, blockHolds, date, nowEastern)
+
+	if len(slots) != 0 {
+		t.Errorf("Expected 0 slots when entire day is blocked, got %d", len(slots))
+	}
+}
+
+func TestCalculateAvailableSlots_AllBookedAtMax(t *testing.T) {
+	eastern, _ := time.LoadLocation("America/New_York")
+	nowEastern := time.Date(2026, 3, 3, 10, 0, 0, 0, eastern)
+
+	col := domain.SchedulerColumn{
+		ID:              "1551",
+		Name:            "DR. LICHT",
+		StartTime:       "09:00",
+		EndTime:         "10:00",
+		Interval:        15,
+		MaxApptsPerSlot: 2, // Max 2 per slot
+		Workweek:        24, // Wed-Thu
+	}
+
+	// June 3 2026 is a Wednesday
+	date := time.Date(2026, 6, 3, 0, 0, 0, 0, eastern)
+
+	// Fill every slot with 2 appointments
+	var appointments []domain.Appointment
+	for h := 9; h < 10; h++ {
+		for m := 0; m < 60; m += 15 {
+			for i := 0; i < 2; i++ {
+				appointments = append(appointments, domain.Appointment{
+					StartDateTime: time.Date(2026, 6, 3, h, m, 0, 0, eastern),
+					Duration:      15,
+				})
+			}
+		}
+	}
+
+	slots := calculateAvailableSlots(col, appointments, nil, date, nowEastern)
+
+	if len(slots) != 0 {
+		t.Errorf("Expected 0 slots when all slots at max capacity, got %d", len(slots))
+	}
+}
+
+func TestNoAvailabilityResponse_HasMessageAndEmptyProviders(t *testing.T) {
+	resp := domain.AvailabilityResponse{
+		SearchedDate: "2026-05-15",
+		Date:         "",
+		Location:     "ABITA EYE GROUP SPRING HILL",
+		Message:      "No availability found within 14 days of requested date",
+		Providers:    []domain.ProviderAvailability{},
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Failed to marshal response: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	json.Unmarshal(data, &decoded)
+
+	if decoded["date"] != "" {
+		t.Errorf("Expected empty date, got %q", decoded["date"])
+	}
+	if decoded["message"] != "No availability found within 14 days of requested date" {
+		t.Errorf("Expected no-availability message, got %q", decoded["message"])
+	}
+	providers := decoded["providers"].([]interface{})
+	if len(providers) != 0 {
+		t.Errorf("Expected empty providers array, got %d", len(providers))
+	}
+}
+
+func TestAvailabilityResponse_OmitsMessageWhenEmpty(t *testing.T) {
+	resp := domain.AvailabilityResponse{
+		SearchedDate: "2026-05-15",
+		Date:         "Monday, June 1, 2026",
+		Location:     "ABITA EYE GROUP SPRING HILL",
+		Providers:    []domain.ProviderAvailability{},
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Failed to marshal response: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	json.Unmarshal(data, &decoded)
+
+	if _, exists := decoded["message"]; exists {
+		t.Error("Expected message field to be omitted when empty")
+	}
 }
 
 func TestRouter(t *testing.T) {
