@@ -4,6 +4,41 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-02
+
+### Source: Production review — full middleware walkthrough before go-live
+
+---
+
+### Workspace structure changes
+
+**Deleted: `workspace.go`**
+- The `go:embed` loader was dead code — prompt files are managed directly in ElevenLabs, not loaded as dynamic variables
+- `Variables()` was also broken: it referenced `IDENTITY.md` and `USER.md` which no longer existed, causing it to error on every call and load zero prompt files
+- Removing the loader has no impact — prompts were never being sent via dynamic variables
+
+**Deleted: `files/` subdirectory**
+- Prompt files moved from `internal/workspace/files/` to `internal/workspace/`
+- Flatter structure, no Go code in the directory
+
+**Removed: `IDENTITY.md` and `USER.md` references**
+- These files no longer exist in the repo
+- Were still referenced in the (now-deleted) `workspace.go` mapping
+
+**Added: `KNOWLEDGE.md` tracking**
+- File existed but was never included in the `workspace.go` mapping
+- Now tracked alongside other prompt files in the workspace directory
+
+### Files NOT changed this round
+- **SOUL.md** — No changes
+- **TOOLS.md** — No changes
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
 ## 2026-02-19
 
 ### Source: Transcript review of 4 most recent calls
