@@ -243,6 +243,17 @@ Only `date` is required. `routing` comes from verify/add-patient response.
 
 Max 5 slots per provider. `totalAvailable` gives the full count.
 
+**No availability response** (when 14-day search exhausts):
+```json
+{
+  "searchedDate": "2026-05-15",
+  "date": "",
+  "location": "ABITA EYE GROUP SPRING HILL",
+  "message": "No availability found within 14 days of requested date",
+  "providers": []
+}
+```
+
 ## How It Works
 
 ### Token Lifecycle
