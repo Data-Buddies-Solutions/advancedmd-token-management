@@ -2,6 +2,8 @@ package clients
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,17 +11,38 @@ import (
 	"advancedmd-token-management/internal/domain"
 )
 
+// newTestXMLRPCClient creates a TLS test server and XMLRPC client wired together.
+func newTestXMLRPCClient(t *testing.T, handler http.Handler) (*AdvancedMDClient, *domain.TokenData, func()) {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	// Strip "https://" to match XmlrpcURL format (doXMLRPCRequest adds it back)
+	xmlrpcURL := server.URL[8:]
+
+	tokenData := &domain.TokenData{
+		Token:       "Bearer test-token",
+		CookieToken: "token=test-token",
+		XmlrpcURL:   xmlrpcURL,
+	}
+
+	return NewAdvancedMDClient(httpClient), tokenData, server.Close
+}
+
 func TestAdvancedMDClient_LookupPatient_SingleResult(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify headers
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Cookie") != "token=test-token" {
-			t.Errorf("Expected Cookie header 'token=test-token', got '%s'", r.Header.Get("Cookie"))
+			t.Errorf("Expected Cookie 'token=test-token', got %q", r.Header.Get("Cookie"))
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("Expected Content-Type 'application/json', got '%s'", r.Header.Get("Content-Type"))
+			t.Errorf("Expected Content-Type 'application/json', got %q", r.Header.Get("Content-Type"))
 		}
 
-		// Return single patient response
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
 			"PPMDResults": {
@@ -40,21 +63,10 @@ func TestAdvancedMDClient_LookupPatient_SingleResult(t *testing.T) {
 				}
 			}
 		}`))
-	}))
-	defer server.Close()
+	})
 
-	client := NewAdvancedMDClient(server.Client())
-
-	// Use server.URL without the http:// prefix, but change to use http in test
-	tokenData := &domain.TokenData{
-		Token:       "Bearer test-token",
-		CookieToken: "token=test-token",
-		XmlrpcURL:   server.URL[7:], // Remove "http://" prefix - test helper below handles this
-	}
-
-	// For testing, we need to override the https:// that LookupPatient adds
-	// Skip this test for now - requires refactoring to support http in tests
-	t.Skip("Test requires refactoring to support mock HTTP server")
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
 
 	patients, err := client.LookupPatient(context.Background(), tokenData, "Smith")
 	if err != nil {
@@ -66,28 +78,25 @@ func TestAdvancedMDClient_LookupPatient_SingleResult(t *testing.T) {
 	}
 
 	p := patients[0]
-	if p.ID != "123" { // Should strip "pat" prefix
-		t.Errorf("Expected ID '123', got '%s'", p.ID)
+	if p.ID != "123" {
+		t.Errorf("Expected ID '123' (stripped), got %q", p.ID)
 	}
 	if p.FullName != "SMITH,JOHN" {
-		t.Errorf("Expected FullName 'SMITH,JOHN', got '%s'", p.FullName)
+		t.Errorf("Expected FullName 'SMITH,JOHN', got %q", p.FullName)
 	}
 	if p.FirstName != "JOHN" {
-		t.Errorf("Expected FirstName 'JOHN', got '%s'", p.FirstName)
+		t.Errorf("Expected FirstName 'JOHN', got %q", p.FirstName)
 	}
 	if p.DOB != "01/15/1980" {
-		t.Errorf("Expected DOB '01/15/1980', got '%s'", p.DOB)
+		t.Errorf("Expected DOB '01/15/1980', got %q", p.DOB)
 	}
 	if p.Phone != "555-123-4567" {
-		t.Errorf("Expected Phone '555-123-4567', got '%s'", p.Phone)
+		t.Errorf("Expected Phone '555-123-4567', got %q", p.Phone)
 	}
 }
 
 func TestAdvancedMDClient_LookupPatient_MultipleResults(t *testing.T) {
-	t.Skip("Test requires refactoring to support mock HTTP server")
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Return multiple patients response
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
 			"PPMDResults": {
@@ -112,16 +121,10 @@ func TestAdvancedMDClient_LookupPatient_MultipleResults(t *testing.T) {
 				}
 			}
 		}`))
-	}))
-	defer server.Close()
+	})
 
-	client := NewAdvancedMDClient(server.Client())
-
-	tokenData := &domain.TokenData{
-		Token:       "Bearer test-token",
-		CookieToken: "token=test-token",
-		XmlrpcURL:   server.URL[7:],
-	}
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
 
 	patients, err := client.LookupPatient(context.Background(), tokenData, "Smith")
 	if err != nil {
@@ -133,17 +136,15 @@ func TestAdvancedMDClient_LookupPatient_MultipleResults(t *testing.T) {
 	}
 
 	if patients[0].FirstName != "JOHN" {
-		t.Errorf("Expected first patient's FirstName 'JOHN', got '%s'", patients[0].FirstName)
+		t.Errorf("Expected first patient FirstName 'JOHN', got %q", patients[0].FirstName)
 	}
 	if patients[1].FirstName != "JANE" {
-		t.Errorf("Expected second patient's FirstName 'JANE', got '%s'", patients[1].FirstName)
+		t.Errorf("Expected second patient FirstName 'JANE', got %q", patients[1].FirstName)
 	}
 }
 
 func TestAdvancedMDClient_LookupPatient_NoResults(t *testing.T) {
-	t.Skip("Test requires refactoring to support mock HTTP server")
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
 			"PPMDResults": {
@@ -154,16 +155,10 @@ func TestAdvancedMDClient_LookupPatient_NoResults(t *testing.T) {
 				}
 			}
 		}`))
-	}))
-	defer server.Close()
+	})
 
-	client := NewAdvancedMDClient(server.Client())
-
-	tokenData := &domain.TokenData{
-		Token:       "Bearer test-token",
-		CookieToken: "token=test-token",
-		XmlrpcURL:   server.URL[7:],
-	}
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
 
 	patients, err := client.LookupPatient(context.Background(), tokenData, "NoSuchName")
 	if err != nil {
@@ -172,6 +167,348 @@ func TestAdvancedMDClient_LookupPatient_NoResults(t *testing.T) {
 
 	if len(patients) != 0 {
 		t.Errorf("Expected 0 patients, got %d", len(patients))
+	}
+}
+
+func TestAdvancedMDClient_LookupPatient_RequestPayload(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload AMDLookupRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("Failed to decode request body: %v", err)
+		}
+
+		if payload.PPMDMsg.Action != "lookuppatient" {
+			t.Errorf("Expected action 'lookuppatient', got %q", payload.PPMDMsg.Action)
+		}
+		if payload.PPMDMsg.Class != "api" {
+			t.Errorf("Expected class 'api', got %q", payload.PPMDMsg.Class)
+		}
+		if payload.PPMDMsg.Name != "Smith" {
+			t.Errorf("Expected name 'Smith', got %q", payload.PPMDMsg.Name)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"PPMDResults":{"Results":{"patientlist":{"@itemcount":"0"}}}}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	_, err := client.LookupPatient(context.Background(), tokenData, "Smith")
+	if err != nil {
+		t.Fatalf("LookupPatient failed: %v", err)
+	}
+}
+
+func TestAdvancedMDClient_AddPatient(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat789",
+							"@name": "DOE,JANE",
+							"@respparty": "resp123"
+						}
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	patientID, respPartyID, name, err := client.AddPatient(context.Background(), tokenData, AddPatientParams{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		DOB:       "03/20/1990",
+		Phone:     "(555)123-4567",
+		Email:     "jane@example.com",
+		Street:    "123 Main St",
+		City:      "Springfield",
+		State:     "FL",
+		Zip:       "33333",
+		Sex:       "F",
+	})
+	if err != nil {
+		t.Fatalf("AddPatient failed: %v", err)
+	}
+
+	if patientID != "pat789" {
+		t.Errorf("Expected patientID 'pat789', got %q", patientID)
+	}
+	if respPartyID != "resp123" {
+		t.Errorf("Expected respPartyID 'resp123', got %q", respPartyID)
+	}
+	if name != "DOE,JANE" {
+		t.Errorf("Expected name 'DOE,JANE', got %q", name)
+	}
+}
+
+func TestAdvancedMDClient_AddPatient_AMDError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Error": {"@message": "Duplicate patient detected"}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	_, _, _, err := client.AddPatient(context.Background(), tokenData, AddPatientParams{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		DOB:       "03/20/1990",
+		Phone:     "(555)123-4567",
+		Email:     "jane@example.com",
+		Street:    "123 Main St",
+		City:      "Springfield",
+		State:     "FL",
+		Zip:       "33333",
+		Sex:       "F",
+	})
+
+	if err == nil {
+		t.Fatal("Expected error for AMD error response, got nil")
+	}
+}
+
+func TestAdvancedMDClient_AddInsurance(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"PPMDResults":{"Results":{}}}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	err := client.AddInsurance(context.Background(), tokenData, "pat123", "resp123", "car40906", "SUB12345")
+	if err != nil {
+		t.Fatalf("AddInsurance failed: %v", err)
+	}
+}
+
+func TestAdvancedMDClient_AddInsurance_Error(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"PPMDResults":{"Error":"Insurance attachment failed"}}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	err := client.AddInsurance(context.Background(), tokenData, "pat123", "resp123", "car40906", "SUB12345")
+	if err == nil {
+		t.Fatal("Expected error for failed insurance attachment, got nil")
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat123",
+							"insplanlist": {
+								"insplan": {
+									"@carrier": "car40906"
+								}
+							}
+						}
+					},
+					"carrierlist": {
+						"carrier": {
+							"@id": "car40906",
+							"@name": "HUMANA MEDICARE"
+						}
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	carrierName, carrierID, err := client.GetDemographic(context.Background(), tokenData, "pat123")
+	if err != nil {
+		t.Fatalf("GetDemographic failed: %v", err)
+	}
+
+	if carrierName != "HUMANA MEDICARE" {
+		t.Errorf("Expected carrier name 'HUMANA MEDICARE', got %q", carrierName)
+	}
+	if carrierID != "car40906" {
+		t.Errorf("Expected carrier ID 'car40906', got %q", carrierID)
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic_NoInsurance(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat123"
+						}
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	carrierName, carrierID, err := client.GetDemographic(context.Background(), tokenData, "pat123")
+	if err != nil {
+		t.Fatalf("GetDemographic failed: %v", err)
+	}
+
+	if carrierName != "" {
+		t.Errorf("Expected empty carrier name, got %q", carrierName)
+	}
+	if carrierID != "" {
+		t.Errorf("Expected empty carrier ID, got %q", carrierID)
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic_MultipleCarriers(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat123",
+							"insplanlist": {
+								"insplan": {"@carrier": "car40906"}
+							}
+						}
+					},
+					"carrierlist": {
+						"carrier": [
+							{"@id": "car40887", "@name": "AETNA"},
+							{"@id": "car40906", "@name": "HUMANA MEDICARE"}
+						]
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	carrierName, carrierID, err := client.GetDemographic(context.Background(), tokenData, "pat123")
+	if err != nil {
+		t.Fatalf("GetDemographic failed: %v", err)
+	}
+
+	if carrierName != "HUMANA MEDICARE" {
+		t.Errorf("Expected carrier name 'HUMANA MEDICARE', got %q", carrierName)
+	}
+	if carrierID != "car40906" {
+		t.Errorf("Expected carrier ID 'car40906', got %q", carrierID)
+	}
+}
+
+func TestAdvancedMDClient_GetSchedulerSetup(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"columnlist": {
+						"column": [
+							{
+								"@id": "col1513",
+								"@name": "DR. BACH - BP",
+								"@profile": "prof620",
+								"@facility": "fac1568",
+								"columnsetting": {
+									"@start": "0800",
+									"@end": "1700",
+									"@interval": "15",
+									"@maxapptsperslot": "0",
+									"@workweek": "1111100"
+								}
+							}
+						]
+					},
+					"profilelist": {
+						"profile": [
+							{"@id": "prof620", "@code": "ABCH", "@name": "BACH, AUSTIN"}
+						]
+					},
+					"facilitylist": {
+						"facility": [
+							{"@id": "fac1568", "@code": "ABSPR", "@name": "ABITA EYE GROUP SPRING HILL"}
+						]
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	setup, err := client.GetSchedulerSetup(context.Background(), tokenData)
+	if err != nil {
+		t.Fatalf("GetSchedulerSetup failed: %v", err)
+	}
+
+	if len(setup.Columns) != 1 {
+		t.Fatalf("Expected 1 column, got %d", len(setup.Columns))
+	}
+	col := setup.Columns[0]
+	if col.ID != "1513" {
+		t.Errorf("Expected column ID '1513' (stripped), got %q", col.ID)
+	}
+	if col.ProfileID != "620" {
+		t.Errorf("Expected profile ID '620' (stripped), got %q", col.ProfileID)
+	}
+	if col.FacilityID != "1568" {
+		t.Errorf("Expected facility ID '1568' (stripped), got %q", col.FacilityID)
+	}
+	if col.StartTime != "08:00" {
+		t.Errorf("Expected start time '08:00', got %q", col.StartTime)
+	}
+	if col.EndTime != "17:00" {
+		t.Errorf("Expected end time '17:00', got %q", col.EndTime)
+	}
+	if col.Interval != 15 {
+		t.Errorf("Expected interval 15, got %d", col.Interval)
+	}
+
+	if len(setup.Profiles) != 1 {
+		t.Fatalf("Expected 1 profile, got %d", len(setup.Profiles))
+	}
+	if setup.Profiles[0].ID != "620" {
+		t.Errorf("Expected profile ID '620', got %q", setup.Profiles[0].ID)
+	}
+	if setup.Profiles[0].Name != "BACH, AUSTIN" {
+		t.Errorf("Expected profile name 'BACH, AUSTIN', got %q", setup.Profiles[0].Name)
+	}
+
+	if len(setup.Facilities) != 1 {
+		t.Fatalf("Expected 1 facility, got %d", len(setup.Facilities))
+	}
+	if setup.Facilities[0].ID != "1568" {
+		t.Errorf("Expected facility ID '1568', got %q", setup.Facilities[0].ID)
 	}
 }
 
@@ -195,18 +532,18 @@ func TestConvertPatients(t *testing.T) {
 
 	p := patients[0]
 	if p.ID != "100" {
-		t.Errorf("Expected ID '100' (stripped), got '%s'", p.ID)
+		t.Errorf("Expected ID '100' (stripped), got %q", p.ID)
 	}
 	if p.FullName != "DOE,JANE" {
-		t.Errorf("Expected FullName 'DOE,JANE', got '%s'", p.FullName)
+		t.Errorf("Expected FullName 'DOE,JANE', got %q", p.FullName)
 	}
 	if p.FirstName != "JANE" {
-		t.Errorf("Expected FirstName 'JANE', got '%s'", p.FirstName)
+		t.Errorf("Expected FirstName 'JANE', got %q", p.FirstName)
 	}
 	if p.DOB != "03/20/1990" {
-		t.Errorf("Expected DOB '03/20/1990', got '%s'", p.DOB)
+		t.Errorf("Expected DOB '03/20/1990', got %q", p.DOB)
 	}
 	if p.Phone != "555-999-8888" {
-		t.Errorf("Expected Phone '555-999-8888', got '%s'", p.Phone)
+		t.Errorf("Expected Phone '555-999-8888', got %q", p.Phone)
 	}
 }
