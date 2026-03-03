@@ -105,51 +105,6 @@ func (c *AdvancedMDClient) doXMLRPCRequest(ctx context.Context, tokenData *domai
 	return body, nil
 }
 
-// LookupPatientByPhone searches for a patient by phone number.
-// Phone should be digits only (e.g., "7277092035").
-// Returns the patient if found, or nil if not found.
-func (c *AdvancedMDClient) LookupPatientByPhone(ctx context.Context, tokenData *domain.TokenData, phone string) (*domain.Patient, error) {
-	msgTime := time.Now().Format("01/02/2006 03:04:05 PM")
-
-	payload := map[string]interface{}{
-		"ppmdmsg": map[string]interface{}{
-			"@action":     "lookuppatient",
-			"@class":      "api",
-			"@msgtime":    msgTime,
-			"@exactmatch": "-1",
-			"@phone":      phone,
-			"@page":       "1",
-			"@nocookie":   "0",
-		},
-	}
-
-	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
-	if err != nil {
-		return nil, err
-	}
-
-	// Try single patient response first (most common for phone lookup)
-	var singleResp AMDLookupResponseSingle
-	if err := json.Unmarshal(body, &singleResp); err == nil {
-		if singleResp.PPMDResults.Results.PatientList.Patient.ID != "" {
-			patients := convertPatients([]AMDPatient{singleResp.PPMDResults.Results.PatientList.Patient})
-			return &patients[0], nil
-		}
-	}
-
-	// Try array response
-	var arrayResp AMDLookupResponse
-	if err := json.Unmarshal(body, &arrayResp); err == nil {
-		if len(arrayResp.PPMDResults.Results.PatientList.Patients) > 0 {
-			patients := convertPatients(arrayResp.PPMDResults.Results.PatientList.Patients)
-			return &patients[0], nil
-		}
-	}
-
-	// No patient found
-	return nil, nil
-}
-
 // LookupPatient searches for patients by last name.
 func (c *AdvancedMDClient) LookupPatient(ctx context.Context, tokenData *domain.TokenData, lastName string) ([]domain.Patient, error) {
 	reqBody := AMDLookupRequest{

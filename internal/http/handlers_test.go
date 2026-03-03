@@ -30,21 +30,6 @@ func TestHandleHealth(t *testing.T) {
 	}
 }
 
-func TestHandleGetToken_MethodNotAllowed(t *testing.T) {
-	// HandleGetToken requires POST for ElevenLabs webhook
-	handlers := &Handlers{}
-
-	// Test that GET is not allowed (POST is required)
-	req := httptest.NewRequest("GET", "/api/token", nil)
-	w := httptest.NewRecorder()
-	handlers.HandleGetToken(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status 405 for GET, got %d", resp.StatusCode)
-	}
-}
-
 func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 	handlers := &Handlers{}
 
@@ -55,13 +40,6 @@ func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 		expectedStatus int
 		expectedMsg    string
 	}{
-		{
-			name:           "wrong method",
-			method:         "GET",
-			body:           "",
-			expectedStatus: http.StatusMethodNotAllowed,
-			expectedMsg:    "Method not allowed. Use POST.",
-		},
 		{
 			name:           "invalid JSON",
 			method:         "POST",

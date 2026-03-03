@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"advancedmd-token-management/internal/domain"
@@ -94,18 +95,32 @@ func (c *AdvancedMDRestClient) GetAppointments(ctx context.Context, tokenData *d
 	return appointments, nil
 }
 
-// GetAppointmentsForColumns fetches appointments for multiple columns.
+// GetAppointmentsForColumns fetches appointments for multiple columns concurrently.
 func (c *AdvancedMDRestClient) GetAppointmentsForColumns(ctx context.Context, tokenData *domain.TokenData, columnIDs []string, startDate string) (map[string][]domain.Appointment, error) {
 	result := make(map[string][]domain.Appointment)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
 
 	for _, colID := range columnIDs {
-		appts, err := c.GetAppointments(ctx, tokenData, colID, startDate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get appointments for column %s: %w", colID, err)
-		}
-		result[colID] = appts
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			appts, err := c.GetAppointments(ctx, tokenData, id, startDate)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("failed to get appointments for column %s: %w", id, err)
+				return
+			}
+			result[id] = appts
+		}(colID)
 	}
 
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
 	return result, nil
 }
 
@@ -185,18 +200,32 @@ func (c *AdvancedMDRestClient) GetBlockHolds(ctx context.Context, tokenData *dom
 	return holds, nil
 }
 
-// GetBlockHoldsForColumns fetches block holds for multiple columns.
+// GetBlockHoldsForColumns fetches block holds for multiple columns concurrently.
 func (c *AdvancedMDRestClient) GetBlockHoldsForColumns(ctx context.Context, tokenData *domain.TokenData, columnIDs []string, startDate string) (map[string][]domain.BlockHold, error) {
 	result := make(map[string][]domain.BlockHold)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
 
 	for _, colID := range columnIDs {
-		holds, err := c.GetBlockHolds(ctx, tokenData, colID, startDate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get block holds for column %s: %w", colID, err)
-		}
-		result[colID] = holds
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			holds, err := c.GetBlockHolds(ctx, tokenData, id, startDate)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("failed to get block holds for column %s: %w", id, err)
+				return
+			}
+			result[id] = holds
+		}(colID)
 	}
 
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
 	return result, nil
 }
 

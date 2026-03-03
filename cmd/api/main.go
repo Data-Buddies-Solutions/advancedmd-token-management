@@ -15,9 +15,12 @@ import (
 	apphttp "advancedmd-token-management/internal/http"
 )
 
+const version = "1.0.0"
+
 func main() {
 	// Configure logger to write to stdout (Railway interprets stderr as error-level)
 	log.SetOutput(os.Stdout)
+	log.Printf("Starting gateway v%s", version)
 
 	// Load configuration
 	cfg, err := config.Load()

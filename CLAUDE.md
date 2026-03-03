@@ -4,9 +4,7 @@
 
 This project exists to **understand and document AdvancedMD APIs** so that **ElevenLabs conversational agents can make tool calls** to interface with AdvancedMD's healthcare practice management system.
 
-The codebase serves two purposes:
-1. **Token Management Service**: A Go microservice that handles AdvancedMD's complex 2-step authentication and caches tokens for ElevenLabs agents
-2. **API Documentation Reference**: Living documentation of how AdvancedMD APIs work, their quirks, and how to integrate them
+The codebase is a **Go microservice** (middleware) that handles AdvancedMD's complex 2-step authentication, caches tokens, and provides server-side endpoints for patient verification, registration, insurance routing, and appointment availability.
 
 ## Key Concepts
 
@@ -26,22 +24,28 @@ AdvancedMD has **three different API types**, each with different URL patterns a
 | API Type | URL Pattern | Request Format | Use Cases |
 |----------|-------------|----------------|-----------|
 | **XMLRPC** | `{webserver}/xmlrpc/processrequest.aspx` | `ppmdmsg` wrapper with `@action` | addpatient, getpatient, getdemographic, scheduling |
-| **REST (Practice Manager)** | Replace `/processrequest/` with `/api/` | Standard JSON | profiles, master files |
+| **REST (Practice Manager)** | Replace `/processrequest/` with `/api/` | Standard JSON | appointments, block holds |
 | **EHR REST** | Replace `/processrequest/` with `/ehr-api/` | Standard JSON | documents, files |
 
 ### Token Format for ElevenLabs
 
-The `/api/token` endpoint serves as the **precall webhook** for ElevenLabs. It returns both AMD tokens and workspace prompt files as dynamic variables:
+The `/api/token` endpoint serves as the **precall webhook** for ElevenLabs. It returns AMD tokens as dynamic variables:
 
 - `amd_token`: Includes "Bearer " prefix → Use directly as `Authorization: {amd_token}`
 - `amd_rest_api_base`: Excludes "https://" prefix → Use as `https://{amd_rest_api_base}/endpoint`
-- `identity`, `soul`, `user_context`, `tools`, `voice`: Workspace prompt files loaded via `go:embed`
+- `patient_id`: Placeholder initial value (`"1"`) — overwritten after verify/add-patient
 
-This is because ElevenLabs doesn't support string concatenation in dynamic variables.
+ElevenLabs doesn't support string concatenation in dynamic variables, which is why URLs exclude the protocol prefix.
 
 ### Workspace Files
 
-Prompt files live in `internal/workspace/files/` and are embedded into the binary at build time. The `workspace.Variables()` function returns them as a `map[string]string` keyed by ElevenLabs variable name. To update prompts, edit the MD files and redeploy.
+Prompt files live in `internal/workspace/` and are tracked in git for diff history. They are **not loaded at runtime** — prompts are managed directly in ElevenLabs. The files here are the source of truth for prompt content and change tracking.
+
+- `SOUL.md` — Personality + boundaries
+- `TOOLS.md` — API tool instructions for the agent
+- `VOICE.md` — Speaking style
+- `KNOWLEDGE.md` — Practice info (synced to ElevenLabs knowledge base)
+- `CHANGELOG.md` — History of all prompt changes with rationale
 
 ## Project Structure
 
@@ -64,22 +68,19 @@ advancedmd-token-management/
 │   ├── clients/
 │   │   ├── redis.go             # Pooled Redis client
 │   │   ├── advancedmd_xmlrpc.go # XMLRPC client (patients, scheduler setup)
-│   │   └── advancedmd_rest.go   # REST client (appointments)
+│   │   └── advancedmd_rest.go   # REST client (appointments, block holds)
 │   ├── http/
 │   │   ├── router.go            # chi router setup
 │   │   ├── handlers.go          # Request handlers
 │   │   └── middleware.go        # Auth, logging, request ID
-│   └── workspace/
-│       ├── workspace.go         # go:embed loader for prompt files
-│       └── files/               # Embedded MD prompt files
-│           ├── IDENTITY.md      # Agent identity
-│           ├── SOUL.md          # Personality + boundaries
-│           ├── KNOWLEDGE.md     # Practice info (Abita Eye)
-│           ├── TOOLS.md         # API tool instructions
-│           ├── USER.md          # Caller context
-│           └── VOICE.md         # Speaking style
-├── Dockerfile                   # Multi-stage build for Railway
-└── README.md                    # User-facing documentation
+│   └── workspace/               # Agent prompt files (git-tracked only)
+│       ├── SOUL.md
+│       ├── TOOLS.md
+│       ├── VOICE.md
+│       ├── KNOWLEDGE.md
+│       └── CHANGELOG.md
+├── Dockerfile                   # Multi-stage build (Go 1.25, Alpine 3.23)
+└── README.md
 ```
 
 ## Common Tasks
@@ -87,7 +88,6 @@ advancedmd-token-management/
 ### Running Locally
 
 ```bash
-# Set environment variables
 export ADVANCEDMD_USERNAME=...
 export ADVANCEDMD_PASSWORD=...
 export ADVANCEDMD_OFFICE_KEY=...
@@ -95,23 +95,31 @@ export ADVANCEDMD_APP_NAME=...
 export REDIS_URL=...
 export API_SECRET=...
 
-# Build and run
 go build -o gateway ./cmd/api && ./gateway
 ```
 
-### Testing the Token Endpoint
+### Running Tests
 
 ```bash
-curl -H "Authorization: Bearer YOUR_API_SECRET" http://localhost:8080/api/token
+go test ./...
 ```
 
 ### Deploying to Railway
 
 ```bash
 railway login
-railway link
 railway up
 ```
+
+## API Endpoints
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /health` | No | Health check |
+| `POST /api/token` | Yes | Precall webhook — returns AMD tokens as dynamic variables |
+| `POST /api/verify-patient` | Yes | Patient lookup by name + DOB, returns insurance routing |
+| `POST /api/add-patient` | Yes | Patient creation + insurance attachment |
+| `POST /api/scheduler/availability` | Yes | Available appointment slots (concurrent per-column fetching) |
 
 ## Scheduler Availability Endpoint
 
@@ -120,8 +128,8 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 ### How It Works
 
 1. Calls `getschedulersetup` (XMLRPC) → Gets provider columns, profiles, facilities
-2. Calls `GET /scheduler/appointments` per column (REST, `forView=day`) → Gets existing booked appointments
-3. Calls `GET /scheduler/blockholds` per column (REST, `forView=day`) → Gets blocked time periods
+2. Calls `GET /scheduler/appointments` per column **concurrently** (REST, `forView=day`)
+3. Calls `GET /scheduler/blockholds` per column **concurrently** (REST, `forView=day`)
 4. Calculates available slots based on:
    - Provider work hours (from `columnsetting`)
    - Slot interval (15 or 30 min depending on provider)
@@ -133,16 +141,14 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 
 ### Response Format
 
-The response is optimized for ElevenLabs LLM token efficiency:
+Optimized for ElevenLabs LLM token efficiency:
 - Max **5 slots** returned per provider (with `totalAvailable` count for the full day)
 - `firstAvailable` / `lastAvailable` summary fields
 - `searchedDate` (original request) vs `date` (actual result — may differ if auto-expanded)
-- No redundant `date` field on individual slots (single-day search)
-- No `schedule` field (was verbose, not useful for the LLM)
 
 ### AMD API Constraint: columnId Required
 
-AMD's `/scheduler/appointments` and `/scheduler/blockholds` endpoints **require `columnId`** — bulk calls without it return HTTP 400. So we make per-column calls (N appointments + N block holds per day searched).
+AMD's `/scheduler/appointments` and `/scheduler/blockholds` endpoints **require `columnId`** — bulk calls without it return HTTP 400. Per-column calls are made concurrently (N appointments + N block holds in parallel per day searched).
 
 ### AMD Response Structure Quirks
 
@@ -150,23 +156,6 @@ The `getschedulersetup` response has prefixed IDs that must be stripped:
 - Column IDs: `col1513` → `1513`
 - Profile IDs: `prof620` → `620`
 - Facility IDs: `fac1568` → `1568`
-
-Times are nested inside `columnsetting`:
-```json
-{
-  "@id": "col1513",
-  "@name": "DR. BACH - BP",
-  "@profile": "prof620",
-  "@facility": "fac1568",
-  "columnsetting": {
-    "@start": "08:00",
-    "@end": "17:00",
-    "@interval": "15",
-    "@maxapptsperslot": "0",
-    "@workweek": "1111100"
-  }
-}
-```
 
 Workweek format: 7 chars for Mon-Sun where `1` = works, `0` = off.
 
@@ -182,7 +171,7 @@ Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` t
 | 1551 | DR. LICHT | 2064 | 1568 | 9:00-12:30 | 15 min | 2 | Wed-Thu |
 | 1550 | DR. NOEL | 2076 | 1568 | 8:30-16:30 | 30 min | 2 | Mon-Fri |
 
-Spring Hill facility ID: **1568** (was 1032 in test env)
+Spring Hill facility ID: **1568**
 
 ### Appointment Type IDs (LIVE)
 
@@ -230,20 +219,7 @@ Insurance-based provider routing is enforced server-side. See `INSURANCE_CROSSWA
 
 8. **Block hold `duration` is unreliable for multi-day holds**: For multi-day block holds (e.g., "OUT OF THE OFFICE" spanning Feb 17-20), AMD returns a `duration` that doesn't always cover the full day. Use the `enddatetime` field instead of computing end from `startdatetime + duration`. See `IsBlockedByHold` in `domain/scheduler.go`.
 
-## ElevenLabs Integration Notes
-
-When creating ElevenLabs tools that call AdvancedMD:
-
-1. **Always call `get_advancedmd_token` first** to get authentication
-2. **Map response fields to dynamic variables**:
-   - `amd_token` → `token`
-   - `amd_cookie_token` → `cookieToken`
-   - `amd_rest_api_base` → `restApiBase`
-   - `amd_ehr_api_base` → `ehrApiBase`
-   - `amd_xmlrpc_url` → `xmlrpcUrl`
-3. **Use correct auth header for API type**:
-   - REST APIs: `Authorization: {amd_token}`
-   - XMLRPC APIs: `Cookie: {amd_cookie_token}`
+9. **AMD single-vs-array responses**: AMD returns a single JSON object when there's one result, but an array when there are multiple. All parsing code must handle both formats (see `AMDLookupResponse` vs `AMDLookupResponseSingle` pattern in `advancedmd_xmlrpc.go`).
 
 ## XMLRPC Actions Reference
 
@@ -253,11 +229,5 @@ When creating ElevenLabs tools that call AdvancedMD:
 | `addpatient` | `api` | Create a new patient |
 | `addinsurance` | `api` | Attach insurance to a patient |
 | `getdemographic` | `demographics` | Get patient demographics + insurance (must use `demographics` class, not `api`) |
+| `getschedulersetup` | `masterfiles` | Get scheduler columns, profiles, facilities |
 | `lookupcarrier` | `api` | Search insurance carriers (paginated, 50 per page) |
-
-## Future Documentation Goals
-
-- Document each AdvancedMD API endpoint as we use them
-- Create example payloads for common operations (scheduling)
-- Document error codes and their meanings
-- Build out ElevenLabs tool configurations for specific use cases
