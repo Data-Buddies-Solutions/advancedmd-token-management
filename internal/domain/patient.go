@@ -90,6 +90,15 @@ func NormalizeSex(sex string) string {
 	}
 }
 
+// IsMinor returns true if the patient's DOB (MM/DD/YYYY) indicates they are under 18.
+func IsMinor(dob string) bool {
+	t, err := time.Parse("01/02/2006", dob)
+	if err != nil {
+		return false
+	}
+	return time.Now().AddDate(-18, 0, 0).Before(t)
+}
+
 // ParseFirstName extracts the first name from AMD's "LASTNAME,FIRSTNAME" format.
 func ParseFirstName(fullName string) string {
 	parts := strings.SplitN(fullName, ",", 2)

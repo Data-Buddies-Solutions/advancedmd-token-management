@@ -268,6 +268,8 @@ Hour 20: Background refresh → 2-step AMD login → Update Redis + memory
 | `bach_licht` | Dr. Bach + Dr. Licht |
 | `all_three` | All 3 providers |
 
+**Pediatric override:** Patients under 18 are automatically routed to `bach_only` (Dr. Bach is the only provider who sees pediatrics). Applied server-side in `verify-patient` and `add-patient` after insurance routing. Does not override `not_accepted`.
+
 ## Development
 
 ```bash
