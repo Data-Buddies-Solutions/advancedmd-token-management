@@ -112,6 +112,62 @@ func TestLookupInsurance(t *testing.T) {
 	}
 }
 
+func TestFormatPhone(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"10 digits raw", "5551234567", "(555)123-4567"},
+		{"with dashes", "555-123-4567", "(555)123-4567"},
+		{"with parens and dash", "(555)123-4567", "(555)123-4567"},
+		{"with spaces", "555 123 4567", "(555)123-4567"},
+		{"with dots", "555.123.4567", "(555)123-4567"},
+		{"with country code", "+15551234567", "+15551234567"}, // 11 digits, returned as-is
+		{"too short", "555123", "555123"},
+		{"empty string", "", ""},
+		{"mixed chars", "call 555-123-4567 now", "(555)123-4567"}, // 10 digits extracted
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatPhone(tt.input)
+			if got != tt.expected {
+				t.Errorf("FormatPhone(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSex(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"M", "M"},
+		{"m", "M"},
+		{"Male", "M"},
+		{"MALE", "M"},
+		{"F", "F"},
+		{"f", "F"},
+		{"Female", "F"},
+		{"FEMALE", "F"},
+		{"U", "U"},
+		{"Other", "U"},
+		{"", "U"},
+		{"  male  ", "M"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := NormalizeSex(tt.input)
+			if got != tt.expected {
+				t.Errorf("NormalizeSex(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestParseFirstName(t *testing.T) {
 	tests := []struct {
 		input    string
