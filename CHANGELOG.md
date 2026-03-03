@@ -2,6 +2,25 @@
 
 ## [Unreleased] - 2026-03-03
 
+### No-Availability Response Guard
+
+When the 14-day auto-search exhausts without finding any open slots, the availability endpoint previously returned the last searched date with `totalAvailable: 0` and empty `slots`. This allowed the LLM to interpret the response as a valid bookable date. Now returns an explicit no-availability response with empty `date`, empty `providers`, and a `message` field.
+
+#### Changed
+
+- **`internal/domain/scheduler.go`** — Added `Message` field (`omitempty`) to `AvailabilityResponse` struct
+- **`internal/http/handlers.go`** — After the 14-day search loop, checks if any provider has availability. If none, returns early with empty `date`, empty `providers`, and `"No availability found within 14 days of requested date"` message
+
+#### Added
+
+- **`internal/http/handlers_test.go`** — 4 new tests:
+  - `TestCalculateAvailableSlots_AllBlocked` — full-day block hold → 0 slots
+  - `TestCalculateAvailableSlots_AllBookedAtMax` — all slots at max capacity → 0 slots
+  - `TestNoAvailabilityResponse_HasMessageAndEmptyProviders` — verifies no-availability JSON structure
+  - `TestAvailabilityResponse_OmitsMessageWhenEmpty` — verifies `message` omitted when availability exists
+
+---
+
 ### Pediatric Routing — Age-Based Provider Override
 
 Patients under 18 are now automatically routed to Dr. Bach (`bach_only`), the only provider who sees pediatrics. Override is applied server-side after insurance routing, and does not override `not_accepted` insurance.
