@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestStripPatientPrefix(t *testing.T) {
 	tests := []struct {
@@ -163,6 +166,33 @@ func TestNormalizeSex(t *testing.T) {
 			got := NormalizeSex(tt.input)
 			if got != tt.expected {
 				t.Errorf("NormalizeSex(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsMinor(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		dob      string
+		expected bool
+	}{
+		{"adult born 30 years ago", now.AddDate(-30, 0, 0).Format("01/02/2006"), false},
+		{"child born 10 years ago", now.AddDate(-10, 0, 0).Format("01/02/2006"), true},
+		{"turns 18 tomorrow", now.AddDate(-18, 0, 1).Format("01/02/2006"), true},
+		{"exactly 18 today", now.AddDate(-18, 0, 0).Format("01/02/2006"), false},
+		{"turned 18 yesterday", now.AddDate(-18, 0, -1).Format("01/02/2006"), false},
+		{"invalid format returns false", "not-a-date", false},
+		{"empty string returns false", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsMinor(tt.dob)
+			if got != tt.expected {
+				t.Errorf("IsMinor(%q) = %v, want %v", tt.dob, got, tt.expected)
 			}
 		})
 	}

@@ -1,6 +1,26 @@
 # Changelog
 
-## [Unreleased] - 2026-02-24
+## [Unreleased] - 2026-03-03
+
+### Pediatric Routing — Age-Based Provider Override
+
+Patients under 18 are now automatically routed to Dr. Bach (`bach_only`), the only provider who sees pediatrics. Override is applied server-side after insurance routing, and does not override `not_accepted` insurance.
+
+#### Added
+
+- **`internal/domain/patient.go`** — `IsMinor(dob)` function: parses MM/DD/YYYY DOB, returns true if under 18
+- **`internal/domain/patient_test.go`** — `TestIsMinor` with 7 cases (adult, child, exactly 18, turns 18 tomorrow, turned 18 yesterday, invalid, empty)
+
+#### Changed
+
+- **`internal/http/handlers.go`** — Pediatric override in 3 spots:
+  - verify-patient (single match): overrides routing to `bach_only` + clears `routingAmbiguous`
+  - verify-patient (disambiguation match): same override
+  - add-patient (success response): overrides `insEntry.Routing` before building response
+
+---
+
+## [Previous] - 2026-02-24
 
 ### Insurance Crosswalk — Server-Side Provider Routing
 

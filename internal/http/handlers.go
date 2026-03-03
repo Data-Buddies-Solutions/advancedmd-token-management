@@ -290,13 +290,19 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pediatric override: under-18 patients → Dr. Bach only
+	routing := insEntry.Routing
+	if domain.IsMinor(normalizedDOB) && routing != domain.RoutingNotAccepted {
+		routing = domain.RoutingBachOnly
+	}
+
 	json.NewEncoder(w).Encode(AddPatientResponse{
 		Status:           "created",
 		PatientID:        strippedID,
 		Name:             patientName,
 		DOB:              normalizedDOB,
-		Routing:          string(insEntry.Routing),
-		AllowedProviders: domain.ProvidersForRouting(insEntry.Routing),
+		Routing:          string(routing),
+		AllowedProviders: domain.ProvidersForRouting(routing),
 		Message:          "Patient created and insurance attached successfully",
 	})
 }
@@ -400,6 +406,13 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			resp.RoutingAmbiguous = ambiguous
 		}
 
+		// Pediatric override: under-18 patients → Dr. Bach only
+		if domain.IsMinor(p.DOB) && resp.Routing != "" && resp.Routing != string(domain.RoutingNotAccepted) {
+			resp.Routing = string(domain.RoutingBachOnly)
+			resp.AllowedProviders = domain.ProvidersForRouting(domain.RoutingBachOnly)
+			resp.RoutingAmbiguous = false
+		}
+
 		json.NewEncoder(w).Encode(resp)
 		return
 
@@ -429,6 +442,13 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 						resp.Routing = string(routing)
 						resp.AllowedProviders = domain.ProvidersForRouting(routing)
 						resp.RoutingAmbiguous = ambiguous
+					}
+
+					// Pediatric override: under-18 patients → Dr. Bach only
+					if domain.IsMinor(p.DOB) && resp.Routing != "" && resp.Routing != string(domain.RoutingNotAccepted) {
+						resp.Routing = string(domain.RoutingBachOnly)
+						resp.AllowedProviders = domain.ProvidersForRouting(domain.RoutingBachOnly)
+						resp.RoutingAmbiguous = false
 					}
 
 					json.NewEncoder(w).Encode(resp)
