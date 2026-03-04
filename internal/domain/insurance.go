@@ -18,72 +18,96 @@ type InsuranceEntry struct {
 
 // InsuranceNameMap maps LLM-provided insurance names to carrier ID + routing.
 // Keys are normalized (lowercase, no punctuation) via NormalizeForLookup.
+// Grouped by carrier ID so you can see which plans share a network.
 var InsuranceNameMap = map[string]InsuranceEntry{
-	// NOT ACCEPTED
-	"aetna epo university of miami": {CarrierID: "car40887", Routing: RoutingNotAccepted},
-	"avmed medicare advantage":      {CarrierID: "car301737", Routing: RoutingNotAccepted},
-	"doctors health medicare":       {CarrierID: "car40907", Routing: RoutingNotAccepted},
-	"florida blue hmo":              {CarrierID: "car280750", Routing: RoutingNotAccepted},
-	"florida blueselect":            {CarrierID: "car40897", Routing: RoutingNotAccepted},
-	"molina marketplace":            {CarrierID: "car40912", Routing: RoutingNotAccepted},
-	"preferred care partners":       {CarrierID: "car40916", Routing: RoutingNotAccepted},
 
-	// BACH ONLY
-	"aetna epo north broward":     {CarrierID: "car40887", Routing: RoutingBachOnly},
-	"cigna local plus":            {CarrierID: "car301345", Routing: RoutingBachOnly},
-	"eye america aao":             {CarrierID: "car308627", Routing: RoutingBachOnly},
-	"florida blue steward tier 1": {CarrierID: "car40897", Routing: RoutingBachOnly},
-	"humana gold":                 {CarrierID: "car308175", Routing: RoutingBachOnly},
-	"humana medicaid":             {CarrierID: "car303033", Routing: RoutingBachOnly},
-	"humana medicare":             {CarrierID: "car40906", Routing: RoutingBachOnly},
-	"humana ppo":                  {CarrierID: "car303062", Routing: RoutingBachOnly},
-	"humana premier hmo":          {CarrierID: "car303061", Routing: RoutingBachOnly},
-	"meritain health":             {CarrierID: "car301578", Routing: RoutingBachOnly},
-	"molina medicare":             {CarrierID: "car40912", Routing: RoutingBachOnly},
+	// ── iCare Network — car40907 (11 plans) ─────────────────────────────
+	"aetna better health":            {CarrierID: "car40907", Routing: RoutingAll},
+	"aetna better health of florida": {CarrierID: "car40907", Routing: RoutingAll},
+	"aetna healthy kids":             {CarrierID: "car40907", Routing: RoutingAll},
+	"aetna medicare hmo":             {CarrierID: "car40907", Routing: RoutingAll},
+	"community care plan":            {CarrierID: "car40907", Routing: RoutingAll},
+	"florida community care":         {CarrierID: "car40907", Routing: RoutingAll},
+	"florida complete care":          {CarrierID: "car40907", Routing: RoutingAll},
+	"miami childrens health plan":    {CarrierID: "car40907", Routing: RoutingAll},
+	"simply medicaid":                {CarrierID: "car40907", Routing: RoutingAll},
+	"vivida":                         {CarrierID: "car40907", Routing: RoutingAll},
+	"doctors health medicare":        {CarrierID: "car40907", Routing: RoutingNotAccepted},
 
-	// BACH + LICHT
-	"avmed":                                {CarrierID: "car40890", Routing: RoutingBachLicht},
-	"cigna medicare advantage":             {CarrierID: "car302890", Routing: RoutingBachLicht},
-	"oscar health":                         {CarrierID: "car284233", Routing: RoutingBachLicht},
-	"tricare prime":                        {CarrierID: "car284327", Routing: RoutingBachLicht},
-	"tricare select":                       {CarrierID: "car40922", Routing: RoutingBachLicht},
-	"tricare for life":                     {CarrierID: "car40921", Routing: RoutingBachLicht},
+	// ── United Healthcare — car40923 (11 plans) ─────────────────────────
+	"united healthcare":                    {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare aarp medicare":      {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare all savers":         {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare golden rule":        {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare nhp":                {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare shared services":    {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare student resources":  {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare surest":             {CarrierID: "car40923", Routing: RoutingAll},
+	"umr":                                  {CarrierID: "car40923", Routing: RoutingAll},
 	"united healthcare individual exchange": {CarrierID: "car40923", Routing: RoutingBachLicht},
+	"preferred care partners":              {CarrierID: "car40923", Routing: RoutingNotAccepted},
 
-	// ALL 3
-	"aetna":                              {CarrierID: "car40887", Routing: RoutingAll},
-	"aetna better health":                {CarrierID: "car40907", Routing: RoutingAll},
-	"aetna better health of florida":     {CarrierID: "car40907", Routing: RoutingAll},
-	"aetna healthy kids":                 {CarrierID: "car40907", Routing: RoutingAll},
-	"aetna medicare hmo":                 {CarrierID: "car40907", Routing: RoutingAll},
-	"ambetter":                           {CarrierID: "car284682", Routing: RoutingAll},
-	"cigna hmo":                          {CarrierID: "car301345", Routing: RoutingAll},
-	"cigna ppo":                          {CarrierID: "car40895", Routing: RoutingAll},
-	"community care plan":                {CarrierID: "car40907", Routing: RoutingAll},
-	"envolve vision":                     {CarrierID: "car281245", Routing: RoutingAll},
-	"florida blue":                       {CarrierID: "car40897", Routing: RoutingAll},
-	"florida community care":             {CarrierID: "car40907", Routing: RoutingAll},
-	"florida complete care":              {CarrierID: "car40907", Routing: RoutingAll},
-	"florida medicaid":                   {CarrierID: "car40899", Routing: RoutingAll},
-	"florida medicare":                   {CarrierID: "car40900", Routing: RoutingAll},
-	"imagine health":                     {CarrierID: "car308142", Routing: RoutingAll},
-	"miami childrens health plan":        {CarrierID: "car40907", Routing: RoutingAll},
-	"molina medicaid":                    {CarrierID: "car40912", Routing: RoutingAll},
-	"multiplan phcs":                     {CarrierID: "car301648", Routing: RoutingAll},
-	"simply medicaid":                    {CarrierID: "car40907", Routing: RoutingAll},
-	"sunhealth":                          {CarrierID: "car308086", Routing: RoutingAll},
-	"united healthcare":                  {CarrierID: "car40923", Routing: RoutingAll},
-	"united healthcare aarp medicare":    {CarrierID: "car302744", Routing: RoutingAll},
-	"united healthcare all savers":       {CarrierID: "car284949", Routing: RoutingAll},
-	"united healthcare global":           {CarrierID: "car284971", Routing: RoutingAll},
-	"united healthcare golden rule":      {CarrierID: "car284232", Routing: RoutingAll},
-	"united healthcare nhp":              {CarrierID: "car40913", Routing: RoutingAll},
-	"united healthcare shared services":  {CarrierID: "car303047", Routing: RoutingAll},
-	"united healthcare student resources": {CarrierID: "car283950", Routing: RoutingAll},
-	"united healthcare surest":           {CarrierID: "car301501", Routing: RoutingAll},
-	"umr":                                {CarrierID: "car284838", Routing: RoutingAll},
-	"vivida":                             {CarrierID: "car40907", Routing: RoutingAll},
-	"wellcare":                           {CarrierID: "car40925", Routing: RoutingAll},
+	// ── Envolve Network — car281245 (8 plans) ───────────────────────────
+	"ambetter":                {CarrierID: "car281245", Routing: RoutingAll},
+	"ambetter select":         {CarrierID: "car281245", Routing: RoutingAll},
+	"ambetter value":          {CarrierID: "car281245", Routing: RoutingAll},
+	"childrens medical services": {CarrierID: "car281245", Routing: RoutingAll},
+	"envolve vision":          {CarrierID: "car281245", Routing: RoutingAll},
+	"staywell medicare":       {CarrierID: "car281245", Routing: RoutingAll},
+	"sunshine medicaid":       {CarrierID: "car281245", Routing: RoutingAll},
+	"wellcare":                {CarrierID: "car281245", Routing: RoutingAll},
+
+	// ── Humana Consolidated — car308175 (8 plans) ───────────────────────
+	"humana gold":             {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"humana medicaid":         {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"humana medicare":         {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"humana ppo":              {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"humana premier hmo":      {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"molina medicare":         {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"cigna medicare advantage": {CarrierID: "car308175", Routing: RoutingBachLicht},
+	"molina marketplace":      {CarrierID: "car308175", Routing: RoutingNotAccepted},
+
+	// ── Florida Blue — car40897 (6 plans) ───────────────────────────────
+	"florida blue":                      {CarrierID: "car40897", Routing: RoutingAll},
+	"florida blue medicare ppo":         {CarrierID: "car40897", Routing: RoutingAll},
+	"florida blue ppo federal employee": {CarrierID: "car40897", Routing: RoutingAll},
+	"florida blue ppo out of state":     {CarrierID: "car40897", Routing: RoutingAll},
+	"florida blue steward tier 1":       {CarrierID: "car40897", Routing: RoutingBachOnly},
+	"florida blueselect":                {CarrierID: "car40897", Routing: RoutingNotAccepted},
+
+	// ── Cigna — car301345 (5 plans) ─────────────────────────────────────
+	"cigna hmo":                       {CarrierID: "car301345", Routing: RoutingAll},
+	"cigna miami dade public schools": {CarrierID: "car301345", Routing: RoutingAll},
+	"cigna open access":               {CarrierID: "car301345", Routing: RoutingAll},
+	"cigna ppo":                       {CarrierID: "car301345", Routing: RoutingAll},
+	"cigna local plus":                {CarrierID: "car301345", Routing: RoutingBachOnly},
+
+	// ── Aetna — car40887 (4 plans) ──────────────────────────────────────
+	"aetna":                         {CarrierID: "car40887", Routing: RoutingAll},
+	"aetna qhp individual exchange": {CarrierID: "car40887", Routing: RoutingAll},
+	"aetna epo north broward":       {CarrierID: "car40887", Routing: RoutingBachOnly},
+	"aetna epo university of miami": {CarrierID: "car40887", Routing: RoutingNotAccepted},
+
+	// ── Tricare — car40921 (3 plans) ────────────────────────────────────
+	"tricare prime":    {CarrierID: "car40921", Routing: RoutingBachLicht},
+	"tricare select":   {CarrierID: "car40921", Routing: RoutingBachLicht},
+	"tricare for life": {CarrierID: "car40921", Routing: RoutingBachLicht},
+
+	// ── Standalone Carriers (1 plan each) ───────────────────────────────
+	"avmed medicare advantage": {CarrierID: "car301737", Routing: RoutingNotAccepted},  // EMI
+	"florida blue hmo":         {CarrierID: "car280750", Routing: RoutingNotAccepted},  // EMI
+	"eye america aao":          {CarrierID: "car308627", Routing: RoutingBachOnly},
+	"meritain health":          {CarrierID: "car301578", Routing: RoutingBachOnly},
+	"avmed":                    {CarrierID: "car40890", Routing: RoutingBachLicht},
+	"oscar health":             {CarrierID: "car284233", Routing: RoutingBachLicht},
+	"florida medicaid":         {CarrierID: "car40899", Routing: RoutingAll},
+	"florida medicare":         {CarrierID: "car40900", Routing: RoutingAll},
+	"imagine health":           {CarrierID: "car308142", Routing: RoutingAll},
+	"medicaid":                 {CarrierID: "car303033", Routing: RoutingAll},
+	"molina medicaid":          {CarrierID: "car40912", Routing: RoutingAll},
+	"multiplan phcs":           {CarrierID: "car301648", Routing: RoutingAll},
+	"sunhealth":                {CarrierID: "car308086", Routing: RoutingAll},
+	"united healthcare global": {CarrierID: "car284971", Routing: RoutingAll},
 }
 
 // CarrierRoutingMap maps AMD carrier IDs to routing rules for existing patients.
@@ -150,11 +174,58 @@ func ProvidersForRouting(rule RoutingRule) []string {
 	}
 }
 
+// InsuranceAliases maps common shorthand names to canonical InsuranceNameMap keys.
+// Catches what patients naturally say and what the LLM might truncate to.
+// Only alias when ALL plans under that shorthand share the same routing.
+// Do NOT alias ambiguous parent names (e.g., "molina" spans 3 routing tiers).
+var InsuranceAliases = map[string]string{
+	// Parent company shorthand → safest canonical name
+	"oscar":          "oscar health",
+	"humana":         "humana ppo",
+	"tricare":        "tricare select",
+	"united":         "united healthcare",
+	"uhc":            "united healthcare",
+	"cigna":          "cigna ppo",
+	"blue cross":     "florida blue",
+	"bcbs":           "florida blue",
+	"medicare":       "florida medicare",
+	"sunshine":       "sunshine medicaid",
+	"sunshine health": "sunshine medicaid",
+	"staywell":       "staywell medicare",
+	"simply":         "simply medicaid",
+	"simply healthcare": "simply medicaid",
+	"multiplan":      "multiplan phcs",
+	"phcs":           "multiplan phcs",
+	"imagine":        "imagine health",
+	"envolve":        "envolve vision",
+	"meritain":       "meritain health",
+	"eye america":    "eye america aao",
+	"preferred care": "preferred care partners",
+	"community care": "community care plan",
+	"doctors health": "doctors health medicare",
+	"miami childrens": "miami childrens health plan",
+	"childrens medical": "childrens medical services",
+	"sun health":     "sunhealth",
+}
+
 // LookupInsurance looks up an insurance name and returns its entry.
+// First tries exact match in InsuranceNameMap, then checks InsuranceAliases.
 // Uses NormalizeForLookup for tolerance of punctuation, casing, and spacing.
 func LookupInsurance(name string) (InsuranceEntry, bool) {
-	entry, ok := InsuranceNameMap[NormalizeForLookup(name)]
-	return entry, ok
+	normalized := NormalizeForLookup(name)
+
+	// Exact match
+	if entry, ok := InsuranceNameMap[normalized]; ok {
+		return entry, ok
+	}
+
+	// Alias match
+	if canonical, ok := InsuranceAliases[normalized]; ok {
+		entry, ok := InsuranceNameMap[canonical]
+		return entry, ok
+	}
+
+	return InsuranceEntry{}, false
 }
 
 // RoutingForCarrierID returns the routing rule for a carrier ID from demographics.

@@ -4,6 +4,37 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-04
+
+### Source: Insurance list audit (PDF rev 9.4.2025 vs insurance.go)
+
+Compared the Abita Insurance List PDF against insurance.go. All routing rules were correct. Found 16 plans in the code but missing from the TOOLS.md prompt. Restructured the prompt insurance section from a flat list to network-grouped format so the agent has context about which names to send.
+
+---
+
+### TOOLS.md — add_patient insurance section
+
+**Changed: Replaced flat 54-name list with network-grouped 70-name format**
+- Was: single comma-separated list of 54 insurance names with "send exactly one of these"
+- Now: names grouped by carrier network (Aetna, Aetna/iCare, Ambetter/Envolve, Cigna, Cigna/Humana, Florida Blue, iCare, Molina, Oscar, Tricare, United Healthcare, Standalone)
+- Each group includes agent guidance for shorthand mapping (e.g., "If patient says 'Oscar,' send 'Oscar Health'")
+- Molina group has explicit MUST-ask rule — agent must ask which Molina plan (Medicaid, Medicare, or Marketplace)
+- Aetna EPO has follow-up rule — ask North Broward or University of Miami
+- Added 16 missing plan names: Aetna Healthy Kids, Aetna QHP Individual Exchange, Ambetter Select, Ambetter Value, Children's Medical Services, Cigna Miami-Dade Public Schools, Cigna Open Access, Florida Blue Medicare PPO, Florida Blue PPO Federal Employee, Florida Blue PPO Out of State, Florida Community Care, Medicaid, Miami Children's Health Plan, Staywell Medicare, Sunshine Medicaid, Vivida
+
+**Why:** Agent was sending shorthand like "Oscar" instead of "Oscar Health", causing insurance attachment failures. The grouped format gives the agent context about which names belong together and when shorthand is OK vs when it needs to be specific.
+
+---
+
+### Files NOT changed this round
+- **SOUL.md** — No changes
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-02
 
 ### Source: Production review — full middleware walkthrough before go-live
