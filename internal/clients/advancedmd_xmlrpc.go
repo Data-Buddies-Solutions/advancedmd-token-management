@@ -262,7 +262,7 @@ func (c *AdvancedMDClient) AddInsurance(ctx context.Context, tokenData *domain.T
 						"@hipaarelationship":  "18",
 						"@relationship":       "1",
 						"@copay":              "0.00",
-						"@coverage":           "3",
+						"@coverage":           "1",
 					},
 				},
 			},
