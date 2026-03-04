@@ -87,12 +87,14 @@ func TestLookupInsurance(t *testing.T) {
 		wantRouting RoutingRule
 		wantFound   bool
 	}{
-		{"exact match lowercase", "humana medicare", "car40906", RoutingBachOnly, true},
-		{"case insensitive", "HUMANA MEDICARE", "car40906", RoutingBachOnly, true},
+		{"exact match lowercase", "humana medicare", "car308175", RoutingBachOnly, true},
+		{"case insensitive", "HUMANA MEDICARE", "car308175", RoutingBachOnly, true},
 		{"with whitespace", "  Aetna  ", "car40887", RoutingAll, true},
 		{"all three default", "Florida Blue", "car40897", RoutingAll, true},
-		{"bach + licht", "Tricare Prime", "car284327", RoutingBachLicht, true},
-		{"not accepted", "Molina Marketplace", "car40912", RoutingNotAccepted, true},
+		{"bach + licht", "Tricare Prime", "car40921", RoutingBachLicht, true},
+		{"not accepted", "Molina Marketplace", "car308175", RoutingNotAccepted, true},
+		{"alias match", "Oscar", "car284233", RoutingBachLicht, true},
+		{"alias shorthand", "Humana", "car308175", RoutingBachOnly, true},
 		{"unknown carrier", "unknown", "", "", false},
 		{"empty string", "", "", "", false},
 	}

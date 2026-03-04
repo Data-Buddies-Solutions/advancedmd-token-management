@@ -2,30 +2,41 @@
 
 ## [Unreleased] - 2026-03-04
 
-### iCare Network Carrier Consolidation + Primary Insurance Fix
+### Insurance Network Consolidation + Alias Map + Prompt Update
 
-All iCare network plans now use the single billing carrier **ICARE HEALTH OPTIONS TPA** (`car40907`, code `ICA01`) instead of individual plan-specific carrier IDs. Also fixed `addinsurance` storing insurance as tertiary instead of primary.
+Consolidated all insurance plans from plan-specific carrier IDs to parent network carrier IDs (71 plans → 22 carrier IDs). Added alias map so `LookupInsurance` catches common shorthand. Updated TOOLS.md to group insurance names by network with agent guidance. Fixed `addinsurance` storing insurance as tertiary instead of primary.
 
 #### Changed
 
 - **`internal/clients/advancedmd_xmlrpc.go`** — Fixed `@coverage` from `"3"` (tertiary) to `"1"` (primary) in `AddInsurance` payload
-- **`internal/domain/insurance.go`** — Updated 7 existing iCare plans to use `car40907`:
-  - Aetna Better Health (was car280636)
-  - Aetna Better Health of Florida (was car281481)
-  - Aetna Medicare HMO (was car302877)
-  - Community Care Plan (was car307992)
-  - Doctors Health Medicare (was car281648, stays `not_accepted`)
-  - Florida Complete Care (was car40901)
-  - Simply Medicaid (was car281218)
+- **`internal/domain/insurance.go`** — Reorganized `InsuranceNameMap` from routing-tier grouping to carrier-ID grouping (8 major networks + standalone). Consolidated carrier IDs:
+  - iCare (car40907): 11 plans — Aetna Better Health, Aetna Better Health of Florida, Aetna Healthy Kids, Aetna Medicare HMO, Community Care Plan, Florida Community Care, Florida Complete Care, Miami Children's Health Plan, Simply Medicaid, Vivida, Doctors Health Medicare
+  - United Healthcare (car40923): 11 plans — all UHC variants + UMR + Preferred Care Partners
+  - Envolve (car281245): 8 plans — Ambetter variants, Children's Medical Services, Envolve Vision, Staywell Medicare, Sunshine Medicaid, Wellcare
+  - Humana Consolidated (car308175): 8 plans — all Humana + Molina Medicare + Cigna Medicare Advantage + Molina Marketplace
+  - Florida Blue (car40897): 6 plans
+  - Cigna (car301345): 5 plans
+  - Aetna (car40887): 4 plans
+  - Tricare (car40921): 3 plans
+  - 14 standalone carriers (1 plan each)
+- **`internal/domain/patient_test.go`** — Updated 3 stale carrier IDs to match consolidated values, added 2 new test cases for alias matching ("Oscar" → Oscar Health, "Humana" → Humana PPO)
+- **`INSURANCE_CROSSWALK.md`** — Rewritten to organize by carrier ID groupings instead of routing tiers. insurance.go is now the source of truth.
+- **`README.md`** — Updated insurance routing summary (71 plans, 22 carrier IDs, alias map)
 
 #### Added
 
-- **`internal/domain/insurance.go`** — 4 new iCare plan entries (all `RoutingAll`):
-  - Aetna Healthy Kids (`car40907`)
-  - Florida Community Care (`car40907`)
-  - Miami Childrens Health Plan (`car40907`)
-  - Vivida (`car40907`)
-- **`INSURANCE_CROSSWALK.md`** — New "iCare Network" section documenting all 11 plans that bill through `car40907`
+- **`internal/domain/insurance.go`** — `InsuranceAliases` map (26 entries) + updated `LookupInsurance` to check aliases as fallback. Catches common shorthand:
+  - "Oscar" → "Oscar Health"
+  - "Humana" → "Humana PPO"
+  - "Blue Cross" / "BCBS" → "Florida Blue"
+  - "United" / "UHC" → "United Healthcare"
+  - "Tricare" → "Tricare Select"
+  - "Medicare" → "Florida Medicare"
+  - "Cigna" → "Cigna PPO"
+  - + 19 more aliases
+- **`internal/domain/insurance.go`** — 16 new plan entries (all `RoutingAll`):
+  - Aetna Healthy Kids, Aetna QHP Individual Exchange, Ambetter Select, Ambetter Value, Children's Medical Services, Cigna Miami-Dade Public Schools, Cigna Open Access, Florida Blue Medicare PPO, Florida Blue PPO Federal Employee, Florida Blue PPO Out of State, Florida Community Care, Medicaid, Miami Children's Health Plan, Staywell Medicare, Sunshine Medicaid, Vivida
+- **`internal/workspace/TOOLS.md`** — Insurance section restructured from flat 54-name list to network-grouped format with 70 names and agent guidance (when to ask follow-ups for Molina, Aetna EPO; shorthand tips for Oscar, Humana, Blue Cross)
 
 #### Note
 

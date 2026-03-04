@@ -270,7 +270,7 @@ Hour 20: Background refresh → 2-step AMD login → Update Redis + memory
 
 ### Insurance Routing
 
-48 insurance plans mapped to 4 routing tiers. iCare network plans (11 plans) all bill through ICARE HEALTH OPTIONS TPA (`car40907`). See `INSURANCE_CROSSWALK.md`.
+71 insurance plans consolidated to 22 carrier IDs across 4 routing tiers. 8 major networks (iCare, UHC, Envolve, Humana, FL Blue, Cigna, Aetna, Tricare) cover 56 plans; 14 standalone carriers cover the rest. `LookupInsurance()` includes an alias map for common shorthand (e.g., "Oscar" → "Oscar Health", "Humana" → "Humana PPO"). See `INSURANCE_CROSSWALK.md`.
 
 | Routing | Providers |
 |---------|-----------|
