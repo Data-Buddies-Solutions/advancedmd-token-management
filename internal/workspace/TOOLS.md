@@ -92,11 +92,53 @@ After all fields are collected, call the tool.
 - `subscriberName` (string, required)
 - `subscriberNum` (string, required)
 
-**Accepted insurance names** (send exactly one of these):
+**Accepted insurance names — grouped by network:**
 
-Aetna, Aetna Better Health, Aetna Better Health of Florida, Aetna EPO North Broward, Aetna EPO University of Miami, Aetna Medicare HMO, Ambetter, AvMed, AvMed Medicare Advantage, Cigna HMO, Cigna Local Plus, Cigna Medicare Advantage, Cigna PPO, Community Care Plan, Doctors Health Medicare, Envolve Vision, Eye America AAO, Florida Blue, Florida Blue HMO, Florida Blue Steward Tier 1, Florida BlueSelect, Florida Complete Care, Florida Medicaid, Florida Medicare, Humana Gold, Humana Medicaid, Humana Medicare, Humana PPO, Humana Premier HMO, Imagine Health, Meritain Health, Molina Marketplace, Molina Medicaid, Molina Medicare, Multiplan PHCS, Oscar Health, Preferred Care Partners, Simply Medicaid, SunHealth, Tricare for Life, Tricare Prime, Tricare Select, UMR, United Healthcare, United Healthcare AARP Medicare, United Healthcare All Savers, United Healthcare Global, United Healthcare Golden Rule, United Healthcare Individual Exchange, United Healthcare NHP, United Healthcare Shared Services, United Healthcare Student Resources, United Healthcare Surest, Wellcare
+Send the most specific name you can. The server has a safety net for common shorthand, but always try to send the full name from this list.
 
-If the caller names an insurance not on the list, tell them you don't see it in your system and offer to transfer them to the office for help. Don't guess or map it yourself.
+**Aetna:**
+Aetna, Aetna QHP Individual Exchange, Aetna EPO North Broward, Aetna EPO University of Miami
+→ If patient says "Aetna EPO," ask: "is that the North Broward or University of Miami plan?"
+
+**Aetna / iCare:**
+Aetna Better Health, Aetna Better Health of Florida, Aetna Healthy Kids, Aetna Medicare HMO
+
+**Ambetter / Envolve:**
+Ambetter, Ambetter Select, Ambetter Value, Children's Medical Services, Envolve Vision, Staywell Medicare, Sunshine Medicaid, Wellcare
+
+**Cigna:**
+Cigna HMO, Cigna Miami-Dade Public Schools, Cigna Open Access, Cigna PPO, Cigna Local Plus
+
+**Cigna / Humana:**
+Cigna Medicare Advantage, Humana Gold, Humana Medicaid, Humana Medicare, Humana PPO, Humana Premier HMO, Molina Medicare, Molina Marketplace
+→ If patient says just "Humana," send "Humana PPO."
+
+**Florida Blue:**
+Florida Blue, Florida Blue Medicare PPO, Florida Blue PPO Federal Employee, Florida Blue PPO Out of State, Florida Blue Steward Tier 1, Florida BlueSelect
+→ If patient says "Blue Cross" or "BCBS," send "Florida Blue."
+
+**iCare:**
+Community Care Plan, Doctors Health Medicare, Florida Community Care, Florida Complete Care, Miami Children's Health Plan, Simply Medicaid, Vivida
+
+**Molina** — ask which plan:
+Molina Medicaid, Molina Medicare, Molina Marketplace
+→ If patient says just "Molina," you MUST ask: "is that Molina Medicaid, Molina Medicare, or Molina Marketplace?"
+
+**Oscar:**
+Oscar Health
+→ If patient says "Oscar," send "Oscar Health."
+
+**Tricare:**
+Tricare Prime, Tricare Select, Tricare for Life
+
+**United Healthcare:**
+United Healthcare, United Healthcare AARP Medicare, United Healthcare All Savers, United Healthcare Golden Rule, United Healthcare Individual Exchange, United Healthcare NHP, United Healthcare Shared Services, United Healthcare Student Resources, United Healthcare Surest, UMR, Preferred Care Partners
+→ If patient says "United" or "UHC," send "United Healthcare."
+
+**Standalone plans:**
+AvMed, AvMed Medicare Advantage, Eye America AAO, Florida Blue HMO, Florida Medicaid, Florida Medicare, Imagine Health, Medicaid, Meritain Health, Multiplan PHCS, SunHealth, United Healthcare Global
+
+If the caller names an insurance you don't recognize from this list, tell them you're not sure if it's accepted at the Spring Hill office and offer to transfer them for help.
 
 **What comes back:**
 
