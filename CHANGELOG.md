@@ -1,6 +1,39 @@
 # Changelog
 
-## [Unreleased] - 2026-03-03
+## [Unreleased] - 2026-03-04
+
+### iCare Network Carrier Consolidation + Primary Insurance Fix
+
+All iCare network plans now use the single billing carrier **ICARE HEALTH OPTIONS TPA** (`car40907`, code `ICA01`) instead of individual plan-specific carrier IDs. Also fixed `addinsurance` storing insurance as tertiary instead of primary.
+
+#### Changed
+
+- **`internal/clients/advancedmd_xmlrpc.go`** — Fixed `@coverage` from `"3"` (tertiary) to `"1"` (primary) in `AddInsurance` payload
+- **`internal/domain/insurance.go`** — Updated 7 existing iCare plans to use `car40907`:
+  - Aetna Better Health (was car280636)
+  - Aetna Better Health of Florida (was car281481)
+  - Aetna Medicare HMO (was car302877)
+  - Community Care Plan (was car307992)
+  - Doctors Health Medicare (was car281648, stays `not_accepted`)
+  - Florida Complete Care (was car40901)
+  - Simply Medicaid (was car281218)
+
+#### Added
+
+- **`internal/domain/insurance.go`** — 4 new iCare plan entries (all `RoutingAll`):
+  - Aetna Healthy Kids (`car40907`)
+  - Florida Community Care (`car40907`)
+  - Miami Childrens Health Plan (`car40907`)
+  - Vivida (`car40907`)
+- **`INSURANCE_CROSSWALK.md`** — New "iCare Network" section documenting all 11 plans that bill through `car40907`
+
+#### Note
+
+Molina Medicaid also uses iCare network per the insurance list but retains its own carrier ID (`car40912`).
+
+---
+
+## [Previous] - 2026-03-03
 
 ### No-Availability Response Guard
 

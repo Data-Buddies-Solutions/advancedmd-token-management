@@ -36,7 +36,7 @@ These insurances are not accepted at Spring Hill. The agent should tell the pati
 |------|-----------|--------|
 | Aetna EPO University of Miami | car40887 | Out of network |
 | AvMed Medicare Advantage | car301737 | EMI doesn't manage Hernando County |
-| Doctors Health Medicare | car281648 | Routine vision only, not medical |
+| Doctors Health Medicare | car40907 (iCare) | Routine vision only, not medical |
 | Florida Blue HMO | car280750 | EMI doesn't manage Hernando County |
 | Florida BlueSelect | car40897 | Out of network |
 | Molina Marketplace | car40912 | No longer accepting |
@@ -79,22 +79,25 @@ These insurances are not accepted at Spring Hill. The agent should tell the pati
 | Name | Carrier ID |
 |------|-----------|
 | Aetna | car40887 |
-| Aetna Better Health | car280636 |
-| Aetna Better Health of Florida | car281481 |
-| Aetna Medicare HMO | car302877 |
+| Aetna Better Health | car40907 (iCare) |
+| Aetna Better Health of Florida | car40907 (iCare) |
+| Aetna Healthy Kids | car40907 (iCare) |
+| Aetna Medicare HMO | car40907 (iCare) |
 | Ambetter | car284682 |
 | Cigna HMO | car301345 |
 | Cigna PPO | car40895 |
-| Community Care Plan | car307992 |
+| Community Care Plan | car40907 (iCare) |
 | Envolve Vision | car281245 |
 | Florida Blue | car40897 |
-| Florida Complete Care | car40901 |
+| Florida Community Care | car40907 (iCare) |
+| Florida Complete Care | car40907 (iCare) |
 | Florida Medicaid | car40899 |
 | Florida Medicare | car40900 |
 | Imagine Health | car308142 |
 | Molina Medicaid | car40912 |
 | Multiplan PHCS | car301648 |
-| Simply Medicaid | car281218 |
+| Miami Childrens Health Plan | car40907 (iCare) |
+| Simply Medicaid | car40907 (iCare) |
 | SunHealth | car308086 |
 | United Healthcare | car40923 |
 | United Healthcare AARP Medicare | car302744 |
@@ -106,7 +109,30 @@ These insurances are not accepted at Spring Hill. The agent should tell the pati
 | United Healthcare Student Resources | car283950 |
 | United Healthcare Surest | car301501 |
 | UMR | car284838 |
+| Vivida | car40907 (iCare) |
 | Wellcare | car40925 |
+
+---
+
+## iCare Network → ICARE HEALTH OPTIONS TPA (car40907)
+
+Many Medicaid/Medicare managed care plans at Spring Hill bill through the **iCare** network. For AMD billing purposes, all iCare plans use a single carrier: **ICARE HEALTH OPTIONS TPA** (carrier code `ICA01`, carrier ID `car40907`).
+
+| Plan Name | Original Carrier ID | Now Uses |
+|-----------|-------------------|----------|
+| Aetna Better Health | car280636 | car40907 |
+| Aetna Better Health of Florida | car281481 | car40907 |
+| Aetna Healthy Kids | *(new)* | car40907 |
+| Aetna Medicare HMO | car302877 | car40907 |
+| Community Care Plan | car307992 | car40907 |
+| Doctors Health Medicare | car281648 | car40907 |
+| Florida Community Care | *(new)* | car40907 |
+| Florida Complete Care | car40901 | car40907 |
+| Miami Childrens Health Plan | *(new)* | car40907 |
+| Simply Medicaid | car281218 | car40907 |
+| Vivida | *(new)* | car40907 |
+
+**Note:** Molina Medicaid also uses the iCare network per the insurance list but retains its own carrier ID (`car40912`) in AMD.
 
 ---
 
@@ -151,7 +177,7 @@ var InsuranceNameMap = map[string]InsuranceEntry{
     // NOT ACCEPTED
     "aetna epo university of miami": {CarrierID: "car40887", Routing: RoutingNotAccepted},
     "avmed medicare advantage":      {CarrierID: "car301737", Routing: RoutingNotAccepted},
-    "doctors health medicare":       {CarrierID: "car281648", Routing: RoutingNotAccepted},
+    "doctors health medicare":       {CarrierID: "car40907", Routing: RoutingNotAccepted},
     "florida blue hmo":              {CarrierID: "car280750", Routing: RoutingNotAccepted},
     "florida blueselect":            {CarrierID: "car40897", Routing: RoutingNotAccepted},
     "molina marketplace":            {CarrierID: "car40912", Routing: RoutingNotAccepted},
@@ -181,22 +207,25 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 
     // ALL 3
     "aetna":                              {CarrierID: "car40887", Routing: RoutingAll},
-    "aetna better health":                {CarrierID: "car280636", Routing: RoutingAll},
-    "aetna better health of florida":     {CarrierID: "car281481", Routing: RoutingAll},
-    "aetna medicare hmo":                 {CarrierID: "car302877", Routing: RoutingAll},
+    "aetna better health":                {CarrierID: "car40907", Routing: RoutingAll},
+    "aetna better health of florida":     {CarrierID: "car40907", Routing: RoutingAll},
+    "aetna healthy kids":                 {CarrierID: "car40907", Routing: RoutingAll},
+    "aetna medicare hmo":                 {CarrierID: "car40907", Routing: RoutingAll},
     "ambetter":                           {CarrierID: "car284682", Routing: RoutingAll},
     "cigna hmo":                          {CarrierID: "car301345", Routing: RoutingAll},
     "cigna ppo":                          {CarrierID: "car40895", Routing: RoutingAll},
-    "community care plan":                {CarrierID: "car307992", Routing: RoutingAll},
+    "community care plan":                {CarrierID: "car40907", Routing: RoutingAll},
     "envolve vision":                     {CarrierID: "car281245", Routing: RoutingAll},
     "florida blue":                       {CarrierID: "car40897", Routing: RoutingAll},
-    "florida complete care":              {CarrierID: "car40901", Routing: RoutingAll},
+    "florida community care":             {CarrierID: "car40907", Routing: RoutingAll},
+    "florida complete care":              {CarrierID: "car40907", Routing: RoutingAll},
     "florida medicaid":                   {CarrierID: "car40899", Routing: RoutingAll},
     "florida medicare":                   {CarrierID: "car40900", Routing: RoutingAll},
     "imagine health":                     {CarrierID: "car308142", Routing: RoutingAll},
     "molina medicaid":                    {CarrierID: "car40912", Routing: RoutingAll},
     "multiplan phcs":                     {CarrierID: "car301648", Routing: RoutingAll},
-    "simply medicaid":                    {CarrierID: "car281218", Routing: RoutingAll},
+    "miami childrens health plan":        {CarrierID: "car40907", Routing: RoutingAll},
+    "simply medicaid":                    {CarrierID: "car40907", Routing: RoutingAll},
     "sunhealth":                          {CarrierID: "car308086", Routing: RoutingAll},
     "united healthcare":                  {CarrierID: "car40923", Routing: RoutingAll},
     "united healthcare aarp medicare":    {CarrierID: "car302744", Routing: RoutingAll},
@@ -208,6 +237,7 @@ var InsuranceNameMap = map[string]InsuranceEntry{
     "united healthcare student resources": {CarrierID: "car283950", Routing: RoutingAll},
     "united healthcare surest":           {CarrierID: "car301501", Routing: RoutingAll},
     "umr":                                {CarrierID: "car284838", Routing: RoutingAll},
+    "vivida":                             {CarrierID: "car40907", Routing: RoutingAll},
     "wellcare":                           {CarrierID: "car40925", Routing: RoutingAll},
 }
 
@@ -216,7 +246,7 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 // For the 5 ambiguous carriers, defaults to the most permissive rule.
 var CarrierRoutingMap = map[string]RoutingRule{
     // NOT ACCEPTED
-    "car281648": RoutingNotAccepted, // DOCTORS HEALTHCARE PLANS INC
+    "car281648": RoutingNotAccepted, // DOCTORS HEALTHCARE PLANS INC (legacy, pre-iCare migration)
     "car40916":  RoutingNotAccepted, // PREFERRED CARE PARTNERS
     "car301737": RoutingNotAccepted, // EYE MANAGEMENT INC (AvMed Medicare via EMI)
     "car280750": RoutingNotAccepted, // EYE MANAGEMENT INC (FL Blue HMO via EMI)

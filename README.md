@@ -270,7 +270,7 @@ Hour 20: Background refresh → 2-step AMD login → Update Redis + memory
 
 ### Insurance Routing
 
-44 insurance plans mapped to 4 routing tiers. See `INSURANCE_CROSSWALK.md`.
+48 insurance plans mapped to 4 routing tiers. iCare network plans (11 plans) all bill through ICARE HEALTH OPTIONS TPA (`car40907`). See `INSURANCE_CROSSWALK.md`.
 
 | Routing | Providers |
 |---------|-----------|
