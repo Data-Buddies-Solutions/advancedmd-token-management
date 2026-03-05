@@ -799,9 +799,14 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			continue
 		}
 
-		// Check appointment capacity using full duration overlap
+		// AMD 4101: Block if any appointment from a different start time overlaps this slot
+		if hasOverlappingAppointment(slotTime, appointments) {
+			continue
+		}
+
+		// AMD 4186: Check same-start-time appointment count against maxApptsPerSlot
 		if maxAppts > 0 {
-			count := countOverlappingAppointments(slotTime, appointments)
+			count := countSameStartAppointments(slotTime, appointments)
 			if count >= maxAppts {
 				continue
 			}
@@ -816,14 +821,31 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	return slots
 }
 
-// countOverlappingAppointments counts how many existing appointments occupy a given slot time.
-// An appointment occupies a slot if the slot falls within [apptStart, apptStart+duration).
-// This correctly handles appointments whose duration spans multiple slot intervals.
-func countOverlappingAppointments(slotTime time.Time, appointments []domain.Appointment) int {
-	count := 0
+// hasOverlappingAppointment checks if any appointment from a DIFFERENT start time
+// has a duration that extends into this slot. AMD returns error 4101 ("Overlaps
+// existing appointment") when booking inside another appointment's time range.
+// This is a hard block — maxApptsPerSlot does NOT apply.
+func hasOverlappingAppointment(slotTime time.Time, appointments []domain.Appointment) bool {
 	for _, appt := range appointments {
+		// Skip appointments that start at this exact time (handled by maxAppts / 4186)
+		if appt.StartDateTime.Equal(slotTime) {
+			continue
+		}
+		// Block if this slot falls within [apptStart, apptStart+duration)
 		apptEnd := appt.StartDateTime.Add(time.Duration(appt.Duration) * time.Minute)
 		if !slotTime.Before(appt.StartDateTime) && slotTime.Before(apptEnd) {
+			return true
+		}
+	}
+	return false
+}
+
+// countSameStartAppointments counts appointments that start at exactly the given slot time.
+// AMD returns error 4186 when this count exceeds maxApptsPerSlot.
+func countSameStartAppointments(slotTime time.Time, appointments []domain.Appointment) int {
+	count := 0
+	for _, appt := range appointments {
+		if appt.StartDateTime.Equal(slotTime) {
 			count++
 		}
 	}

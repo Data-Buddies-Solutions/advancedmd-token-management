@@ -133,7 +133,8 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 4. Calculates available slots based on:
    - Provider work hours (from `columnsetting`)
    - Slot interval (15 or 30 min depending on provider)
-   - Existing appointments (respects `maxApptsPerSlot`)
+   - **Appointment duration overlap** (AMD 4101): If any appointment's `[start, start+duration)` covers a slot, that slot is hard-blocked — you cannot book inside another appointment's time range
+   - **Same-start capacity** (AMD 4186): Multiple appointments can start at the exact same time, up to `maxApptsPerSlot` (0 = unlimited)
    - **Block holds** from AMD (lunch, meetings, out of office, etc.)
    - Provider workweek (e.g., Dr. Licht only works Wed-Thu)
    - **Past-slot filter**: If date is today, slots before `now + 30 min` Eastern are excluded
@@ -222,6 +223,12 @@ Insurance-based provider routing is enforced server-side. See `INSURANCE_CROSSWA
 8. **Block hold `duration` is unreliable for multi-day holds**: For multi-day block holds (e.g., "OUT OF THE OFFICE" spanning Feb 17-20), AMD returns a `duration` that doesn't always cover the full day. Use the `enddatetime` field instead of computing end from `startdatetime + duration`. See `IsBlockedByHold` in `domain/scheduler.go`.
 
 9. **AMD single-vs-array responses**: AMD returns a single JSON object when there's one result, but an array when there are multiple. All parsing code must handle both formats (see `AMDLookupResponse` vs `AMDLookupResponseSingle` pattern in `advancedmd_xmlrpc.go`).
+
+10. **AMD appointment conflict errors (409) are two separate checks**:
+   - **4101 — Overlaps existing appointment**: Fires when the new appointment's start time falls within another appointment's `[start, start+duration)`. This is a **hard block** — `maxApptsPerSlot` does NOT override it. You cannot book inside another appointment's time range.
+   - **4186 — Max appointments per slot exceeded**: Fires when too many appointments share the exact same start time. Controlled by `maxApptsPerSlot` (0 = unlimited).
+   - These are independent checks. `maxApptsPerSlot=2` means two appointments can start at 9:00 simultaneously, but you still can't book at 9:15 if a 9:00 appointment has a 30-min duration covering that slot.
+   - See `hasOverlappingAppointment()` (4101) and `countSameStartAppointments()` (4186) in `handlers.go`.
 
 ## XMLRPC Actions Reference
 

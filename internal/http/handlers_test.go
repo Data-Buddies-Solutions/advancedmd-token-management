@@ -295,7 +295,83 @@ func TestAvailabilityResponse_OmitsMessageWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestCountOverlappingAppointments(t *testing.T) {
+func TestHasOverlappingAppointment(t *testing.T) {
+	eastern, _ := time.LoadLocation("America/New_York")
+
+	tests := []struct {
+		name         string
+		slotTime     time.Time
+		appointments []domain.Appointment
+		expected     bool
+	}{
+		{
+			name:         "no appointments",
+			slotTime:     time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			appointments: nil,
+			expected:     false,
+		},
+		{
+			name:     "30-min appt ends exactly at slot — no overlap",
+			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 30},
+			},
+			expected: false, // 9:00+30min=9:30, slot 9:30 is NOT inside [9:00, 9:30)
+		},
+		{
+			name:     "60-min appt overlaps into next slot — blocked (4101)",
+			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},
+			},
+			expected: true, // 9:30 falls within [9:00, 10:00)
+		},
+		{
+			name:     "60-min appt does not overlap past its end",
+			slotTime: time.Date(2026, 3, 6, 10, 0, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},
+			},
+			expected: false, // 10:00 is NOT inside [9:00, 10:00)
+		},
+		{
+			name:     "same-start-time appt is ignored — handled by maxAppts",
+			slotTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 30},
+			},
+			expected: false, // same start time — not an overlap, it's a double-book check
+		},
+		{
+			name:     "Licht 12:15 scenario — Bourque at 12:00 with 30-min duration blocks 12:15",
+			slotTime: time.Date(2026, 3, 10, 12, 15, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 10, 12, 0, 0, 0, eastern), Duration: 30}, // Bourque 12:00-12:30
+			},
+			expected: true, // 12:15 is inside [12:00, 12:30) — AMD 4101
+		},
+		{
+			name:     "overlap from earlier appt even with same-start appt present",
+			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},  // overlaps into 9:30
+				{StartDateTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern), Duration: 30}, // starts at 9:30
+			},
+			expected: true, // the 9:00 appt overlaps — hard block regardless of the 9:30 same-start
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasOverlappingAppointment(tt.slotTime, tt.appointments)
+			if got != tt.expected {
+				t.Errorf("Expected %v, got %v", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestCountSameStartAppointments(t *testing.T) {
 	eastern, _ := time.LoadLocation("America/New_York")
 
 	tests := []struct {
@@ -306,59 +382,42 @@ func TestCountOverlappingAppointments(t *testing.T) {
 	}{
 		{
 			name:         "no appointments",
-			slotTime:     time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			slotTime:     time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
 			appointments: nil,
 			expected:     0,
 		},
 		{
-			name:     "30-min appt only counts at its own slot",
-			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			name:     "one same-start appointment",
+			slotTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
 			appointments: []domain.Appointment{
-				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 30},
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 15},
 			},
-			expected: 0, // 9:00+30min=9:30, slot 9:30 is NOT inside [9:00, 9:30)
+			expected: 1,
 		},
 		{
-			name:     "60-min appt spans into next slot",
-			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			name:     "two same-start appointments (double-book)",
+			slotTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
 			appointments: []domain.Appointment{
-				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},
-			},
-			expected: 1, // 9:30 falls within [9:00, 10:00)
-		},
-		{
-			name:     "60-min appt does not span past its end",
-			slotTime: time.Date(2026, 3, 6, 10, 0, 0, 0, eastern),
-			appointments: []domain.Appointment{
-				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},
-			},
-			expected: 0, // 10:00 is NOT inside [9:00, 10:00)
-		},
-		{
-			name:     "Dr Noel 3/6 scenario — 60-min Vargas + 30-min Prater at 9:30",
-			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
-			appointments: []domain.Appointment{
-				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},  // Vargas
-				{StartDateTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern), Duration: 30}, // Prater
-			},
-			expected: 2, // both occupy 9:30
-		},
-		{
-			name:     "multiple overlapping appointments at same slot",
-			slotTime: time.Date(2026, 3, 6, 10, 0, 0, 0, eastern),
-			appointments: []domain.Appointment{
-				{StartDateTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern), Duration: 60},  // spans 9:30-10:30
-				{StartDateTime: time.Date(2026, 3, 6, 10, 0, 0, 0, eastern), Duration: 30}, // starts at 10:00
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 15},
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 15},
 			},
 			expected: 2,
+		},
+		{
+			name:     "different-start appointments not counted",
+			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60}, // overlaps but different start
+			},
+			expected: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := countOverlappingAppointments(tt.slotTime, tt.appointments)
+			got := countSameStartAppointments(tt.slotTime, tt.appointments)
 			if got != tt.expected {
-				t.Errorf("Expected %d overlapping appointments, got %d", tt.expected, got)
+				t.Errorf("Expected %d, got %d", tt.expected, got)
 			}
 		})
 	}
@@ -382,7 +441,7 @@ func TestCalculateAvailableSlots_MultiSlotAppointment(t *testing.T) {
 	}
 
 	// Simulate: 60-min appt at 9:00 (Vargas) + 30-min appt at 9:30 (Prater)
-	// This should fill the 9:30 slot (2 overlapping = max)
+	// 9:30 is hard-blocked by Vargas overlap (AMD 4101), regardless of maxAppts
 	appointments := []domain.Appointment{
 		{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},  // Vargas 9:00-10:00
 		{StartDateTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern), Duration: 30}, // Prater 9:30-10:00
@@ -399,10 +458,9 @@ func TestCalculateAvailableSlots_MultiSlotAppointment(t *testing.T) {
 
 	slots := calculateAvailableSlots(col, appointments, blockHolds, date, nowEastern)
 
-	// Available slots should be: 10:00 (Vargas ends, Prater ends)
 	// 8:30 — blocked by hold
-	// 9:00 — 1 appt (Vargas), under max 2 → available
-	// 9:30 — 2 appts (Vargas overlap + Prater), at max → blocked
+	// 9:00 — 1 same-start appt (Vargas), under max 2 → available
+	// 9:30 — Vargas (9:00, 60min) overlaps into 9:30 → hard blocked (AMD 4101)
 	// 10:00 — 0 appts → available
 
 	expectedTimes := map[string]bool{
