@@ -4,6 +4,47 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-05
+
+### Source: Production call review — agent offering callbacks and phone numbers
+
+Agent was telling callers to "call the office" or that "someone will reach out," but the agent IS the office phone line. There is no callback functionality, no alternative number, and no outbound follow-up. The only escalation path is transferring the call to a human.
+
+---
+
+### SOUL.md — Boundaries
+
+**Added: "You are the office phone line"**
+- New rule at the top of the Boundaries section
+- When someone calls Abita Eye Care, they reach the agent — there is no separate number to give
+- No callback option, no "someone will reach out," no alternative phone number
+- Only escalation: transfer the call to a human at the office
+- "Never tell a caller to 'call the office' — they already did."
+
+---
+
+### TOOLS.md — General Rules
+
+**Fixed: Tool failure fallback language**
+- Was: "offer a different option or let them know the office will follow up"
+- Now: "offer a different option or to transfer them to the office"
+
+### TOOLS.md — book_appt
+
+**Fixed: Booking failure fallback language**
+- Was: "I can have the office call you back to confirm"
+- Now: "I can transfer you to the office"
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes (phone number kept as reference data, but agent should never speak it to callers)
+
+---
+
+---
+
 ## 2026-03-04
 
 ### Source: Insurance list audit (PDF rev 9.4.2025 vs insurance.go)
