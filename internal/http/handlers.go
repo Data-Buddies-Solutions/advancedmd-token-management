@@ -773,13 +773,6 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 		return slots
 	}
 
-	// Build appointment count map
-	apptCounts := make(map[string]int)
-	for _, appt := range appointments {
-		key := appt.StartDateTime.Format("2006-01-02T15:04")
-		apptCounts[key]++
-	}
-
 	// Determine cutoff for past slots: if date is today, skip slots before now + 30 min
 	today := nowEastern.Format("2006-01-02")
 	isToday := date.Format("2006-01-02") == today
@@ -789,6 +782,8 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	if interval == 0 {
 		interval = 15 * time.Minute
 	}
+
+	maxAppts := col.MaxApptsPerSlot
 
 	for slotTime := workStart; slotTime.Before(workEnd); slotTime = slotTime.Add(interval) {
 		// Filter past slots
@@ -804,16 +799,12 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			continue
 		}
 
-		slotKey := slotTime.Format("2006-01-02T15:04")
-		count := apptCounts[slotKey]
-
-		maxAppts := col.MaxApptsPerSlot
-		if maxAppts == 0 {
-			maxAppts = 1
-		}
-
-		if count >= maxAppts {
-			continue
+		// Check appointment capacity using full duration overlap
+		if maxAppts > 0 {
+			count := countOverlappingAppointments(slotTime, appointments)
+			if count >= maxAppts {
+				continue
+			}
 		}
 
 		slots = append(slots, domain.AvailableSlot{
@@ -823,4 +814,18 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	}
 
 	return slots
+}
+
+// countOverlappingAppointments counts how many existing appointments occupy a given slot time.
+// An appointment occupies a slot if the slot falls within [apptStart, apptStart+duration).
+// This correctly handles appointments whose duration spans multiple slot intervals.
+func countOverlappingAppointments(slotTime time.Time, appointments []domain.Appointment) int {
+	count := 0
+	for _, appt := range appointments {
+		apptEnd := appt.StartDateTime.Add(time.Duration(appt.Duration) * time.Minute)
+		if !slotTime.Before(appt.StartDateTime) && slotTime.Before(apptEnd) {
+			count++
+		}
+	}
+	return count
 }
