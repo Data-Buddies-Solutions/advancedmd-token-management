@@ -243,6 +243,17 @@ Only `date` is required. `routing` comes from verify/add-patient response.
 
 Max 5 slots per provider. `totalAvailable` gives the full count.
 
+#### Slot Availability Logic
+
+A slot is available only if it passes all four checks in order:
+
+1. **Past-slot filter** — If date is today, slots before `now + 30 min` Eastern are skipped
+2. **Block holds** — Slot is not inside any block hold (lunch, out of office, etc.)
+3. **Duration overlap (AMD 4101)** — No appointment from a *different* start time has a duration that covers this slot. A 30-min appointment at 9:00 blocks the 9:15 slot because 9:15 falls within `[9:00, 9:30)`. This is a hard block — `maxApptsPerSlot` does not override it.
+4. **Same-start capacity (AMD 4186)** — The number of appointments starting at this exact time is less than `maxApptsPerSlot` (0 = unlimited, skip this check)
+
+The distinction between checks 3 and 4 matters: `maxApptsPerSlot=2` means two appointments can start at 9:00 simultaneously (double-booking), but you still cannot book at 9:15 if a 9:00 appointment's duration extends past it.
+
 **No availability response** (when 14-day search exhausts):
 ```json
 {

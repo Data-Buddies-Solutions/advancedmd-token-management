@@ -1,6 +1,42 @@
 # Changelog
 
-## [Unreleased] - 2026-03-04
+## [Unreleased] - 2026-03-05
+
+### Availability Slot Calculation — Separate AMD 4101 / 4186 Conflict Checks
+
+Agent tried to book Dr. Licht at 12:15 PM on a day where Bourque was booked at 12:00 with a 30-min duration (covering 12:00–12:30). AMD returned HTTP 409 with error 4101: "Can't add appointment: Overlaps existing appointment." The scheduler had shown 12:15 as available because it lumped all overlapping appointments into a single count and compared against `maxApptsPerSlot=2`.
+
+AMD enforces two independent booking conflict rules:
+
+| Error | Rule | Meaning |
+|-------|------|---------|
+| **4101** | Duration overlap | Cannot book inside another appointment's `[start, start+duration)` — hard block, `maxApptsPerSlot` irrelevant |
+| **4186** | Same-start capacity | Too many appointments starting at the exact same time — controlled by `maxApptsPerSlot` |
+
+#### Changed
+
+- **`internal/http/handlers.go`** — Split single `countOverlappingAppointments()` into two functions:
+  - `hasOverlappingAppointment()` — checks if any appointment from a DIFFERENT start time extends into the slot (AMD 4101). Runs unconditionally, including for unlimited columns (Dr. Bach, `maxApptsPerSlot=0`). Returns bool — hard block.
+  - `countSameStartAppointments()` — counts appointments starting at the EXACT same time (AMD 4186). Only checked when `maxApptsPerSlot > 0`.
+- **`internal/http/handlers.go`** — Updated check order in `calculateAvailableSlots()`:
+  1. Past-slot filter
+  2. Block hold check
+  3. `hasOverlappingAppointment` → hard block (4101)
+  4. `countSameStartAppointments` vs `maxApptsPerSlot` → capacity block (4186)
+- **`CLAUDE.md`** — Updated "How It Works" step 4 to document both checks; added quirk #10 explaining 4101 vs 4186
+- **`README.md`** — Added "Slot Availability Logic" section documenting the two conflict checks
+
+#### Fixed
+
+- **Unlimited columns (Dr. Bach) now enforce overlap blocking** — Previous code wrapped the entire overlap check inside `if maxAppts > 0`, which skipped duration-overlap detection for unlimited columns. A multi-slot appointment on Dr. Bach's column would leave overlapped slots falsely available.
+
+#### Updated Tests
+
+- **`internal/http/handlers_test.go`** — Replaced `TestCountOverlappingAppointments` with `TestHasOverlappingAppointment` (7 cases including the Licht 12:15 scenario) + `TestCountSameStartAppointments` (4 cases). Updated `TestCalculateAvailableSlots_MultiSlotAppointment` comments.
+
+---
+
+## [Previous] - 2026-03-04
 
 ### Insurance Network Consolidation + Alias Map + Prompt Update
 
