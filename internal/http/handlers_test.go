@@ -335,12 +335,12 @@ func TestHasOverlappingAppointment(t *testing.T) {
 			expected: false, // 10:00 is NOT inside [9:00, 10:00)
 		},
 		{
-			name:     "same-start-time appt is ignored — handled by maxAppts",
+			name:     "same-start-time appt is blocked — no double booking",
 			slotTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 30},
 			},
-			expected: false, // same start time — not an overlap, it's a double-book check
+			expected: true, // same start time falls within [9:00, 9:30) — blocked
 		},
 		{
 			name:     "Licht 12:15 scenario — Bourque at 12:00 with 30-min duration blocks 12:15",
@@ -459,24 +459,17 @@ func TestCalculateAvailableSlots_MultiSlotAppointment(t *testing.T) {
 	slots := calculateAvailableSlots(col, appointments, blockHolds, date, nowEastern)
 
 	// 8:30 — blocked by hold
-	// 9:00 — 1 same-start appt (Vargas), under max 2 → available
-	// 9:30 — Vargas (9:00, 60min) overlaps into 9:30 → hard blocked (AMD 4101)
+	// 9:00 — Vargas appt here (60min) → blocked
+	// 9:30 — Vargas (9:00, 60min) overlaps into 9:30 → blocked
 	// 10:00 — 0 appts → available
 
-	expectedTimes := map[string]bool{
-		"9:00 AM":  true,
-		"10:00 AM": true,
-	}
-
-	if len(slots) != len(expectedTimes) {
-		t.Errorf("Expected %d available slots, got %d: %v", len(expectedTimes), len(slots), slots)
+	if len(slots) != 1 {
+		t.Errorf("Expected 1 available slot, got %d: %v", len(slots), slots)
 		return
 	}
 
-	for _, slot := range slots {
-		if !expectedTimes[slot.Time] {
-			t.Errorf("Unexpected slot: %s", slot.Time)
-		}
+	if slots[0].Time != "10:00 AM" {
+		t.Errorf("Expected 10:00 AM, got %s", slots[0].Time)
 	}
 }
 
@@ -496,19 +489,17 @@ func TestCalculateAvailableSlots_UnlimitedMaxAppts(t *testing.T) {
 		Workweek:        62,
 	}
 
-	// Even with many appointments stacked, all slots should remain available
+	// All slots occupied — none should be available regardless of unlimited maxAppts
 	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
 		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
 		{StartDateTime: time.Date(2026, 6, 1, 9, 15, 0, 0, eastern), Duration: 15},
 	}
 
 	slots := calculateAvailableSlots(col, appointments, nil, date, nowEastern)
 
-	// Both 9:00 and 9:15 should be available despite appointments
-	if len(slots) != 2 {
-		t.Errorf("Expected 2 slots with unlimited max, got %d", len(slots))
+	// Both 9:00 and 9:15 are occupied — no slots available
+	if len(slots) != 0 {
+		t.Errorf("Expected 0 slots when all occupied, got %d", len(slots))
 	}
 }
 

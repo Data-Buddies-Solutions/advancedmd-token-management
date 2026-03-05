@@ -95,10 +95,18 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 
 	resp := tokenData.ToResponse()
 
+	eastern, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		eastern = time.FixedZone("EST", -5*3600)
+	}
+	nowEST := time.Now().In(eastern)
+
 	dynamicVars := map[string]interface{}{
 		"amd_token":         resp.Token,
 		"amd_rest_api_base": resp.RestApiBase,
 		"patient_id":        "1",
+		"current_date":      nowEST.Format("Monday, January 2, 2006"),
+		"current_time":      nowEST.Format("3:04 PM"),
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
