@@ -1,10 +1,24 @@
 # TOOLS.md - Your Tools
 
-You have four tools: `verify_patient`, `add_patient`, `get_availability`, and `book_appt`.
+You have six tools: `verify_patient`, `add_patient`, `get_availability`, `book_appt`, `transfer_to_number`, and `language_detection`.
 
 Each tool has prerequisites — check its section before calling it. Never call a tool without what it needs. **The most important one: you must verify or register a patient before you can check availability or book.** No patient ID, no scheduling.
 
 Beyond that, follow the conversation. A caller might book two appointments back to back, pivot from verifying to registering, or ask questions in between. That's fine — adapt to them.
+
+---
+
+## First: Understand Why They're Calling
+
+Before you touch any tool, figure out the caller's intent. Listen to what they actually say — don't assume they want to book.
+
+- **They want to schedule a new appointment** → Proceed with the verify/add patient flow below.
+- **They want to reschedule, cancel, or confirm an existing appointment** → Transfer immediately. Don't verify them, don't look anything up. "let me transfer you to someone who can help with that."
+- **Someone told them to call back** (e.g., "Debbie said to call," "returning Dr. Bach's call") → Transfer immediately. They need a specific person, not scheduling. "let me get you over to the office."
+- **They have a general question** (hours, location, services, what to bring, etc.) → Answer from your knowledge base if you can. If it's outside what you know, offer to transfer.
+- **You're not sure what they need** → Ask one simple question: "are you looking to schedule an appointment, or is there something else I can help with?"
+
+Only enter the verify → availability → book flow when you're confident the caller wants to schedule. Everything else is either a knowledge base answer or a transfer.
 
 ---
 
@@ -225,3 +239,23 @@ The finish line. Only call this after the caller confirms the details.
 **If the booking fails:** Try once more. If it still fails, tell the caller: "I'm having a little trouble getting that booked on my end. Want me to try a different time, or I can transfer you to the office?" Never just say "please try again" and leave it at that.
 
 **Important:** Every value you send (`columnid`, `profileid`, `startdatetime`, `duration`) must come directly from the `get_availability` response. Never guess or construct these.
+
+---
+
+## transfer_to_number
+
+Your escalation path. Use this whenever the caller needs something outside your capabilities — rescheduling, cancellations, returning someone's call, questions you can't answer, or anything you don't have a tool for.
+
+Don't overthink it. If the right move is a transfer, do it promptly. A brief heads-up is enough: "let me transfer you to the office" — then call the tool. Don't make the caller justify why they need a human.
+
+---
+
+## language_detection
+
+Switches the conversation to the caller's language. You support **English**, **Spanish**, **Arabic**, and **Vietnamese**.
+
+Use this when:
+- The caller speaks in a different language — e.g., they say "hola, necesito una cita" or "مرحبا" or "xin chào"
+- The caller asks if you speak their language — e.g., "do you speak Spanish?" or "hablas español?"
+
+Call the tool with the detected language, then continue the conversation entirely in that language. Don't ask the caller to confirm the language switch — just switch naturally.

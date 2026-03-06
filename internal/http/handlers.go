@@ -803,7 +803,7 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			}
 		}
 
-		if domain.IsBlockedByHold(slotTime, blockHolds) {
+		if domain.IsBlockedByHold(slotTime, interval, blockHolds) {
 			continue
 		}
 
