@@ -139,11 +139,13 @@ func IsAllowedColumn(columnID string) bool {
 	return AllowedColumns[columnID]
 }
 
-// IsBlockedByHold checks if a time slot falls within any block hold.
-func IsBlockedByHold(slotTime time.Time, holds []BlockHold) bool {
+// IsBlockedByHold checks if a time slot overlaps any block hold.
+// A slot is blocked if [slotStart, slotStart+duration) overlaps [holdStart, holdEnd).
+func IsBlockedByHold(slotTime time.Time, slotDuration time.Duration, holds []BlockHold) bool {
+	slotEnd := slotTime.Add(slotDuration)
 	for _, hold := range holds {
-		// Slot is blocked if it starts during the hold period
-		if !slotTime.Before(hold.StartDateTime) && slotTime.Before(hold.EndDateTime) {
+		// Two intervals overlap when each starts before the other ends
+		if slotTime.Before(hold.EndDateTime) && slotEnd.After(hold.StartDateTime) {
 			return true
 		}
 	}
