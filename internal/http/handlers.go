@@ -216,6 +216,8 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	normalizedDOB := domain.NormalizeDOB(req.DOB)
 	formattedPhone := domain.FormatPhone(req.Phone)
 	normalizedSex := domain.NormalizeSex(req.Sex)
+	normalizedFirstName := domain.StripDiacritics(req.FirstName)
+	normalizedLastName := domain.StripDiacritics(req.LastName)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -230,8 +232,8 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	// Create patient in AMD
 	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, clients.AddPatientParams{
-		FirstName: req.FirstName,
-		LastName:  req.LastName,
+		FirstName: normalizedFirstName,
+		LastName:  normalizedLastName,
 		DOB:       normalizedDOB,
 		Phone:     formattedPhone,
 		Email:     req.Email,
@@ -244,9 +246,17 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.Printf("add-patient: AMD error: %v", err)
+		if strings.Contains(err.Error(), "Duplicate name/DOB") {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(AddPatientResponse{
+				Status:  "error",
+				Message: "A patient with this name and date of birth already exists in the system. Please try verifying the patient again instead of registering.",
+			})
+			return
+		}
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "error from AMD") {
-			status = http.StatusConflict // 409 for AMD-reported errors (e.g., duplicate patient)
+			status = http.StatusConflict
 		}
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(AddPatientResponse{
@@ -348,8 +358,9 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalize DOB
+	// Normalize inputs
 	normalizedDOB := domain.NormalizeDOB(req.DOB)
+	normalizedLastName := domain.StripDiacritics(req.LastName)
 
 	// Get token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -363,7 +374,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call AdvancedMD lookuppatient API
-	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, req.LastName)
+	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
@@ -373,10 +384,15 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter patients by DOB
+	log.Printf("verify-patient: lookup lastName=%q returned %d patients", normalizedLastName, len(patients))
+	for i, p := range patients {
+		log.Printf("verify-patient: result[%d] id=%s name=%q dob=%q", i, p.ID, p.FullName, p.DOB)
+	}
+
+	// Filter patients by DOB (normalize both sides — AMD may return different formats)
 	var matchingPatients []domain.Patient
 	for _, p := range patients {
-		if p.DOB == normalizedDOB {
+		if domain.NormalizeDOB(p.DOB) == normalizedDOB {
 			matchingPatients = append(matchingPatients, p)
 		}
 	}
@@ -525,6 +541,20 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Reject same-day appointment searches
+	eastern, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to load timezone"})
+		return
+	}
+	todayEastern := time.Now().In(eastern).Format("2006-01-02")
+	if startDate.Format("2006-01-02") == todayEastern {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Same-day appointments are not available. Please search for tomorrow or later."})
+		return
+	}
+
 	log.Printf("availability: date=%s provider=%q office=%q routing=%q", req.Date, req.Provider, req.Office, req.Routing)
 
 	// Get auth token
@@ -647,11 +677,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Load Eastern timezone for past-slot filtering
-	eastern, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		eastern = time.FixedZone("EST", -5*3600)
-	}
+	// Eastern timezone already loaded above for same-day check
 	nowEastern := time.Now().In(eastern)
 
 	// Try the requested date first, then auto-search forward up to 14 days
