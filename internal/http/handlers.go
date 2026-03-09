@@ -14,6 +14,17 @@ import (
 	"advancedmd-token-management/internal/domain"
 )
 
+// eastern is the America/New_York timezone, loaded once at startup.
+var eastern *time.Location
+
+func init() {
+	var err error
+	eastern, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		eastern = time.FixedZone("EST", -5*3600)
+	}
+}
+
 // ErrorResponse is the JSON response structure for error conditions.
 type ErrorResponse struct {
 	Error   string `json:"error"`
@@ -95,10 +106,6 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 
 	resp := tokenData.ToResponse()
 
-	eastern, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		eastern = time.FixedZone("EST", -5*3600)
-	}
 	nowEST := time.Now().In(eastern)
 
 	dynamicVars := map[string]interface{}{
@@ -542,12 +549,6 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Reject same-day appointment searches
-	eastern, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to load timezone"})
-		return
-	}
 	todayEastern := time.Now().In(eastern).Format("2006-01-02")
 	if startDate.Format("2006-01-02") == todayEastern {
 		w.WriteHeader(http.StatusBadRequest)
@@ -677,7 +678,6 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Eastern timezone already loaded above for same-day check
 	nowEastern := time.Now().In(eastern)
 
 	// Try the requested date first, then auto-search forward up to 14 days
