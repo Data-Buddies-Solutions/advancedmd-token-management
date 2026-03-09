@@ -5,6 +5,30 @@ import (
 	"time"
 )
 
+func TestStripDiacritics(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"spanish accents", "López Sánchez", "Lopez Sanchez"},
+		{"french accents", "René François", "Rene Francois"},
+		{"german umlaut", "Müller", "Muller"},
+		{"no accents", "Smith", "Smith"},
+		{"mixed", "José García-López", "Jose Garcia-Lopez"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := StripDiacritics(tt.input)
+			if got != tt.expected {
+				t.Errorf("StripDiacritics(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestStripPatientPrefix(t *testing.T) {
 	tests := []struct {
 		input    string

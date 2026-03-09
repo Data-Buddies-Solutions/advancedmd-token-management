@@ -137,7 +137,7 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
    - **Same-start capacity** (AMD 4186): Multiple appointments can start at the exact same time, up to `maxApptsPerSlot` (0 = unlimited)
    - **Block holds** from AMD (lunch, meetings, out of office, etc.)
    - Provider workweek (e.g., Dr. Licht only works Wed-Thu)
-   - **Past-slot filter**: If date is today, slots before `now + 30 min` Eastern are excluded
+   - **Same-day block**: Requests for today's date (Eastern time) are rejected — same-day appointments are not available
 5. If ALL providers have zero availability, **auto-searches forward** day-by-day (up to 14 days) until openings are found
 
 ### Response Format

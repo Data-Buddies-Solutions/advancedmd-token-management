@@ -4,6 +4,74 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-09
+
+### Source: Production edge cases — parent callers, same-day booking, accented names, subscriber IDs, date shifting
+
+Multiple prompt hardening updates based on real agent behavior: agent didn't clarify who the appointment was for when a parent called, sent "TBD" for subscriber ID, offered same-day slots, and didn't explain when the system auto-advanced to a later date.
+
+---
+
+### TOOLS.md — New "Identify the Patient" section
+
+**Added: Parent-calling-for-child handling**
+- New section between "First: Understand Why They're Calling" and "General Rules"
+- If someone says "I need an appointment for my son/daughter" — the patient is the child, not the caller
+- If unclear, agent asks: "Is this appointment for you or for someone else?"
+- All collected info (name, DOB, insurance) must be for the patient, not the caller
+- Gentle redirect if caller gives their own info: "And what's your child's name? That's who I'll need to look up."
+
+---
+
+### TOOLS.md — verify_patient
+
+**Added: Two-last-name guidance**
+- Sub-bullet under the last name spelling step
+- Some patients have two last names (e.g., "Lopez Sanchez") — send both
+- If lookup fails, retry with just the first last name since some records may only have one
+
+---
+
+### TOOLS.md — add_patient
+
+**Added: No-placeholder rule for subscriber ID**
+- Sub-bullet under step 11 (subscriber/member ID)
+- Never send "TBD," "N/A," or any placeholder — the field requires the real number
+- If caller doesn't have their card, offer to hold while they grab it
+- If they can't get it, offer to transfer to the office to finish registration
+
+**Added: Pre-submit readback of key details**
+- Before calling the tool, agent reads back name, DOB, email, and address in one conversational pass
+- Waits for confirmation before submitting
+- Keeps it natural, not a 13-item checklist
+
+---
+
+### TOOLS.md — get_availability
+
+**Added: No same-day appointments rule**
+- Sub-bullet under step 1 (ask when they'd like to come in)
+- If caller asks for today: "We're not able to book same-day appointments — the earliest I can look is tomorrow."
+- Don't call the tool with today's date (middleware also enforces this server-side)
+
+**Added: Date-shifted explanation (step 4)**
+- New step between "Call the tool" and "Pick one slot"
+- Response has `searchedDate` (what was requested) and `date` (what came back)
+- If they differ, the requested date had no availability and the system found the next open day
+- Agent must tell the caller: "I don't have anything available on [requested date], but the next opening is [returned date]"
+- Don't skip this — caller needs to know the date changed before being offered a slot
+
+---
+
+### Files NOT changed this round
+- **SOUL.md** — No changes
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-05
 
 ### Source: Production call review — agent offering callbacks and phone numbers
