@@ -149,7 +149,7 @@ curl -X POST -H "Authorization: Bearer YOUR_API_SECRET" \
 
 ### POST /api/verify-patient
 
-Looks up a patient by last name and DOB, returns insurance routing.
+Looks up a patient by last name and DOB, returns insurance routing. Last names are automatically stripped of diacritical marks (e.g., "López" → "Lopez") before lookup.
 
 **Request:**
 ```json
@@ -172,6 +172,8 @@ Looks up a patient by last name and DOB, returns insurance routing.
 ### POST /api/add-patient
 
 Creates a new patient and attaches insurance. Two sequential XMLRPC calls: `addpatient` then `addinsurance`.
+
+Names are automatically stripped of diacritical marks (e.g., "López" → "Lopez") before being sent to AMD.
 
 **Request (all fields required except aptSuite):**
 ```json
@@ -247,7 +249,7 @@ Max 5 slots per provider. `totalAvailable` gives the full count.
 
 A slot is available only if it passes all four checks in order:
 
-1. **Past-slot filter** — If date is today, slots before `now + 30 min` Eastern are skipped
+1. **Same-day block** — If date is today (Eastern time), the request is rejected with a 400 error. Same-day appointments are not available.
 2. **Block holds** — Slot is not inside any block hold (lunch, out of office, etc.)
 3. **Duration overlap (AMD 4101)** — No appointment from a *different* start time has a duration that covers this slot. A 30-min appointment at 9:00 blocks the 9:15 slot because 9:15 falls within `[9:00, 9:30)`. This is a hard block — `maxApptsPerSlot` does not override it.
 4. **Same-start capacity (AMD 4186)** — The number of appointments starting at this exact time is less than `maxApptsPerSlot` (0 = unlimited, skip this check)
