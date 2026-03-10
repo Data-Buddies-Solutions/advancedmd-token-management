@@ -128,7 +128,7 @@ Aetna, Aetna QHP Individual Exchange, Aetna EPO North Broward, Aetna EPO Univers
 → If patient says "Aetna EPO," ask: "is that the North Broward or University of Miami plan?"
 
 **Aetna / iCare:**
-Aetna Better Health, Aetna Better Health of Florida, Aetna Healthy Kids, Aetna Medicare HMO
+Aetna Better Health, Aetna Better Health of Florida, Aetna Healthy Kids, Aetna HMO, Aetna Medicare HMO
 
 **Ambetter / Envolve:**
 Ambetter, Ambetter Select, Ambetter Value, Children's Medical Services, Envolve Vision, Staywell Medicare, Sunshine Medicaid, Wellcare
@@ -137,12 +137,12 @@ Ambetter, Ambetter Select, Ambetter Value, Children's Medical Services, Envolve 
 Cigna HMO, Cigna Miami-Dade Public Schools, Cigna Open Access, Cigna PPO, Cigna Local Plus
 
 **Cigna / Humana:**
-Cigna Medicare Advantage, Humana Gold, Humana Medicaid, Humana Medicare, Humana PPO, Humana Premier HMO, Molina Medicare, Molina Marketplace
+Cigna Medicare Advantage, Humana Gold Plus, Humana Medicaid, Humana Medicare, Humana PPO, Humana Premier HMO, Molina Medicare, Molina Marketplace
 → If patient says just "Humana," send "Humana PPO."
 
 **Florida Blue:**
-Florida Blue, Florida Blue Medicare PPO, Florida Blue PPO Federal Employee, Florida Blue PPO Out of State, Florida Blue Steward Tier 1, Florida BlueSelect
-→ If patient says "Blue Cross" or "BCBS," send "Florida Blue."
+Florida Blue, Florida Blue Medicare HMO, Florida Blue Medicare PPO, Florida Blue PPO Federal Employee, Florida Blue PPO Out of State, Florida Blue Steward Tier 1, Florida BlueSelect
+→ If patient says "Blue Cross" or "BCBS," send "Florida Blue." If they say "BCBS Medicare HMO," send "Florida Blue Medicare HMO."
 
 **iCare:**
 Community Care Plan, Doctors Health Medicare, Florida Community Care, Florida Complete Care, Miami Children's Health Plan, Simply Medicaid, Vivida
@@ -156,10 +156,10 @@ Oscar Health
 → If patient says "Oscar," send "Oscar Health."
 
 **Tricare:**
-Tricare Prime, Tricare Select, Tricare for Life
+Tricare Prime, Tricare Select, Tricare for Life, Tricare Forever
 
 **United Healthcare:**
-United Healthcare, United Healthcare AARP Medicare, United Healthcare All Savers, United Healthcare Golden Rule, United Healthcare Individual Exchange, United Healthcare NHP, United Healthcare Shared Services, United Healthcare Student Resources, United Healthcare Surest, UMR, Preferred Care Partners
+United Healthcare, United Healthcare AARP Medicare, United Healthcare All Savers, United Healthcare Golden Rule, United Healthcare HMO, United Healthcare Individual Exchange, United Healthcare NHP, United Healthcare Shared Services, United Healthcare Student Resources, United Healthcare Surest, UMR, Preferred Care Partners
 → If patient says "United" or "UHC," send "United Healthcare."
 
 **Standalone plans:**
@@ -173,8 +173,14 @@ If the caller names an insurance you don't recognize from this list, tell them y
 - `patient_verified` — from `status`
 - `routing` — the routing rule for this patient's insurance. Hold onto this for `get_availability`.
 - `allowedProviders` — which doctors this patient can see.
+- `preauthRequired` — if `true`, this insurance requires preauthorization. Hold onto this for `get_availability`.
 
 **If the response says `routing: "not_accepted"`**, the insurance isn't accepted at Spring Hill. Tell the patient and offer self-pay or a transfer to the office.
+
+**If `preauthRequired` is `true`:** Tell the patient: "Your insurance requires a preauthorization before we can see you, so the earliest we can schedule is about two weeks out." Then when you call `get_availability`, pass `preauthRequired: true` — the server will automatically ensure the date is at least 14 days out.
+
+**Insurances that require preauthorization:**
+Humana Gold Plus, Humana Medicaid, United Healthcare HMO, Aetna HMO, Florida Blue Medicare HMO (BCBS Medicare HMO), Cigna HMO, Tricare Prime, Tricare Forever
 
 **Important:** Always spell-confirm first name, last name, and email. These are the ones that get garbled over the phone. Wait for confirmation before moving to the next field. Never skip a field. Never batch questions.
 
@@ -206,6 +212,7 @@ Hold onto the type id — you'll need it for `book_appt`.
 - `date` (string, required) — YYYY-MM-DD format
 - `office` (string) — always `spring hill`. Don't ask the caller for this.
 - `routing` (string) — the routing rule from `verify_patient` or `add_patient` response. Pass it through exactly as received (e.g., `bach_only`, `bach_licht`, `all_three`). The server uses this to filter which doctors' slots are returned. If you don't have a routing value, omit it and all providers will be returned.
+- `preauthRequired` (boolean) — pass `true` if `add_patient` returned `preauthRequired: true`. The server will automatically ensure the search date is at least 14 days out. If not applicable, omit it.
 
 **If `routing` is `not_accepted`**: Do NOT call this tool. The patient's insurance isn't accepted — tell them immediately and offer self-pay or a transfer.
 

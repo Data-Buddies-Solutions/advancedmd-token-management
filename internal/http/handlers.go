@@ -148,6 +148,7 @@ type AddPatientResponse struct {
 	DOB              string   `json:"dob,omitempty"`
 	Routing          string   `json:"routing,omitempty"`
 	AllowedProviders []string `json:"allowedProviders,omitempty"`
+	PreauthRequired  bool     `json:"preauthRequired,omitempty"`
 	Message          string   `json:"message,omitempty"`
 }
 
@@ -328,6 +329,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		DOB:              normalizedDOB,
 		Routing:          string(routing),
 		AllowedProviders: domain.ProvidersForRouting(routing),
+		PreauthRequired:  insEntry.PreauthRequired,
 		Message:          "Patient created and insurance attached successfully",
 	})
 }
@@ -509,10 +511,11 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 
 // AvailabilityRequest is the expected JSON body for availability lookup.
 type AvailabilityRequest struct {
-	Date     string `json:"date"`     // Required: YYYY-MM-DD format
-	Provider string `json:"provider"` // Optional: filter by provider name
-	Office   string `json:"office"`   // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
-	Routing  string `json:"routing"`  // Optional: routing rule from verify/add-patient (e.g., "bach_only")
+	Date            string `json:"date"`            // Required: YYYY-MM-DD format
+	Provider        string `json:"provider"`        // Optional: filter by provider name
+	Office          string `json:"office"`          // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
+	Routing         string `json:"routing"`         // Optional: routing rule from verify/add-patient (e.g., "bach_only")
+	PreauthRequired bool   `json:"preauthRequired"` // Optional: if true, enforces 14-day minimum lead time
 }
 
 // providerDisplayNames maps profile IDs to friendly display names.
@@ -557,7 +560,12 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	log.Printf("availability: date=%s provider=%q office=%q routing=%q", req.Date, req.Provider, req.Office, req.Routing)
+	// Preauth: auto-advance to 14 days out if requested date is too soon
+	if req.PreauthRequired {
+		startDate, req.Date = enforcePreauthMinDate(startDate, time.Now().In(eastern))
+	}
+
+	log.Printf("availability: date=%s provider=%q office=%q routing=%q preauthRequired=%v", req.Date, req.Provider, req.Office, req.Routing, req.PreauthRequired)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -881,4 +889,16 @@ func countSameStartAppointments(slotTime time.Time, appointments []domain.Appoin
 		}
 	}
 	return count
+}
+
+// enforcePreauthMinDate advances the requested date to 14 days from now if it's too soon.
+// Returns the (possibly advanced) date and its YYYY-MM-DD string.
+func enforcePreauthMinDate(requestedDate time.Time, now time.Time) (time.Time, string) {
+	// Truncate to date-only (midnight) so time-of-day doesn't affect the comparison
+	minDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, 14)
+	if requestedDate.Before(minDate) {
+		log.Printf("availability: preauth required — auto-advanced to %s (14-day minimum)", minDate.Format("2006-01-02"))
+		return minDate, minDate.Format("2006-01-02")
+	}
+	return requestedDate, requestedDate.Format("2006-01-02")
 }

@@ -203,6 +203,8 @@ Names are automatically stripped of diacritical marks (e.g., "López" → "Lopez
 | `partial` | Patient created but insurance failed/rejected |
 | `error` | Validation or AMD failure |
 
+Response includes `preauthRequired: true` when the patient's insurance requires preauthorization (Humana Gold Plus, Humana Medicaid, United Healthcare HMO, Aetna HMO, Florida Blue Medicare HMO, Cigna HMO, Tricare Prime, Tricare Forever).
+
 ### POST /api/scheduler/availability
 
 Returns available appointment slots. Fetches appointments and block holds concurrently per column. Auto-searches forward up to 14 days if requested date is fully booked.
@@ -213,11 +215,12 @@ Returns available appointment slots. Fetches appointments and block holds concur
   "date": "2026-03-03",
   "provider": "Bach",
   "office": "spring hill",
-  "routing": "bach_only"
+  "routing": "bach_only",
+  "preauthRequired": true
 }
 ```
 
-Only `date` is required. `routing` comes from verify/add-patient response.
+Only `date` is required. `routing` comes from verify/add-patient response. When `preauthRequired` is `true`, the server enforces a 14-day minimum lead time — if the requested date is less than 14 days out, it auto-advances to the earliest allowed date.
 
 **Response:**
 ```json
