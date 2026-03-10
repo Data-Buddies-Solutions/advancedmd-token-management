@@ -4,6 +4,24 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-10
+
+### Source: Production bug — common last names not found in verify_patient
+
+Patients with common last names (e.g., "Gonzalez") were returning `not_found` because AMD paginates lookuppatient results (50 per page) and the middleware only read page 1. Sending `"LastName,FirstName"` in `@name` lets AMD filter server-side.
+
+---
+
+### TOOLS.md — verify_patient
+
+**Changed: First name now required (was optional)**
+- Agent now asks caller to spell first name before last name
+- Both are spelled back letter by letter and confirmed before proceeding
+- "What you send" section updated: `firstName` changed from optional to required
+- Rationale: Without first name, common last names return 1000+ paginated results and the patient is never found
+
+---
+
 ## 2026-03-09
 
 ### Source: Production edge cases — parent callers, same-day booking, accented names, subscriber IDs, date shifting

@@ -68,7 +68,7 @@ func TestAdvancedMDClient_LookupPatient_SingleResult(t *testing.T) {
 	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
 	defer cleanup()
 
-	patients, err := client.LookupPatient(context.Background(), tokenData, "Smith")
+	patients, err := client.LookupPatient(context.Background(), tokenData, "Smith", "")
 	if err != nil {
 		t.Fatalf("LookupPatient failed: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestAdvancedMDClient_LookupPatient_MultipleResults(t *testing.T) {
 	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
 	defer cleanup()
 
-	patients, err := client.LookupPatient(context.Background(), tokenData, "Smith")
+	patients, err := client.LookupPatient(context.Background(), tokenData, "Smith", "")
 	if err != nil {
 		t.Fatalf("LookupPatient failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAdvancedMDClient_LookupPatient_NoResults(t *testing.T) {
 	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
 	defer cleanup()
 
-	patients, err := client.LookupPatient(context.Background(), tokenData, "NoSuchName")
+	patients, err := client.LookupPatient(context.Background(), tokenData, "NoSuchName", "")
 	if err != nil {
 		t.Fatalf("LookupPatient failed: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestAdvancedMDClient_LookupPatient_RequestPayload(t *testing.T) {
 	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
 	defer cleanup()
 
-	_, err := client.LookupPatient(context.Background(), tokenData, "Smith")
+	_, err := client.LookupPatient(context.Background(), tokenData, "Smith", "")
 	if err != nil {
 		t.Fatalf("LookupPatient failed: %v", err)
 	}

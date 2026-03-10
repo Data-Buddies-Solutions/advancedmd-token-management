@@ -149,14 +149,14 @@ curl -X POST -H "Authorization: Bearer YOUR_API_SECRET" \
 
 ### POST /api/verify-patient
 
-Looks up a patient by last name and DOB, returns insurance routing. Last names are automatically stripped of diacritical marks (e.g., "López" → "Lopez") before lookup.
+Looks up a patient by first name, last name, and DOB. Names are automatically stripped of diacritical marks (e.g., "López" → "Lopez") before lookup. When `firstName` is provided, the XMLRPC `@name` parameter is sent as `"LastName,FirstName"` which lets AMD filter server-side — critical for common last names that return 1000+ paginated results.
 
 **Request:**
 ```json
 {
+  "firstName": "John",
   "lastName": "Smith",
-  "dob": "01/15/1980",
-  "firstName": "John"
+  "dob": "01/15/1980"
 }
 ```
 

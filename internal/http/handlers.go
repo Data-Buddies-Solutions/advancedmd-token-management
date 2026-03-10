@@ -368,6 +368,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	// Normalize inputs
 	normalizedDOB := domain.NormalizeDOB(req.DOB)
 	normalizedLastName := domain.StripDiacritics(req.LastName)
+	normalizedFirstName := domain.StripDiacritics(req.FirstName)
 
 	// Get token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -381,7 +382,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call AdvancedMD lookuppatient API
-	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName)
+	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName, normalizedFirstName)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{

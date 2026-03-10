@@ -105,13 +105,19 @@ func (c *AdvancedMDClient) doXMLRPCRequest(ctx context.Context, tokenData *domai
 	return body, nil
 }
 
-// LookupPatient searches for patients by last name.
-func (c *AdvancedMDClient) LookupPatient(ctx context.Context, tokenData *domain.TokenData, lastName string) ([]domain.Patient, error) {
+// LookupPatient searches for patients by name.
+// If firstName is provided, sends "LastName,FirstName" to AMD for narrower results.
+func (c *AdvancedMDClient) LookupPatient(ctx context.Context, tokenData *domain.TokenData, lastName string, firstName string) ([]domain.Patient, error) {
+	name := lastName
+	if firstName != "" {
+		name = lastName + "," + firstName
+	}
+
 	reqBody := AMDLookupRequest{
 		PPMDMsg: AMDLookupMsg{
 			Action: "lookuppatient",
 			Class:  "api",
-			Name:   lastName,
+			Name:   name,
 		},
 	}
 

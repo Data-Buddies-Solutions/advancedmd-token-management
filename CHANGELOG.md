@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] - 2026-03-10
+
+### Patient Lookup — Send FirstName to AMD for Accurate Matching
+
+Patients with common last names (e.g., "Gonzalez" — 1042 results across 21 pages) were returning `not_found` because the middleware only read page 1 of AMD's paginated `lookuppatient` response. The fix sends `"LastName,FirstName"` in the XMLRPC `@name` field, letting AMD filter server-side and return exact matches instead of thousands of paginated results.
+
+#### Changed
+
+- **`internal/clients/advancedmd_xmlrpc.go`** — `LookupPatient` now accepts `firstName` parameter. When provided, sends `@name` as `"LastName,FirstName"` instead of just `"LastName"`
+- **`internal/http/handlers.go`** — `verify-patient` handler now normalizes and passes `firstName` through to `LookupPatient`
+- **`internal/workspace/TOOLS.md`** — Agent prompt updated: first name is now required for `verify_patient`, agent asks caller to spell both first and last name
+- **`README.md`** — Updated `verify-patient` docs to reflect firstName importance and AMD filtering behavior
+
+---
+
 ## [Unreleased] - 2026-03-05
 
 ### Availability Slot Calculation — Separate AMD 4101 / 4186 Conflict Checks
