@@ -6,6 +6,36 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ## 2026-03-10
 
+### Source: Preauthorization requirement for HMO/managed care plans
+
+8 insurance plans require preauth before scheduling. Agent needs to inform the patient and pass the flag to get_availability so the server enforces a 14-day minimum.
+
+---
+
+### TOOLS.md — add_patient
+
+**Added: Preauth insurance list and response handling**
+- Listed 8 preauth plans: Humana Gold Plus, Humana Medicaid, United Healthcare HMO, Aetna HMO, Florida Blue Medicare HMO, Cigna HMO, Tricare Prime, Tricare Forever
+- `preauthRequired` added to "What comes back" section
+- Agent script: "Your insurance requires a preauthorization before we can see you, so the earliest we can schedule is about two weeks out."
+
+---
+
+### TOOLS.md — get_availability
+
+**Added: `preauthRequired` parameter**
+- New optional param: pass `true` when add_patient returned `preauthRequired: true`
+- Server auto-advances search date to 14 days out if too soon
+
+---
+
+### TOOLS.md — Insurance list updates
+
+**Added:** Aetna HMO, United Healthcare HMO, Florida Blue Medicare HMO, Tricare Forever, BCBS Medicare HMO guidance
+**Changed:** Humana Gold → Humana Gold Plus
+
+---
+
 ### Source: Production bug — common last names not found in verify_patient
 
 Patients with common last names (e.g., "Gonzalez") were returning `not_found` because AMD paginates lookuppatient results (50 per page) and the middleware only read page 1. Sending `"LastName,FirstName"` in `@name` lets AMD filter server-side.

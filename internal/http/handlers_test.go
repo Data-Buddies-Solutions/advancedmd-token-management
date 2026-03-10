@@ -503,6 +503,64 @@ func TestCalculateAvailableSlots_UnlimitedMaxAppts(t *testing.T) {
 	}
 }
 
+func TestEnforcePreauthMinDate(t *testing.T) {
+	eastern, _ := time.LoadLocation("America/New_York")
+	now := time.Date(2026, 3, 10, 14, 0, 0, 0, eastern) // March 10, 2026
+
+	tests := []struct {
+		name         string
+		requestDate  time.Time
+		expectedDate string
+		shouldAdvance bool
+	}{
+		{
+			name:         "date tomorrow — advances to 14 days out",
+			requestDate:  time.Date(2026, 3, 11, 0, 0, 0, 0, eastern),
+			expectedDate: "2026-03-24",
+			shouldAdvance: true,
+		},
+		{
+			name:         "date 7 days out — advances to 14 days out",
+			requestDate:  time.Date(2026, 3, 17, 0, 0, 0, 0, eastern),
+			expectedDate: "2026-03-24",
+			shouldAdvance: true,
+		},
+		{
+			name:         "date 13 days out — still advances to 14 days out",
+			requestDate:  time.Date(2026, 3, 23, 0, 0, 0, 0, eastern),
+			expectedDate: "2026-03-24",
+			shouldAdvance: true,
+		},
+		{
+			name:         "date exactly 14 days out — no change",
+			requestDate:  time.Date(2026, 3, 24, 0, 0, 0, 0, eastern),
+			expectedDate: "2026-03-24",
+			shouldAdvance: false,
+		},
+		{
+			name:         "date 30 days out — no change",
+			requestDate:  time.Date(2026, 4, 9, 0, 0, 0, 0, eastern),
+			expectedDate: "2026-04-09",
+			shouldAdvance: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resultDate, resultStr := enforcePreauthMinDate(tt.requestDate, now)
+			if resultStr != tt.expectedDate {
+				t.Errorf("Expected date %s, got %s", tt.expectedDate, resultStr)
+			}
+			if tt.shouldAdvance && resultDate.Equal(tt.requestDate) {
+				t.Error("Expected date to be advanced but it wasn't")
+			}
+			if !tt.shouldAdvance && !resultDate.Equal(tt.requestDate) {
+				t.Errorf("Expected date to stay the same but it changed to %s", resultStr)
+			}
+		})
+	}
+}
+
 func TestRouter(t *testing.T) {
 	// Create minimal handlers for testing
 	amdClient := clients.NewAdvancedMDClient(&http.Client{})

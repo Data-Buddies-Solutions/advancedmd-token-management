@@ -24,17 +24,18 @@ The LLM has a fixed list of insurance names in its TOOLS prompt. When a patient 
 
 ## Carrier ID Groupings
 
-71 insurance names consolidate down to **22 carrier IDs**. The 8 major networks cover 56 plans; 14 standalone carriers cover 1 plan each.
+76 insurance names consolidate down to **22 carrier IDs**. The 8 major networks cover 62 plans; 14 standalone carriers cover 1 plan each.
 
 ---
 
-### iCare — car40907 (11 plans)
+### iCare — car40907 (12 plans)
 
 | Insurance Name | Routing |
 |---------------|---------|
 | Aetna Better Health | All 3 |
 | Aetna Better Health of Florida | All 3 |
 | Aetna Healthy Kids | All 3 |
+| Aetna HMO | All 3 |
 | Aetna Medicare HMO | All 3 |
 | Community Care Plan | All 3 |
 | Florida Community Care | All 3 |
@@ -46,7 +47,7 @@ The LLM has a fixed list of insurance names in its TOOLS prompt. When a patient 
 
 ---
 
-### United Healthcare — car40923 (11 plans)
+### United Healthcare — car40923 (12 plans)
 
 | Insurance Name | Routing |
 |---------------|---------|
@@ -54,6 +55,7 @@ The LLM has a fixed list of insurance names in its TOOLS prompt. When a patient 
 | United Healthcare AARP Medicare | All 3 |
 | United Healthcare All Savers | All 3 |
 | United Healthcare Golden Rule | All 3 |
+| United Healthcare HMO | All 3 |
 | United Healthcare NHP | All 3 |
 | United Healthcare Shared Services | All 3 |
 | United Healthcare Student Resources | All 3 |
@@ -83,7 +85,7 @@ The LLM has a fixed list of insurance names in its TOOLS prompt. When a patient 
 
 | Insurance Name | Routing |
 |---------------|---------|
-| Humana Gold | Bach Only |
+| Humana Gold Plus | Bach Only |
 | Humana Medicaid | Bach Only |
 | Humana Medicare | Bach Only |
 | Humana PPO | Bach Only |
@@ -94,11 +96,12 @@ The LLM has a fixed list of insurance names in its TOOLS prompt. When a patient 
 
 ---
 
-### Florida Blue — car40897 (6 plans)
+### Florida Blue — car40897 (7 plans)
 
 | Insurance Name | Routing |
 |---------------|---------|
 | Florida Blue | All 3 |
+| Florida Blue Medicare HMO | All 3 |
 | Florida Blue Medicare PPO | All 3 |
 | Florida Blue PPO Federal Employee | All 3 |
 | Florida Blue PPO Out of State | All 3 |
@@ -130,13 +133,14 @@ The LLM has a fixed list of insurance names in its TOOLS prompt. When a patient 
 
 ---
 
-### Tricare — car40921 (3 plans)
+### Tricare — car40921 (4 plans)
 
 | Insurance Name | Routing |
 |---------------|---------|
 | Tricare Prime | Bach + Licht |
 | Tricare Select | Bach + Licht |
 | Tricare for Life | Bach + Licht |
+| Tricare Forever | Bach + Licht |
 
 ---
 
@@ -189,7 +193,7 @@ For existing patients, these unambiguous carrier IDs map to a fixed routing rule
 | car40906 | HUMANA MEDICARE | Bach Only |
 | car303062 | HUMANA PPO POS | Bach Only |
 | car303061 | HUMANA PREMIER HMO | Bach Only |
-| car308175 | HUMANA GOLD PLAN | Bach Only |
+| car308175 | HUMANA GOLD PLUS | Bach Only |
 | car308627 | EYECARE AMERICA AAO | Bach Only |
 | car301578 | MERITAIN HEALTH | Bach Only |
 | car40890 | AVMED | Bach + Licht |

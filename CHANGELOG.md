@@ -2,6 +2,30 @@
 
 ## [Unreleased] - 2026-03-10
 
+### Preauthorization — 14-Day Minimum Lead Time for HMO/Managed Care Plans
+
+8 insurance plans require preauthorization before scheduling. The `add-patient` response now includes `preauthRequired: true` for these plans, and the availability endpoint enforces a 14-day minimum — if the requested date is too soon, it auto-advances to 14 days out.
+
+#### Added
+
+- **`internal/domain/insurance.go`** — `PreauthRequired bool` field on `InsuranceEntry`. Flagged on: Humana Gold Plus, Humana Medicaid, United Healthcare HMO, Aetna HMO, Florida Blue Medicare HMO, Cigna HMO, Tricare Prime, Tricare Forever
+- **`internal/http/handlers.go`** — `preauthRequired` field on `AddPatientResponse`; `preauthRequired` param on `AvailabilityRequest`; `enforcePreauthMinDate()` function that auto-advances dates < 14 days out
+- **`internal/http/handlers_test.go`** — `TestEnforcePreauthMinDate` with 5 cases (tomorrow, 7d, 13d, exactly 14d, 30d)
+- **`internal/workspace/TOOLS.md`** — Agent prompt: preauth insurance list, patient explanation script, `preauthRequired` param on `get_availability`
+
+### Insurance Updates — New Plans + Renamed Humana Gold
+
+#### Added
+
+- **`internal/domain/insurance.go`** — Aetna HMO, United Healthcare HMO, Florida Blue Medicare HMO, Tricare Forever, BCBS Medicare HMO alias
+- **`INSURANCE_CROSSWALK.md`** — Updated tables and plan counts
+
+#### Changed
+
+- **`internal/domain/insurance.go`** — Renamed `humana gold` → `humana gold plus`
+
+---
+
 ### Patient Lookup — Send FirstName to AMD for Accurate Matching
 
 Patients with common last names (e.g., "Gonzalez" — 1042 results across 21 pages) were returning `not_found` because the middleware only read page 1 of AMD's paginated `lookuppatient` response. The fix sends `"LastName,FirstName"` in the XMLRPC `@name` field, letting AMD filter server-side and return exact matches instead of thousands of paginated results.
