@@ -4,6 +4,50 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-11 (Round 2)
+
+### Source: New cancel appointment tool
+
+Patients calling to cancel an appointment can now be handled by the agent instead of being transferred. Uses AMD's REST PUT /scheduler/appointments/{id}/cancel endpoint. Extends the confirm_appt flow by including the appointment ID in responses.
+
+---
+
+### TOOLS.md — New `cancel_appt` tool section
+
+**Added: cancel_appt tool**
+- Flow: verify patient → confirm_appt (get appointments + IDs) → identify which to cancel → confirm with caller → cancel_appt
+- Input: appointmentId (from confirm_appt response `id` field)
+- Output: status (cancelled / error), appointmentId, message
+- Agent confirms before cancelling: "Just to confirm, you'd like to cancel your appointment on [date] at [time] with [doctor]?"
+- Agent confirms after cancelling: "Your appointment has been cancelled."
+- Failure handling: retry once silently, then offer transfer
+
+**Changed: Tool count updated from seven to eight**
+
+**Changed: "Understand Why They're Calling" section**
+- Cancel is no longer a transfer — it's now a handled flow
+- Was: "They want to reschedule or cancel → Transfer immediately"
+- Now: "They want to cancel → verify → confirm_appt → cancel_appt flow" / "They want to reschedule → Transfer immediately"
+
+---
+
+### SOUL.md — Boundaries
+
+**Changed: "Stay in your lane" updated to include appointment cancellation**
+- Was: "You schedule appointments, verify patients, register new ones, and confirm existing appointments"
+- Now: "You schedule appointments, verify patients, register new ones, confirm existing appointments, and cancel appointments"
+- Reschedule remains transfer-only
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-11
 
 ### Source: New confirm appointment tool

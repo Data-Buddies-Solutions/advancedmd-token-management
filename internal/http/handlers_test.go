@@ -719,3 +719,81 @@ func TestRouter(t *testing.T) {
 		t.Skip("Requires non-nil token manager")
 	})
 }
+
+func TestHandleCancelAppointment_ValidationErrors(t *testing.T) {
+	handlers := &Handlers{}
+
+	tests := []struct {
+		name        string
+		body        string
+		expectedMsg string
+	}{
+		{
+			name:        "invalid JSON",
+			body:        "not json",
+			expectedMsg: "Invalid JSON body",
+		},
+		{
+			name:        "missing appointmentId",
+			body:        `{}`,
+			expectedMsg: "appointmentId is required",
+		},
+		{
+			name:        "zero appointmentId",
+			body:        `{"appointmentId":0}`,
+			expectedMsg: "appointmentId is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/appointment/cancel", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handlers.HandleCancelAppointment(w, req)
+
+			resp := w.Result()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("Expected status 200, got %d", resp.StatusCode)
+			}
+
+			var body CancelAppointmentResponse
+			json.NewDecoder(resp.Body).Decode(&body)
+			if body.Status != "error" {
+				t.Errorf("Expected status 'error', got '%s'", body.Status)
+			}
+			if body.Message != tt.expectedMsg {
+				t.Errorf("Expected message %q, got %q", tt.expectedMsg, body.Message)
+			}
+		})
+	}
+}
+
+func TestPatientApptDetail_IncludesID(t *testing.T) {
+	detail := PatientApptDetail{
+		ID:        9570263,
+		Date:      "Wednesday, March 18, 2026",
+		Time:      "12:00 PM",
+		Provider:  "Dr. Austin Bach",
+		Type:      "New Adult Medical",
+		Facility:  "Abita Eye Group Spring Hill",
+		Confirmed: false,
+	}
+
+	data, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	json.Unmarshal(data, &decoded)
+
+	id, ok := decoded["id"]
+	if !ok {
+		t.Fatal("Expected 'id' field in JSON output")
+	}
+	if int(id.(float64)) != 9570263 {
+		t.Errorf("Expected id 9570263, got %v", id)
+	}
+}

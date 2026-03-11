@@ -30,6 +30,7 @@ A Go microservice that handles AdvancedMD's 2-step authentication flow and serve
 │  │  • POST /api/add-patient     (auth req) │                    │
 │  │  • POST /api/scheduler/availability     │                    │
 │  │  • POST /api/patient/appointments      │                    │
+│  │  • POST /api/appointment/cancel        │                    │
 │  └─────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -310,6 +311,35 @@ Retrieves upcoming appointments for a verified patient. Queries all allowed prov
 ```
 
 Appointment type IDs are mapped to friendly names (1006 → "New Adult Medical", etc.). Provider names are mapped to display names. Facility names are title-cased. Past appointments are filtered out. The `confirmed` field reflects whether AMD has a `confirmdate` set.
+
+### POST /api/appointment/cancel
+
+Cancels an appointment via AMD's REST API. Uses a hardcoded no-show reason ID (23).
+
+**Request:**
+```json
+{
+  "appointmentId": 9570263
+}
+```
+
+**Responses:**
+
+| Status | When |
+|--------|------|
+| `cancelled` | Appointment successfully cancelled |
+| `error` | Validation, auth, or AMD failure |
+
+**Response (cancelled):**
+```json
+{
+  "status": "cancelled",
+  "appointmentId": 9570263,
+  "message": "Appointment cancelled successfully"
+}
+```
+
+The `appointmentId` comes from the `id` field in the `/api/patient/appointments` response. Error responses follow the 200-OK-with-status-error pattern used by all endpoints.
 
 ## How It Works
 

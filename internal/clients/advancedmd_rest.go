@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,10 @@ import (
 
 	"advancedmd-token-management/internal/domain"
 )
+
+// cancelNoshowReasonID is the AMD no-show reason used for cancellations.
+// Hardcoded per practice policy — no caller-provided reason needed.
+const cancelNoshowReasonID = "23"
 
 // AdvancedMDRestClient handles REST API calls to AdvancedMD.
 type AdvancedMDRestClient struct {
@@ -271,5 +276,43 @@ func (c *AdvancedMDRestClient) GetAppointmentsByMonth(ctx context.Context, token
 	}
 
 	return appts, nil
+}
+
+// CancelAppointment cancels an appointment via AMD's REST API.
+func (c *AdvancedMDRestClient) CancelAppointment(ctx context.Context, tokenData *domain.TokenData, appointmentID int) error {
+	url := fmt.Sprintf("https://%s/scheduler/appointments/%d/cancel",
+		tokenData.RestApiBase, appointmentID)
+
+	reqBody := map[string]interface{}{
+		"id":             appointmentID,
+		"noshowreasonid": cancelNoshowReasonID,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", tokenData.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
