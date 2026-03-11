@@ -510,6 +510,7 @@ type PatientApptResponse struct {
 
 // PatientApptDetail is a single appointment formatted for LLM consumption.
 type PatientApptDetail struct {
+	ID        int    `json:"id"`                  // AMD appointment ID — for cancel_appt
 	Date      string `json:"date"`                // Human-readable (e.g., "Wednesday, March 18, 2026")
 	Time      string `json:"time"`                // e.g., "12:00 PM"
 	Provider  string `json:"provider,omitempty"`   // e.g., "Dr. Austin Bach"
@@ -648,6 +649,7 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		}
 
 		details = append(details, PatientApptDetail{
+			ID:        a.ID,
 			Date:      startTime.Format("Monday, January 2, 2006"),
 			Time:      startTime.Format("3:04 PM"),
 			Provider:  friendlyProviderName(a.Provider),
@@ -700,6 +702,68 @@ func friendlyFacilityName(amdName string) string {
 		return ""
 	}
 	return cases.Title(language.English).String(strings.ToLower(amdName))
+}
+
+// CancelAppointmentRequest is the expected JSON body for cancelling an appointment.
+type CancelAppointmentRequest struct {
+	AppointmentID int `json:"appointmentId"`
+}
+
+// CancelAppointmentResponse is returned after cancelling an appointment.
+type CancelAppointmentResponse struct {
+	Status        string `json:"status"`
+	AppointmentID int    `json:"appointmentId,omitempty"`
+	Message       string `json:"message"`
+}
+
+// HandleCancelAppointment cancels an appointment in AdvancedMD.
+func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req CancelAppointmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(CancelAppointmentResponse{
+			Status:  "error",
+			Message: "Invalid JSON body",
+		})
+		return
+	}
+
+	if req.AppointmentID == 0 {
+		json.NewEncoder(w).Encode(CancelAppointmentResponse{
+			Status:  "error",
+			Message: "appointmentId is required",
+		})
+		return
+	}
+
+	log.Printf("cancel-appointment: appointmentId=%d", req.AppointmentID)
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		json.NewEncoder(w).Encode(CancelAppointmentResponse{
+			Status:  "error",
+			Message: "Failed to get authentication token: " + err.Error(),
+		})
+		return
+	}
+
+	// Cancel via AMD REST API
+	if err := h.amdRestClient.CancelAppointment(r.Context(), tokenData, req.AppointmentID); err != nil {
+		log.Printf("cancel-appointment: AMD error: %v", err)
+		json.NewEncoder(w).Encode(CancelAppointmentResponse{
+			Status:  "error",
+			Message: "Failed to cancel appointment: " + err.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(CancelAppointmentResponse{
+		Status:        "cancelled",
+		AppointmentID: req.AppointmentID,
+		Message:       "Appointment cancelled successfully",
+	})
 }
 
 // AvailabilityRequest is the expected JSON body for availability lookup.

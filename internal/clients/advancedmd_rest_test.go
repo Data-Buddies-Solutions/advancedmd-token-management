@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -314,6 +316,63 @@ func TestGetAppointmentsByMonth_ServerError(t *testing.T) {
 	defer cleanup()
 
 	_, err := client.GetAppointmentsByMonth(context.Background(), tokenData, "1513", "2026-03-01")
+	if err == nil {
+		t.Fatal("Expected error on server 500, got nil")
+	}
+}
+
+func TestCancelAppointment_Success(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify PUT method
+		if r.Method != http.MethodPut {
+			t.Errorf("Expected PUT method, got %s", r.Method)
+		}
+
+		// Verify URL path
+		if !strings.Contains(r.URL.Path, "/scheduler/appointments/9570263/cancel") {
+			t.Errorf("Expected path to contain /scheduler/appointments/9570263/cancel, got %s", r.URL.Path)
+		}
+
+		// Verify Authorization header
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("Expected Authorization 'Bearer test-token', got %q", r.Header.Get("Authorization"))
+		}
+
+		// Verify request body
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("Failed to read request body: %v", err)
+		}
+		bodyStr := string(body)
+		if !strings.Contains(bodyStr, `"id":9570263`) {
+			t.Errorf("Expected body to contain '\"id\":9570263', got %s", bodyStr)
+		}
+		if !strings.Contains(bodyStr, `"noshowreasonid":"23"`) {
+			t.Errorf("Expected body to contain '\"noshowreasonid\":\"23\"', got %s", bodyStr)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	client, tokenData, cleanup := newTestRestClient(t, handler)
+	defer cleanup()
+
+	err := client.CancelAppointment(context.Background(), tokenData, 9570263)
+	if err != nil {
+		t.Fatalf("CancelAppointment failed: %v", err)
+	}
+}
+
+func TestCancelAppointment_ServerError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("AMD is down"))
+	})
+
+	client, tokenData, cleanup := newTestRestClient(t, handler)
+	defer cleanup()
+
+	err := client.CancelAppointment(context.Background(), tokenData, 9570263)
 	if err == nil {
 		t.Fatal("Expected error on server 500, got nil")
 	}

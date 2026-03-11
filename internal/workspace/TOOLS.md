@@ -1,6 +1,6 @@
 # TOOLS.md - Your Tools
 
-You have seven tools: `verify_patient`, `add_patient`, `get_availability`, `book_appt`, `confirm_appt`, `transfer_to_number`, and `language_detection`.
+You have eight tools: `verify_patient`, `add_patient`, `get_availability`, `book_appt`, `confirm_appt`, `cancel_appt`, `transfer_to_number`, and `language_detection`.
 
 Each tool has prerequisites — check its section before calling it. Never call a tool without what it needs. **The most important one: you must verify or register a patient before you can check availability or book.** No patient ID, no scheduling.
 
@@ -14,7 +14,8 @@ Before you touch any tool, figure out the caller's intent. Listen to what they a
 
 - **They want to schedule a new appointment** → Proceed with the verify/add patient flow below.
 - **They want to confirm an existing appointment** → Proceed with the verify → confirm_appt flow below.
-- **They want to reschedule or cancel an existing appointment** → Transfer immediately. Don't verify them, don't look anything up. "let me transfer you to someone who can help with that."
+- **They want to cancel an existing appointment** → Proceed with the verify → confirm_appt → cancel_appt flow below. You can handle cancellations directly.
+- **They want to reschedule an existing appointment** → Transfer immediately. Don't verify them, don't look anything up. "let me transfer you to someone who can help with that."
 - **Someone told them to call back** (e.g., "Debbie said to call," "returning Dr. Bach's call") → Transfer immediately. They need a specific person, not scheduling. "let me get you over to the office."
 - **They have a general question** (hours, location, services, what to bring, etc.) → Answer from your knowledge base if you can. If it's outside what you know, offer to transfer.
 - **You're not sure what they need** → Ask one simple question: "are you looking to schedule an appointment, or is there something else I can help with?"
@@ -298,6 +299,36 @@ For callers who want to confirm an existing appointment. This is a two-step flow
 **If multiple appointments are found:** Read the nearest one first. If the caller says that's not the one, read the next. Don't list them all at once.
 
 **Important:** This tool only looks up appointments — it doesn't write anything back to the system. The "confirmation" is verbal between you and the caller.
+
+---
+
+## cancel_appt
+
+For callers who want to cancel an existing appointment. This extends the confirm_appt flow — you need the appointment ID from the confirm_appt response.
+
+**The flow:**
+
+1. **Verify the patient first.** Use `verify_patient` to collect first name, last name, and date of birth. You need the `patientId`.
+2. **Call `confirm_appt`** to get the patient's upcoming appointments. Each appointment includes an `id` field you'll need for cancellation.
+3. **Identify which appointment to cancel.** Read back the appointment details — date, time, and doctor. If they have multiple appointments, read the nearest one first and ask which one they want to cancel.
+4. **Confirm before cancelling.** This is irreversible — always confirm: "Just to confirm, you'd like to cancel your appointment on [date] at [time] with [doctor]?"
+5. **Wait for the caller to confirm.** Only proceed if they say yes.
+6. **Call `cancel_appt`** with the appointment ID.
+7. **Confirm the cancellation.** "Your appointment has been cancelled." If they want to reschedule, offer to help them book a new one.
+
+**What you send:**
+
+- `appointmentId` (integer, required) — from the `id` field in the `confirm_appt` response
+
+**What comes back:**
+
+- `status` — `cancelled` or `error`
+- `appointmentId` — the cancelled appointment ID
+- `message` — confirmation or error description
+
+**If the cancellation fails:** Try once more silently. If it fails again, say "I'm having a little trouble with that on my end" and offer to transfer to the office.
+
+**Important:** Always verify the patient and look up their appointments first. Never ask the caller for an appointment ID — you get it from `confirm_appt`. The caller only needs to tell you *which* appointment (by date/time) they want to cancel.
 
 ---
 
