@@ -30,10 +30,15 @@ type AMDAppointmentResponse struct {
 	ColumnID         int    `json:"columnid"`
 	ProfileID        int    `json:"profileid"`
 	Provider         string `json:"provider"`
+	Heading          string `json:"heading"`
+	Facility         string `json:"facility"`
+	FacilityID       int    `json:"facilityid"`
 	AppointmentTypes []int  `json:"appointmenttypeids"`
 	PatientID        int    `json:"patientid"`
 	FirstName        string `json:"firstname"`
 	LastName         string `json:"lastname"`
+	ConfirmDate      *string `json:"confirmdate"`
+	ConfirmMethod    *string `json:"confirmmethod"`
 }
 
 // GetAppointments fetches appointments for a column within a date range.
@@ -227,5 +232,44 @@ func (c *AdvancedMDRestClient) GetBlockHoldsForColumns(ctx context.Context, toke
 		return nil, firstErr
 	}
 	return result, nil
+}
+
+// GetAppointmentsByMonth fetches all appointments for the given columns for a full month.
+// columnIDs should be dash-separated (e.g., "1513-1550-1551").
+// startDate should be the first of the month in YYYY-MM-DD format.
+func (c *AdvancedMDRestClient) GetAppointmentsByMonth(ctx context.Context, tokenData *domain.TokenData, columnIDs string, startDate string) ([]AMDAppointmentResponse, error) {
+	url := fmt.Sprintf("https://%s/scheduler/appointments?columnId=%s&forView=month&isLegacy=true&startDate=%s",
+		tokenData.RestApiBase, columnIDs, startDate)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", tokenData.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var appts []AMDAppointmentResponse
+	if err := json.Unmarshal(body, &appts); err != nil {
+		return nil, fmt.Errorf("failed to parse appointments: %w", err)
+	}
+
+	return appts, nil
 }
 

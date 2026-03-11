@@ -29,6 +29,7 @@ A Go microservice that handles AdvancedMD's 2-step authentication flow and serve
 │  │  • POST /api/verify-patient  (auth req) │                    │
 │  │  • POST /api/add-patient     (auth req) │                    │
 │  │  • POST /api/scheduler/availability     │                    │
+│  │  • POST /api/patient/appointments      │                    │
 │  └─────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -269,6 +270,46 @@ The distinction between checks 3 and 4 matters: `maxApptsPerSlot=2` means two ap
   "providers": []
 }
 ```
+
+### POST /api/patient/appointments
+
+Retrieves upcoming appointments for a verified patient. Queries all allowed provider columns across the current and next month using AMD's REST `scheduler/appointments` endpoint with `forView=month`, then filters by patient ID server-side.
+
+**Request:**
+```json
+{
+  "patientId": "17604634"
+}
+```
+
+**Responses:**
+
+| Status | When |
+|--------|------|
+| `found` | Patient has upcoming appointments |
+| `no_appointments` | No upcoming appointments in next 60 days |
+| `error` | Validation, auth, or AMD failure |
+
+**Response (found):**
+```json
+{
+  "status": "found",
+  "patientId": "17604634",
+  "appointments": [
+    {
+      "date": "Thursday, March 12, 2026",
+      "time": "12:00 PM",
+      "provider": "Dr. Austin Bach",
+      "type": "New Adult Medical",
+      "facility": "Abita Eye Group Spring Hill",
+      "confirmed": false
+    }
+  ],
+  "message": "Found 1 upcoming appointment(s)"
+}
+```
+
+Appointment type IDs are mapped to friendly names (1006 → "New Adult Medical", etc.). Provider names are mapped to display names. Facility names are title-cased. Past appointments are filtered out. The `confirmed` field reflects whether AMD has a `confirmdate` set.
 
 ## How It Works
 

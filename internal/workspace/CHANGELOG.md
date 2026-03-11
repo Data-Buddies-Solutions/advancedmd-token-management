@@ -4,6 +4,50 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-11
+
+### Source: New confirm appointment tool
+
+Patients calling to confirm their appointment can now be handled by the agent instead of being transferred. Uses the AMD REST scheduler/appointments endpoint with forView=month to fetch all appointments across allowed columns, then filters by patient ID server-side.
+
+---
+
+### TOOLS.md — New `confirm_appt` tool section
+
+**Added: confirm_appt tool**
+- Two-step flow: verify patient first (reuses existing verify_patient), then call confirm_appt with patientId
+- Server searches next 60 days automatically — no date input needed from caller
+- Returns upcoming appointments with date, time, provider, type, facility, and confirmed status
+- Agent reads back appointment details and gets verbal confirmation
+- Handles no-appointments case (offer to schedule or transfer)
+- Handles multiple appointments (read nearest first, don't list all at once)
+
+**Changed: Tool count updated from six to seven**
+
+**Changed: "Understand Why They're Calling" section**
+- Confirm appointment is no longer a transfer — it's now a handled flow
+- Was: "They want to reschedule, cancel, or confirm → Transfer immediately"
+- Now: "They want to confirm → verify → confirm_appt flow" / "They want to reschedule or cancel → Transfer immediately"
+
+---
+
+### SOUL.md — Boundaries
+
+**Changed: "Stay in your lane" updated to include appointment confirmation**
+- Was: "You don't reschedule, cancel, or confirm existing appointments"
+- Now: "You schedule appointments, verify patients, register new ones, and confirm existing appointments"
+- Reschedule and cancel remain transfer-only
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-10
 
 ### Source: Preauthorization requirement for HMO/managed care plans

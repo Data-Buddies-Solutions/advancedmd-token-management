@@ -12,6 +12,9 @@ import (
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // eastern is the America/New_York timezone, loaded once at startup.
@@ -490,6 +493,213 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			Matches: matches,
 		})
 	}
+}
+
+// GetAppointmentsRequest is the expected JSON body for patient appointment lookup.
+type GetAppointmentsRequest struct {
+	PatientID string `json:"patientId"`
+}
+
+// PatientApptResponse is returned on successful appointment lookup.
+type PatientApptResponse struct {
+	Status       string              `json:"status"`
+	PatientID    string              `json:"patientId,omitempty"`
+	Appointments []PatientApptDetail `json:"appointments,omitempty"`
+	Message      string              `json:"message,omitempty"`
+}
+
+// PatientApptDetail is a single appointment formatted for LLM consumption.
+type PatientApptDetail struct {
+	Date      string `json:"date"`                // Human-readable (e.g., "Wednesday, March 18, 2026")
+	Time      string `json:"time"`                // e.g., "12:00 PM"
+	Provider  string `json:"provider,omitempty"`   // e.g., "Dr. Austin Bach"
+	Type      string `json:"type,omitempty"`       // e.g., "New Adult Medical"
+	Facility  string `json:"facility,omitempty"`   // e.g., "Abita Eye Group Spring Hill"
+	Confirmed bool   `json:"confirmed"`            // Whether the appointment has been confirmed
+}
+
+// appointmentTypeNames maps AMD appointment type IDs to friendly names.
+var appointmentTypeNames = map[int]string{
+	1006: "New Adult Medical",
+	1004: "New Pediatric Medical",
+	1007: "Established Adult Medical (Follow Up)",
+	1005: "Established Pediatric Medical (Follow Up)",
+	1008: "Post Op",
+}
+
+// HandleGetPatientAppointments retrieves upcoming appointments for a verified patient.
+func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req GetAppointmentsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "Invalid JSON body",
+		})
+		return
+	}
+
+	if req.PatientID == "" {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "patientId is required",
+		})
+		return
+	}
+
+	log.Printf("patient-appointments: patientId=%s", req.PatientID)
+
+	patientIDInt, err := strconv.Atoi(req.PatientID)
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "patientId must be numeric",
+		})
+		return
+	}
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "Failed to get authentication token: " + err.Error(),
+		})
+		return
+	}
+
+	// Build column ID string for all allowed columns
+	var colIDs []string
+	for id := range domain.AllowedColumns {
+		colIDs = append(colIDs, id)
+	}
+	columnIDStr := strings.Join(colIDs, "-")
+
+	// Fetch current month + next month (2 REST calls concurrently)
+	now := time.Now().In(eastern)
+	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
+	nextMonth := thisMonth.AddDate(0, 1, 0)
+
+	type monthResult struct {
+		appts []clients.AMDAppointmentResponse
+		err   error
+	}
+	ch1 := make(chan monthResult, 1)
+	ch2 := make(chan monthResult, 1)
+
+	go func() {
+		appts, err := h.amdRestClient.GetAppointmentsByMonth(r.Context(), tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
+		ch1 <- monthResult{appts, err}
+	}()
+	go func() {
+		appts, err := h.amdRestClient.GetAppointmentsByMonth(r.Context(), tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
+		ch2 <- monthResult{appts, err}
+	}()
+
+	r1, r2 := <-ch1, <-ch2
+
+	if r1.err != nil {
+		log.Printf("patient-appointments: AMD error (month 1): %v", r1.err)
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "Failed to retrieve appointments: " + r1.err.Error(),
+		})
+		return
+	}
+	if r2.err != nil {
+		log.Printf("patient-appointments: AMD error (month 2): %v", r2.err)
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "Failed to retrieve appointments: " + r2.err.Error(),
+		})
+		return
+	}
+
+	// Combine and filter by patient ID
+	allAppts := append(r1.appts, r2.appts...)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
+
+	var details []PatientApptDetail
+	for _, a := range allAppts {
+		if a.PatientID != patientIDInt {
+			continue
+		}
+
+		startTime, err := time.Parse("2006-01-02T15:04:05", a.StartDateTime)
+		if err != nil {
+			startTime, err = time.Parse("2006-01-02T15:04", a.StartDateTime)
+			if err != nil {
+				continue
+			}
+		}
+
+		// Skip past appointments
+		if startTime.Before(today) {
+			continue
+		}
+
+		// Resolve appointment type name
+		typeName := ""
+		if len(a.AppointmentTypes) > 0 {
+			if name, ok := appointmentTypeNames[a.AppointmentTypes[0]]; ok {
+				typeName = name
+			}
+		}
+
+		details = append(details, PatientApptDetail{
+			Date:      startTime.Format("Monday, January 2, 2006"),
+			Time:      startTime.Format("3:04 PM"),
+			Provider:  friendlyProviderName(a.Provider),
+			Type:      typeName,
+			Facility:  friendlyFacilityName(a.Facility),
+			Confirmed: a.ConfirmDate != nil,
+		})
+	}
+
+	log.Printf("patient-appointments: found %d upcoming appointments for patient %s (scanned %d total)", len(details), req.PatientID, len(allAppts))
+
+	if len(details) == 0 {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:    "no_appointments",
+			PatientID: req.PatientID,
+			Message:   "No upcoming appointments found for this patient",
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(PatientApptResponse{
+		Status:       "found",
+		PatientID:    req.PatientID,
+		Appointments: details,
+		Message:      fmt.Sprintf("Found %d upcoming appointment(s)", len(details)),
+	})
+}
+
+// friendlyProviderName maps AMD provider names to friendly display names.
+func friendlyProviderName(amdName string) string {
+	upper := strings.ToUpper(amdName)
+	for _, entry := range []struct {
+		match   string
+		display string
+	}{
+		{"BACH", "Dr. Austin Bach"},
+		{"LICHT", "Dr. J. Licht"},
+		{"NOEL", "Dr. D. Noel"},
+	} {
+		if strings.Contains(upper, entry.match) {
+			return entry.display
+		}
+	}
+	return amdName
+}
+
+// friendlyFacilityName cleans up AMD facility names to title case.
+func friendlyFacilityName(amdName string) string {
+	if amdName == "" {
+		return ""
+	}
+	return cases.Title(language.English).String(strings.ToLower(amdName))
 }
 
 // AvailabilityRequest is the expected JSON body for availability lookup.

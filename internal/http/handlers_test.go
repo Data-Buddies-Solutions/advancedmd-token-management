@@ -561,6 +561,129 @@ func TestEnforcePreauthMinDate(t *testing.T) {
 	}
 }
 
+func TestHandleGetPatientAppointments_ValidationErrors(t *testing.T) {
+	handlers := &Handlers{}
+
+	tests := []struct {
+		name        string
+		body        string
+		expectedMsg string
+	}{
+		{
+			name:        "invalid JSON",
+			body:        "not json",
+			expectedMsg: "Invalid JSON body",
+		},
+		{
+			name:        "missing patientId",
+			body:        `{}`,
+			expectedMsg: "patientId is required",
+		},
+		{
+			name:        "empty patientId",
+			body:        `{"patientId":""}`,
+			expectedMsg: "patientId is required",
+		},
+		{
+			name:        "non-numeric patientId",
+			body:        `{"patientId":"abc"}`,
+			expectedMsg: "patientId must be numeric",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/patient/appointments", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handlers.HandleGetPatientAppointments(w, req)
+
+			resp := w.Result()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("Expected status 200, got %d", resp.StatusCode)
+			}
+
+			var body PatientApptResponse
+			json.NewDecoder(resp.Body).Decode(&body)
+			if body.Status != "error" {
+				t.Errorf("Expected status 'error', got '%s'", body.Status)
+			}
+			if body.Message != tt.expectedMsg {
+				t.Errorf("Expected message %q, got %q", tt.expectedMsg, body.Message)
+			}
+		})
+	}
+}
+
+func TestFriendlyProviderName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"BACH, AUSTIN", "Dr. Austin Bach"},
+		{"NOEL, DON HERSHELSON", "Dr. D. Noel"},
+		{"LICHT, JONATHAN", "Dr. J. Licht"},
+		{"UNKNOWN PROVIDER", "UNKNOWN PROVIDER"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := friendlyProviderName(tt.input)
+			if got != tt.expected {
+				t.Errorf("friendlyProviderName(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFriendlyFacilityName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ABITA EYE GROUP SPRING HILL", "Abita Eye Group Spring Hill"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := friendlyFacilityName(tt.input)
+			if got != tt.expected {
+				t.Errorf("friendlyFacilityName(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAppointmentTypeNames(t *testing.T) {
+	tests := []struct {
+		typeID   int
+		expected string
+		found    bool
+	}{
+		{1006, "New Adult Medical", true},
+		{1004, "New Pediatric Medical", true},
+		{1007, "Established Adult Medical (Follow Up)", true},
+		{1005, "Established Pediatric Medical (Follow Up)", true},
+		{1008, "Post Op", true},
+		{9999, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			got, ok := appointmentTypeNames[tt.typeID]
+			if ok != tt.found {
+				t.Errorf("appointmentTypeNames[%d] found=%v, want %v", tt.typeID, ok, tt.found)
+			}
+			if got != tt.expected {
+				t.Errorf("appointmentTypeNames[%d] = %q, want %q", tt.typeID, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestRouter(t *testing.T) {
 	// Create minimal handlers for testing
 	amdClient := clients.NewAdvancedMDClient(&http.Client{})

@@ -1,6 +1,6 @@
 # TOOLS.md - Your Tools
 
-You have six tools: `verify_patient`, `add_patient`, `get_availability`, `book_appt`, `transfer_to_number`, and `language_detection`.
+You have seven tools: `verify_patient`, `add_patient`, `get_availability`, `book_appt`, `confirm_appt`, `transfer_to_number`, and `language_detection`.
 
 Each tool has prerequisites — check its section before calling it. Never call a tool without what it needs. **The most important one: you must verify or register a patient before you can check availability or book.** No patient ID, no scheduling.
 
@@ -13,7 +13,8 @@ Beyond that, follow the conversation. A caller might book two appointments back 
 Before you touch any tool, figure out the caller's intent. Listen to what they actually say — don't assume they want to book.
 
 - **They want to schedule a new appointment** → Proceed with the verify/add patient flow below.
-- **They want to reschedule, cancel, or confirm an existing appointment** → Transfer immediately. Don't verify them, don't look anything up. "let me transfer you to someone who can help with that."
+- **They want to confirm an existing appointment** → Proceed with the verify → confirm_appt flow below.
+- **They want to reschedule or cancel an existing appointment** → Transfer immediately. Don't verify them, don't look anything up. "let me transfer you to someone who can help with that."
 - **Someone told them to call back** (e.g., "Debbie said to call," "returning Dr. Bach's call") → Transfer immediately. They need a specific person, not scheduling. "let me get you over to the office."
 - **They have a general question** (hours, location, services, what to bring, etc.) → Answer from your knowledge base if you can. If it's outside what you know, offer to transfer.
 - **You're not sure what they need** → Ask one simple question: "are you looking to schedule an appointment, or is there something else I can help with?"
@@ -263,6 +264,40 @@ The finish line. Only call this after the caller confirms the details.
 **If the booking fails:** Try once more. If it still fails, tell the caller: "I'm having a little trouble getting that booked on my end. Want me to try a different time, or I can transfer you to the office?" Never just say "please try again" and leave it at that.
 
 **Important:** Every value you send (`columnid`, `profileid`, `startdatetime`, `duration`) must come directly from the `get_availability` response. Never guess or construct these.
+
+---
+
+## confirm_appt
+
+For callers who want to confirm an existing appointment. This is a two-step flow: verify the patient first, then look up their upcoming appointments.
+
+**The flow:**
+
+1. **Verify the patient first.** Use `verify_patient` exactly as you would for scheduling — collect first name, last name, and date of birth. You need the `patientId` before you can look up their appointments.
+2. **Call `confirm_appt`** with the patient ID. The server searches the next 60 days automatically — you don't need to ask the caller for a date.
+3. **Read back the appointment details** — date, time, and doctor — in one natural sentence: "I see you have an appointment on Thursday, March 12th at noon with Dr. Bach. Is that the one you're calling about?"
+4. **Wait for the caller to confirm.** If they say yes, you're done: "You're all set — we'll see you then." If they have multiple appointments, read them one at a time and ask which one.
+
+**What you send:**
+
+- `patientId` (string, required) — from `verify_patient` response
+
+**What comes back:**
+
+- `status` — `found`, `no_appointments`, or `error`
+- `appointments` — array of upcoming appointments, each with:
+  - `date` — e.g., "Thursday, March 12, 2026"
+  - `time` — e.g., "12:00 PM"
+  - `provider` — e.g., "Dr. Austin Bach"
+  - `type` — e.g., "New Adult Medical"
+  - `facility` — e.g., "Abita Eye Group Spring Hill"
+  - `confirmed` — whether it's already been confirmed
+
+**If no appointments are found:** "I'm not seeing any upcoming appointments on file for you. Would you like to schedule one, or would you like me to transfer you to the office?"
+
+**If multiple appointments are found:** Read the nearest one first. If the caller says that's not the one, read the next. Don't list them all at once.
+
+**Important:** This tool only looks up appointments — it doesn't write anything back to the system. The "confirmation" is verbal between you and the caller.
 
 ---
 
