@@ -36,32 +36,28 @@ func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 	handlers := &Handlers{}
 
 	tests := []struct {
-		name           string
-		method         string
-		body           string
-		expectedStatus int
-		expectedMsg    string
+		name        string
+		method      string
+		body        string
+		expectedMsg string
 	}{
 		{
-			name:           "invalid JSON",
-			method:         "POST",
-			body:           "not json",
-			expectedStatus: http.StatusBadRequest,
-			expectedMsg:    "Invalid JSON body",
+			name:        "invalid JSON",
+			method:      "POST",
+			body:        "not json",
+			expectedMsg: "Invalid JSON body",
 		},
 		{
-			name:           "missing lastName",
-			method:         "POST",
-			body:           `{"dob":"01/15/1980"}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedMsg:    "lastName is required",
+			name:        "missing lastName",
+			method:      "POST",
+			body:        `{"dob":"01/15/1980"}`,
+			expectedMsg: "lastName is required",
 		},
 		{
-			name:           "missing dob",
-			method:         "POST",
-			body:           `{"lastName":"Smith"}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedMsg:    "dob is required",
+			name:        "missing dob",
+			method:      "POST",
+			body:        `{"lastName":"Smith"}`,
+			expectedMsg: "dob is required",
 		},
 	}
 
@@ -74,12 +70,16 @@ func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 			handlers.HandleVerifyPatient(w, req)
 
 			resp := w.Result()
-			if resp.StatusCode != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			// Errors return 200 OK so ElevenLabs passes the body to the LLM
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("Expected status 200, got %d", resp.StatusCode)
 			}
 
 			var body VerifyPatientResponse
 			json.NewDecoder(resp.Body).Decode(&body)
+			if body.Status != "error" {
+				t.Errorf("Expected status 'error', got '%s'", body.Status)
+			}
 			if body.Message != tt.expectedMsg {
 				t.Errorf("Expected message '%s', got '%s'", tt.expectedMsg, body.Message)
 			}
