@@ -204,3 +204,117 @@ func TestGetAppointmentsForColumns_SingleColumn(t *testing.T) {
 		t.Errorf("Expected 1 appointment for column 1513, got %d", len(result["1513"]))
 	}
 }
+
+func TestGetAppointmentsByMonth_ReturnsAppointments(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify correct query params
+		if r.URL.Query().Get("forView") != "month" {
+			t.Errorf("Expected forView=month, got %s", r.URL.Query().Get("forView"))
+		}
+		if r.URL.Query().Get("columnId") != "1513-1550-1551" {
+			t.Errorf("Expected columnId=1513-1550-1551, got %s", r.URL.Query().Get("columnId"))
+		}
+		if r.URL.Query().Get("startDate") != "2026-03-01" {
+			t.Errorf("Expected startDate=2026-03-01, got %s", r.URL.Query().Get("startDate"))
+		}
+
+		confirm := "2026-03-10T14:00:00"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]AMDAppointmentResponse{
+			{
+				ID:               1001,
+				StartDateTime:    "2026-03-12T09:00:00",
+				Duration:         15,
+				ColumnID:         1513,
+				ProfileID:        620,
+				Provider:         "BACH, AUSTIN",
+				Facility:         "ABITA EYE GROUP SPRING HILL",
+				FacilityID:       1568,
+				AppointmentTypes: []int{1006},
+				PatientID:        12345,
+				FirstName:        "John",
+				LastName:         "Smith",
+				ConfirmDate:      &confirm,
+			},
+			{
+				ID:               1002,
+				StartDateTime:    "2026-03-12T10:00:00",
+				Duration:         30,
+				ColumnID:         1550,
+				ProfileID:        2076,
+				Provider:         "NOEL, DON HERSHELSON",
+				Facility:         "ABITA EYE GROUP SPRING HILL",
+				FacilityID:       1568,
+				AppointmentTypes: []int{1007},
+				PatientID:        67890,
+				FirstName:        "Jane",
+				LastName:         "Doe",
+				ConfirmDate:      nil,
+			},
+		})
+	})
+
+	client, tokenData, cleanup := newTestRestClient(t, handler)
+	defer cleanup()
+
+	appts, err := client.GetAppointmentsByMonth(context.Background(), tokenData, "1513-1550-1551", "2026-03-01")
+	if err != nil {
+		t.Fatalf("GetAppointmentsByMonth failed: %v", err)
+	}
+
+	if len(appts) != 2 {
+		t.Fatalf("Expected 2 appointments, got %d", len(appts))
+	}
+
+	// Verify first appointment fields
+	if appts[0].PatientID != 12345 {
+		t.Errorf("Expected PatientID 12345, got %d", appts[0].PatientID)
+	}
+	if appts[0].Provider != "BACH, AUSTIN" {
+		t.Errorf("Expected provider 'BACH, AUSTIN', got %q", appts[0].Provider)
+	}
+	if appts[0].Facility != "ABITA EYE GROUP SPRING HILL" {
+		t.Errorf("Expected facility, got %q", appts[0].Facility)
+	}
+	if appts[0].ConfirmDate == nil {
+		t.Error("Expected ConfirmDate to be non-nil for first appointment")
+	}
+
+	// Verify second appointment has nil ConfirmDate
+	if appts[1].ConfirmDate != nil {
+		t.Error("Expected ConfirmDate to be nil for second appointment")
+	}
+}
+
+func TestGetAppointmentsByMonth_EmptyResponse(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]AMDAppointmentResponse{})
+	})
+
+	client, tokenData, cleanup := newTestRestClient(t, handler)
+	defer cleanup()
+
+	appts, err := client.GetAppointmentsByMonth(context.Background(), tokenData, "1513", "2026-03-01")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if len(appts) != 0 {
+		t.Errorf("Expected 0 appointments, got %d", len(appts))
+	}
+}
+
+func TestGetAppointmentsByMonth_ServerError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("AMD is down"))
+	})
+
+	client, tokenData, cleanup := newTestRestClient(t, handler)
+	defer cleanup()
+
+	_, err := client.GetAppointmentsByMonth(context.Background(), tokenData, "1513", "2026-03-01")
+	if err == nil {
+		t.Fatal("Expected error on server 500, got nil")
+	}
+}
