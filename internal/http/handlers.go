@@ -26,9 +26,10 @@ func init() {
 }
 
 // ErrorResponse is the JSON response structure for error conditions.
+// Returns 200 OK with status:"error" so ElevenLabs passes the message to the LLM.
 type ErrorResponse struct {
-	Error   string `json:"error"`
-	Details string `json:"details,omitempty"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 // ElevenLabsWebhookResponse is the response format for ElevenLabs conversation initiation webhook.
@@ -96,10 +97,9 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{
-			Error:   "Failed to get token",
-			Details: err.Error(),
+			Status:  "error",
+			Message: "Failed to get token: " + err.Error(),
 		})
 		return
 	}
@@ -159,7 +159,6 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	var req AddPatientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("add-patient: failed to decode JSON: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: "Invalid JSON body",
@@ -212,7 +211,6 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		missing = append(missing, "subscriberNum")
 	}
 	if len(missing) > 0 {
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: fmt.Sprintf("Missing required fields: %s", strings.Join(missing, ", ")),
@@ -230,7 +228,6 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: "Failed to get authentication token: " + err.Error(),
@@ -255,18 +252,12 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("add-patient: AMD error: %v", err)
 		if strings.Contains(err.Error(), "Duplicate name/DOB") {
-			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(AddPatientResponse{
 				Status:  "error",
 				Message: "A patient with this name and date of birth already exists in the system. Please try verifying the patient again instead of registering.",
 			})
 			return
 		}
-		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "error from AMD") {
-			status = http.StatusConflict
-		}
-		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: "Failed to create patient: " + err.Error(),
@@ -279,7 +270,6 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	// Look up insurance entry from name
 	insEntry, ok := domain.LookupInsurance(req.Insurance)
 	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",
 			PatientID: strippedID,
@@ -292,7 +282,6 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	// Reject insurance not accepted at Spring Hill
 	if insEntry.Routing == domain.RoutingNotAccepted {
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",
 			PatientID: strippedID,
@@ -305,7 +294,6 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	// Attach insurance
 	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, insEntry.CarrierID, req.SubscriberNum); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",
 			PatientID: strippedID,
@@ -341,7 +329,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	// Parse request body
 	var req VerifyPatientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
 			Message: "Invalid JSON body",
@@ -351,7 +338,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 
 	// Validate required fields
 	if req.LastName == "" {
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
 			Message: "lastName is required",
@@ -359,7 +345,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.DOB == "" {
-		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
 			Message: "dob is required",
@@ -375,7 +360,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	// Get token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
 			Message: "Failed to get authentication token: " + err.Error(),
@@ -386,7 +370,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	// Call AdvancedMD lookuppatient API
 	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName, normalizedFirstName)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
 			Message: "Failed to lookup patient: " + err.Error(),
@@ -532,31 +515,27 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	// Parse request body
 	var req AvailabilityRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON body"})
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Invalid JSON body"})
 		return
 	}
 
 	// Validate required date field
 	if req.Date == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "date is required (YYYY-MM-DD format)"})
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "date is required (YYYY-MM-DD format)"})
 		return
 	}
 
 	// Parse start date
 	startDate, err := time.Parse("2006-01-02", req.Date)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid date format. Use YYYY-MM-DD."})
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Invalid date format. Use YYYY-MM-DD."})
 		return
 	}
 
 	// Reject same-day appointment searches
 	todayEastern := time.Now().In(eastern).Format("2006-01-02")
 	if startDate.Format("2006-01-02") == todayEastern {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Same-day appointments are not available. Please search for tomorrow or later."})
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Same-day appointments are not available. Please search for tomorrow or later."})
 		return
 	}
 
@@ -570,10 +549,9 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{
-			Error:   "Failed to get authentication token",
-			Details: err.Error(),
+			Status:  "error",
+			Message: "Failed to get authentication token: " + err.Error(),
 		})
 		return
 	}
@@ -581,10 +559,9 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	// Get scheduler setup (1 XMLRPC call)
 	setup, err := h.amdClient.GetSchedulerSetup(r.Context(), tokenData)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{
-			Error:   "Failed to get scheduler setup",
-			Details: err.Error(),
+			Status:  "error",
+			Message: "Failed to get scheduler setup: " + err.Error(),
 		})
 		return
 	}
@@ -605,9 +582,9 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	if req.Office != "" {
 		facilityID, ok := domain.LookupFacilityID(req.Office)
 		if !ok {
-			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(ErrorResponse{
-				Error: fmt.Sprintf("Unknown office: %q. Valid options: %s", req.Office, strings.Join(domain.ValidOfficeNames(), ", ")),
+				Status:  "error",
+				Message: fmt.Sprintf("Unknown office: %q. Valid options: %s", req.Office, strings.Join(domain.ValidOfficeNames(), ", ")),
 			})
 			return
 		}
@@ -671,9 +648,9 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 
 	if len(allowedColumns) == 0 {
 		if req.Provider != "" {
-			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(ErrorResponse{
-				Error: fmt.Sprintf("No provider found matching %q. Valid providers: %s",
+				Status:  "error",
+				Message: fmt.Sprintf("No provider found matching %q. Valid providers: %s",
 					req.Provider, strings.Join(domain.ValidProviderNames(), ", ")),
 			})
 			return
