@@ -13,9 +13,6 @@ import (
 	"advancedmd-token-management/internal/domain"
 )
 
-// cancelNoshowReasonID is the AMD no-show reason used for cancellations.
-// Hardcoded per practice policy — no caller-provided reason needed.
-const cancelNoshowReasonID = "23"
 
 // AdvancedMDRestClient handles REST API calls to AdvancedMD.
 type AdvancedMDRestClient struct {
@@ -284,8 +281,7 @@ func (c *AdvancedMDRestClient) CancelAppointment(ctx context.Context, tokenData 
 		tokenData.RestApiBase, appointmentID)
 
 	reqBody := map[string]interface{}{
-		"id":             appointmentID,
-		"noshowreasonid": cancelNoshowReasonID,
+		"id": appointmentID,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {

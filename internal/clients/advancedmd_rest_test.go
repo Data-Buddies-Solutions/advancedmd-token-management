@@ -347,9 +347,6 @@ func TestCancelAppointment_Success(t *testing.T) {
 		if !strings.Contains(bodyStr, `"id":9570263`) {
 			t.Errorf("Expected body to contain '\"id\":9570263', got %s", bodyStr)
 		}
-		if !strings.Contains(bodyStr, `"noshowreasonid":"23"`) {
-			t.Errorf("Expected body to contain '\"noshowreasonid\":\"23\"', got %s", bodyStr)
-		}
 
 		w.WriteHeader(http.StatusOK)
 	})

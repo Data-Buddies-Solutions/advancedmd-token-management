@@ -314,7 +314,7 @@ Appointment type IDs are mapped to friendly names (1006 → "New Adult Medical",
 
 ### POST /api/appointment/cancel
 
-Cancels an appointment via AMD's REST API. Uses a hardcoded no-show reason ID (23).
+Cancels an appointment via AMD's REST API.
 
 **Request:**
 ```json

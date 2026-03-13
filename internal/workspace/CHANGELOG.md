@@ -4,6 +4,66 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-13
+
+### Source: Reschedule flow + cancel noshowreasonid fix
+
+Agent can now handle rescheduling directly instead of transferring to the office. Rescheduling uses existing tools in sequence: verify → confirm_appt → get_availability → book_appt → cancel_appt. Books the new appointment before cancelling the old one to protect against leaving the patient with no appointment.
+
+Also fixed cancel_appt: removed `noshowreasonid` from the AMD REST request body — AMD returns a 500 when it's included.
+
+---
+
+### TOOLS.md — New "Rescheduling" section
+
+**Added: Reschedule flow documentation**
+- Not a new tool — chains existing tools: verify → confirm_appt → get_availability → book_appt → cancel_appt
+- Key safety rule: book new appointment FIRST, then cancel old one
+- If new booking fails, original appointment stays intact
+- If cancel fails after booking, agent tells caller new appointment is booked and offers to transfer for cleanup
+- Confirmation phrasing: "I've moved your appointment to [new date] at [new time] with [doctor]"
+
+**Changed: "Understand Why They're Calling" intent routing**
+- Reschedule is no longer a transfer
+- Was: "They want to reschedule → Transfer immediately"
+- Now: "They want to reschedule → verify → confirm_appt → get_availability → book_appt → cancel_appt flow"
+
+**Changed: cancel_appt section**
+- Step 7 now mentions rescheduling is available if caller wants it after cancelling
+
+**Changed: transfer_to_number description**
+- Removed "rescheduling" and "cancellations" from the list of transfer reasons
+
+---
+
+### SOUL.md — Boundaries
+
+**Changed: "Stay in your lane" updated to include rescheduling**
+- Was: "You schedule appointments, verify patients, register new ones, confirm existing appointments, and cancel appointments"
+- Now: "You schedule appointments, verify patients, register new ones, confirm existing appointments, cancel appointments, and reschedule appointments"
+- Removed "If someone needs to reschedule an appointment, offer to transfer them to the office"
+
+---
+
+### Code change: cancel_appt noshowreasonid removed
+
+**Fixed: AMD 500 error on cancel**
+- `noshowreasonid` field removed from cancel request body in `advancedmd_rest.go`
+- AMD returns HTTP 500 when `noshowreasonid` is included; works fine with just `{"id": appointmentID}`
+- `cancelNoshowReasonID` constant removed
+- Test updated to remove noshowreasonid assertion
+- README updated to remove "hardcoded no-show reason ID (23)" reference
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-11 (Round 2)
 
 ### Source: New cancel appointment tool

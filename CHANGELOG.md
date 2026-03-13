@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased] - 2026-03-13
+
+### Reschedule Flow + Cancel Fix
+
+Agent can now handle rescheduling directly instead of transferring. Uses existing tools in sequence: verify → confirm_appt → get_availability → book_appt → cancel_appt. Books new appointment before cancelling old one to protect the patient.
+
+#### Changed
+
+- **`internal/clients/advancedmd_rest.go`** — Removed `noshowreasonid` from cancel request body. AMD returns HTTP 500 when it's included; works with just `{"id": appointmentID}`. Removed `cancelNoshowReasonID` constant.
+- **`internal/clients/advancedmd_rest_test.go`** — Removed `noshowreasonid` assertion from `TestCancelAppointment_Success`
+- **`internal/workspace/TOOLS.md`** — Added "Rescheduling" section (book-first-then-cancel flow); updated intent routing (reschedule no longer transfers); updated transfer_to_number (removed reschedule from transfer reasons)
+- **`internal/workspace/SOUL.md`** — "Stay in your lane" updated to include rescheduling as a capability
+- **`README.md`** — Removed "hardcoded no-show reason ID (23)" from cancel endpoint docs
+
+---
+
 ## [Unreleased] - 2026-03-10
 
 ### Preauthorization — 14-Day Minimum Lead Time for HMO/Managed Care Plans
