@@ -4,6 +4,61 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-15
+
+### Source: Prompt hardening — Dr. Bach expectations, insurance pre-check
+
+Two changes based on observed agent behavior: agent not setting expectations about Dr. Bach's limited availability (leading to caller confusion when dates are far out), and running callers through the full scheduling flow before telling them their insurance isn't accepted.
+
+---
+
+### TOOLS.md — "Understand Why They're Calling"
+
+**Added: Insurance question intent**
+- New bullet between "Someone told them to call back" and "They have a general question"
+- If caller asks "do you accept [insurance]?" — answer immediately from the accepted insurance list in add_patient
+- If recognized, confirm and ask if they'd like to schedule
+- If not recognized, say you're not sure and offer to transfer
+- Don't make them go through verify/register just to find out — answer the insurance question first
+
+---
+
+### TOOLS.md — get_availability
+
+**Added: Dr. Bach limited schedule context**
+- Sub-bullet under step 1 (ask when they'd like to come in)
+- Dr. Bach only works at Spring Hill a couple of times per month and is usually booked
+- Agent should set expectations early for patients who need Bach (pediatric, strabismus, double vision)
+- Suggested phrasing: "Dr. Bach has a limited schedule at this location, so it may be a couple weeks out — let me see what's available."
+- Don't be surprised if the system auto-searches forward many days
+
+---
+
+### KNOWLEDGE.md — Dr. Bach provider section
+
+**Added: Limited schedule note**
+- "Dr. Bach is only at the Spring Hill office a couple of times per month. Availability may be several weeks out."
+- Gives the agent knowledge-base context to answer questions about Bach's schedule even outside the scheduling flow
+
+---
+
+### SOUL.md — Date/time context (manually added)
+
+**Added: Dynamic date and time variables**
+- `The current date is {{current_date}} and the current time is {{current_time}}. Use this information for any relative date calculations.`
+- Added below the opening identity paragraph
+- Gives the agent real-time date/time context so relative date math ("next Thursday," "tomorrow") is accurate
+- Uses ElevenLabs dynamic variable syntax — values are injected at runtime
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-13
 
 ### Source: Reschedule flow + cancel noshowreasonid fix
