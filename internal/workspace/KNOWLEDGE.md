@@ -32,7 +32,6 @@ If flashes or floaters are not new or unchanged, continue with standard scheduli
 Practice Name: Abita Eye Clinic
 Address: 10495 SpringHill Drive, Springhill, FL 34608
 Email: newpatient@abitaeye.com
-Phone Number: (727) 591-9997
 Fax: (305)-675-3370
 
 Hours of Operation:
@@ -67,6 +66,7 @@ This list is general and not exhaustive.
 - Pediatrics
 - Adult Strabismus
 - Double Vision
+- **Limited schedule** — Dr. Bach is only at the Spring Hill office a couple of times per month. Availability may be several weeks out.
 
 ### Dr. Noel
 
