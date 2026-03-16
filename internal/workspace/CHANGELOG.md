@@ -4,6 +4,109 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-16
+
+### Source: Transfer resistance + "you are the office" language fix
+
+Two changes based on 210-call deflection analysis: 43 transfers/wk were callers asking for a human who actually needed scheduling help, and the agent's language ("transfer you to the office") made it sound like a remote call center instead of the front desk.
+
+---
+
+### TOOLS.md — "Understand Why They're Calling"
+
+**Added: "They ask for a human or say 'transfer me'" intent**
+- New bullet between "Someone told them to call back" and "They want to know if their insurance is accepted"
+- Agent asks what they're calling about before transferring, framed as routing: "I just want to make sure I get you to the right person — what are you calling about?"
+- If the caller describes something in the agent's wheelhouse (scheduling, confirming, cancelling, rescheduling, insurance, general info), agent offers to handle it
+- If they insist or it's outside scope, transfer without pushback
+
+---
+
+### TOOLS.md — transfer_to_number (rewritten)
+
+**Changed: From "transfer immediately" to "triage first"**
+- Was: "Don't overthink it. Don't make the caller justify why they need a human."
+- Now: Four-case flow:
+  1. Ask what they're calling about (framed as routing)
+  2. If in wheelhouse → offer to handle ("I can actually take care of that for you right now")
+  3. If they insist or ask twice → transfer promptly, no resistance
+  4. If genuinely outside scope → transfer without the offer
+
+---
+
+### TOOLS.md + SOUL.md — "to the office" language replaced
+
+**Changed: 11 instances in TOOLS.md, 2 in SOUL.md**
+- Was: "transfer you to the office," "get you over to the office"
+- Now: "connect you with someone here," "get someone here to help," "one of your coworkers"
+- Agent lives at the office — it IS the front desk, not a remote call center
+- SOUL.md reinforced: "You ARE the office"
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+- **KNOWLEDGE.md** — No changes
+
+---
+
+---
+
+## 2026-03-15
+
+### Source: Prompt hardening — Dr. Bach expectations, insurance pre-check
+
+Two changes based on observed agent behavior: agent not setting expectations about Dr. Bach's limited availability (leading to caller confusion when dates are far out), and running callers through the full scheduling flow before telling them their insurance isn't accepted.
+
+---
+
+### TOOLS.md — "Understand Why They're Calling"
+
+**Added: Insurance question intent**
+- New bullet between "Someone told them to call back" and "They have a general question"
+- If caller asks "do you accept [insurance]?" — answer immediately from the accepted insurance list in add_patient
+- If recognized, confirm and ask if they'd like to schedule
+- If not recognized, say you're not sure and offer to transfer
+- Don't make them go through verify/register just to find out — answer the insurance question first
+
+---
+
+### TOOLS.md — get_availability
+
+**Added: Dr. Bach limited schedule context**
+- Sub-bullet under step 1 (ask when they'd like to come in)
+- Dr. Bach only works at Spring Hill a couple of times per month and is usually booked
+- Agent should set expectations early for patients who need Bach (pediatric, strabismus, double vision)
+- Suggested phrasing: "Dr. Bach has a limited schedule at this location, so it may be a couple weeks out — let me see what's available."
+- Don't be surprised if the system auto-searches forward many days
+
+---
+
+### KNOWLEDGE.md — Dr. Bach provider section
+
+**Added: Limited schedule note**
+- "Dr. Bach is only at the Spring Hill office a couple of times per month. Availability may be several weeks out."
+- Gives the agent knowledge-base context to answer questions about Bach's schedule even outside the scheduling flow
+
+---
+
+### SOUL.md — Date/time context (manually added)
+
+**Added: Dynamic date and time variables**
+- `The current date is {{current_date}} and the current time is {{current_time}}. Use this information for any relative date calculations.`
+- Added below the opening identity paragraph
+- Gives the agent real-time date/time context so relative date math ("next Thursday," "tomorrow") is accurate
+- Uses ElevenLabs dynamic variable syntax — values are injected at runtime
+
+---
+
+### Files NOT changed this round
+- **VOICE.md** — No changes
+
+---
+
+---
+
 ## 2026-03-13
 
 ### Source: Reschedule flow + cancel noshowreasonid fix
