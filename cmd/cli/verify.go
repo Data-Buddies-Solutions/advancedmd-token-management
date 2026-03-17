@@ -1,0 +1,139 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"advancedmd-token-management/internal/domain"
+)
+
+func verifyCmd() *cobra.Command {
+	var lastName, firstName, dob string
+
+	cmd := &cobra.Command{
+		Use:   "verify",
+		Short: "Verify a patient by name and date of birth",
+		Example: `  amd verify --last Doe --dob 1990-01-15
+  amd verify --last Doe --first John --dob 01/15/1990`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if lastName == "" || dob == "" {
+				return fmt.Errorf("--last and --dob are required")
+			}
+
+			if err := mustBootstrap(); err != nil {
+				return err
+			}
+
+			normalizedDOB := domain.NormalizeDOB(dob)
+			normalizedLastName := domain.StripDiacritics(lastName)
+			normalizedFirstName := domain.StripDiacritics(firstName)
+
+			tokenData := getToken()
+
+			patients, err := app.amdClient.LookupPatient(cmd.Context(), tokenData, normalizedLastName, normalizedFirstName)
+			if err != nil {
+				return fmt.Errorf("failed to lookup patient: %w", err)
+			}
+
+			log.Printf("lookup returned %d patients for %q", len(patients), normalizedLastName)
+
+			// Filter by DOB
+			var matching []domain.Patient
+			for _, p := range patients {
+				if domain.NormalizeDOB(p.DOB) == normalizedDOB {
+					matching = append(matching, p)
+				}
+			}
+
+			switch len(matching) {
+			case 0:
+				printJSON(map[string]string{
+					"status":  "not_found",
+					"message": "No patient found with that last name and date of birth",
+				})
+				return nil
+
+			case 1:
+				return printVerifiedPatient(cmd.Context(), matching[0])
+
+			default:
+				// Multiple matches — try to disambiguate by first name
+				if firstName != "" {
+					upperFirstName := strings.ToUpper(firstName)
+					for _, p := range matching {
+						if strings.HasPrefix(p.FirstName, upperFirstName) {
+							return printVerifiedPatient(cmd.Context(), p)
+						}
+					}
+					printJSON(map[string]string{
+						"status":  "not_found",
+						"message": "No patient found matching that first name",
+					})
+					return nil
+				}
+
+				// Return list for disambiguation
+				var names []string
+				for _, p := range matching {
+					names = append(names, p.FirstName)
+				}
+				printJSON(map[string]interface{}{
+					"status":  "multiple_matches",
+					"message": fmt.Sprintf("Found %d patients. Use --first to disambiguate.", len(matching)),
+					"matches": names,
+				})
+				return nil
+			}
+		},
+	}
+
+	cmd.Flags().StringVar(&lastName, "last", "", "Patient last name (required)")
+	cmd.Flags().StringVar(&firstName, "first", "", "Patient first name (for disambiguation)")
+	cmd.Flags().StringVar(&dob, "dob", "", "Date of birth (e.g., 01/15/1990 or 1990-01-15)")
+
+	return cmd
+}
+
+// printVerifiedPatient fetches demographics and prints the verified patient result.
+func printVerifiedPatient(ctx context.Context, p domain.Patient) error {
+	tokenData := getToken()
+
+	carrierName, carrierID, err := app.amdClient.GetDemographic(ctx, tokenData, p.ID)
+	if err != nil {
+		log.Printf("WARNING: failed to get demographics: %v", err)
+	}
+
+	resp := map[string]interface{}{
+		"status":    "verified",
+		"patientId": p.ID,
+		"name":      p.FullName,
+		"dob":       p.DOB,
+		"phone":     p.Phone,
+	}
+
+	if carrierName != "" {
+		resp["insuranceCarrier"] = carrierName
+	}
+
+	if carrierID != "" {
+		resp["insuranceCarrierId"] = carrierID
+		routing, ambiguous := domain.RoutingForCarrierID(carrierID)
+		resp["routing"] = string(routing)
+		resp["allowedProviders"] = domain.ProvidersForRouting(routing)
+		resp["routingAmbiguous"] = ambiguous
+
+		// Pediatric override
+		if domain.IsMinor(p.DOB) && routing != domain.RoutingNotAccepted {
+			resp["routing"] = string(domain.RoutingBachOnly)
+			resp["allowedProviders"] = domain.ProvidersForRouting(domain.RoutingBachOnly)
+			resp["routingAmbiguous"] = false
+		}
+	}
+
+	printJSON(resp)
+	return nil
+}
