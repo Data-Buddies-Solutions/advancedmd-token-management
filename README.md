@@ -30,6 +30,7 @@ A Go microservice that handles AdvancedMD's 2-step authentication flow and serve
 │  │  • POST /api/add-patient     (auth req) │                    │
 │  │  • POST /api/scheduler/availability     │                    │
 │  │  • POST /api/patient/appointments      │                    │
+│  │  • POST /api/appointment/book          │                    │
 │  │  • POST /api/appointment/cancel        │                    │
 │  └─────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
@@ -311,6 +312,55 @@ Retrieves upcoming appointments for a verified patient. Queries all allowed prov
 ```
 
 Appointment type IDs are mapped to friendly names (1006 → "New Adult Medical", etc.). Provider names are mapped to display names. Facility names are title-cased. Past appointments are filtered out. The `confirmed` field reflects whether AMD has a `confirmdate` set.
+
+### POST /api/appointment/book
+
+Books an appointment in AdvancedMD. Handles appointment type → color mapping, constant fields (facilityId, episodeId), and type array wrapping server-side so the LLM only needs to pass values from the `get_availability` response.
+
+**Request:**
+```json
+{
+  "patientId": "17604634",
+  "columnId": 1513,
+  "profileId": 620,
+  "startDatetime": "2026-03-20T09:00",
+  "duration": 15,
+  "appointmentTypeId": 1006
+}
+```
+
+All fields are required. `columnId`, `profileId`, `startDatetime`, and `duration` come directly from the `get_availability` response. `appointmentTypeId` is determined by the LLM based on patient age and visit type:
+
+| Type ID | Name | When |
+|---------|------|------|
+| 1006 | New Adult Medical | New patient, 18+ |
+| 1004 | New Pediatric Medical | New patient, under 18 |
+| 1007 | Established Adult Medical | Follow-up, 18+ |
+| 1005 | Established Pediatric Medical | Follow-up, under 18 |
+| 1008 | Post Op | Post-op visit, any age |
+
+**Responses:**
+
+| Status | When |
+|--------|------|
+| `booked` | Appointment created — includes appointmentId |
+| `error` | Validation, auth, conflict, or AMD failure |
+
+**Response (booked):**
+```json
+{
+  "status": "booked",
+  "appointmentId": 9570300,
+  "message": "Appointment booked successfully"
+}
+```
+
+**Server-side handling:**
+- Maps `appointmentTypeId` → color (1006→RED, 1004→GREEN, 1007→ORANGE, 1005→PINK, 1008→BLUE)
+- Sets `facilityId: 1568` (Spring Hill) and `episodeId: 1` automatically
+- Wraps type as `[{id: X}]` for AMD's expected format
+- Validates `columnId` against the office's allowed columns
+- AMD 409 conflicts return a clear "slot no longer available" message
 
 ### POST /api/appointment/cancel
 

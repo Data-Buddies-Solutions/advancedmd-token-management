@@ -68,7 +68,7 @@ advancedmd-token-management/
 │   ├── clients/
 │   │   ├── redis.go             # Pooled Redis client
 │   │   ├── advancedmd_xmlrpc.go # XMLRPC client (patients, scheduler setup)
-│   │   └── advancedmd_rest.go   # REST client (appointments, block holds)
+│   │   └── advancedmd_rest.go   # REST client (appointments, booking, block holds)
 │   ├── http/
 │   │   ├── router.go            # chi router setup
 │   │   ├── handlers.go          # Request handlers
@@ -120,6 +120,9 @@ railway up
 | `POST /api/verify-patient` | Yes | Patient lookup by name + DOB, returns insurance routing |
 | `POST /api/add-patient` | Yes | Patient creation + insurance attachment |
 | `POST /api/scheduler/availability` | Yes | Available appointment slots (concurrent per-column fetching) |
+| `POST /api/patient/appointments` | Yes | Upcoming appointments for a verified patient |
+| `POST /api/appointment/book` | Yes | Book appointment (type→color mapping, constants handled server-side) |
+| `POST /api/appointment/cancel` | Yes | Cancel an appointment |
 
 ## Scheduler Availability Endpoint
 
@@ -164,7 +167,7 @@ Workweek format: 7 chars for Mon-Sun where `1` = works, `0` = off.
 
 Updated 2026-02-19 from live AMD system (office 139464).
 
-Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` to change):
+Only these columns are exposed (edit `OfficeRegistry` in `domain/office.go` to change):
 
 | Column ID | Name | Profile ID | Facility ID | Hours | Interval | Max/Slot | Workweek |
 |-----------|------|------------|-------------|-------|----------|----------|----------|

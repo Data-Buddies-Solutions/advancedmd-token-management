@@ -617,6 +617,8 @@ func TestHandleGetPatientAppointments_ValidationErrors(t *testing.T) {
 }
 
 func TestFriendlyProviderName(t *testing.T) {
+	office := domain.DefaultOffice()
+
 	tests := []struct {
 		input    string
 		expected string
@@ -630,9 +632,9 @@ func TestFriendlyProviderName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := friendlyProviderName(tt.input)
+			got := office.FriendlyProviderName(tt.input)
 			if got != tt.expected {
-				t.Errorf("friendlyProviderName(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("FriendlyProviderName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -658,6 +660,8 @@ func TestFriendlyFacilityName(t *testing.T) {
 }
 
 func TestAppointmentTypeNames(t *testing.T) {
+	office := domain.DefaultOffice()
+
 	tests := []struct {
 		typeID   int
 		expected string
@@ -673,12 +677,12 @@ func TestAppointmentTypeNames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			got, ok := appointmentTypeNames[tt.typeID]
+			got, ok := office.AppointmentTypeName(tt.typeID)
 			if ok != tt.found {
-				t.Errorf("appointmentTypeNames[%d] found=%v, want %v", tt.typeID, ok, tt.found)
+				t.Errorf("AppointmentTypeName(%d) found=%v, want %v", tt.typeID, ok, tt.found)
 			}
 			if got != tt.expected {
-				t.Errorf("appointmentTypeNames[%d] = %q, want %q", tt.typeID, got, tt.expected)
+				t.Errorf("AppointmentTypeName(%d) = %q, want %q", tt.typeID, got, tt.expected)
 			}
 		})
 	}

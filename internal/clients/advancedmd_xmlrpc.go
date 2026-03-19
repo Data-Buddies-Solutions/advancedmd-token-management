@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -158,6 +159,7 @@ type AddPatientParams struct {
 	State     string
 	Zip       string
 	Sex       string
+	ProfileID string // Provider profile ID for the office (e.g., "620")
 }
 
 // AddPatient creates a new patient in AdvancedMD.
@@ -165,6 +167,12 @@ type AddPatientParams struct {
 func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.TokenData, params AddPatientParams) (string, string, string, error) {
 	name := params.LastName + "," + params.FirstName
 	msgTime := time.Now().Format("01/02/2006 03:04:05 PM")
+
+	profileID := params.ProfileID
+	if profileID == "" {
+		log.Printf("WARNING: addpatient called without ProfileID, defaulting to 620")
+		profileID = "620"
+	}
 
 	payload := map[string]interface{}{
 		"ppmdmsg": map[string]interface{}{
@@ -182,7 +190,7 @@ func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.Tok
 					"@dob":               params.DOB,
 					"@ssn":               "",
 					"@chart":             "AUTO",
-					"@profile":           "620",
+					"@profile":           profileID,
 					"address": map[string]interface{}{
 						"@address1": params.AptSuite,
 						"@address2": params.Street,

@@ -45,6 +45,8 @@ func TestRoutingForCarrierID(t *testing.T) {
 }
 
 func TestColumnsForRouting(t *testing.T) {
+	office := DefaultOffice()
+
 	tests := []struct {
 		name    string
 		rule    RoutingRule
@@ -59,7 +61,7 @@ func TestColumnsForRouting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cols := ColumnsForRouting(tt.rule)
+			cols := office.ColumnsForRouting(tt.rule)
 			if tt.wantLen == 0 {
 				if cols != nil {
 					t.Errorf("ColumnsForRouting(%q) = %v, want nil", tt.rule, cols)
@@ -79,6 +81,8 @@ func TestColumnsForRouting(t *testing.T) {
 }
 
 func TestProvidersForRouting(t *testing.T) {
+	office := DefaultOffice()
+
 	tests := []struct {
 		name      string
 		rule      RoutingRule
@@ -92,7 +96,7 @@ func TestProvidersForRouting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			names := ProvidersForRouting(tt.rule)
+			names := office.ProvidersForRouting(tt.rule)
 			if tt.wantNames == nil {
 				if names != nil {
 					t.Errorf("ProvidersForRouting(%q) = %v, want nil", tt.rule, names)
