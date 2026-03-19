@@ -138,6 +138,32 @@ var DefaultAppointmentTypeNames = map[int]string{
 	1008: "Post Op",
 }
 
+// devAppointmentTypes maps prod type IDs to dev type IDs.
+// Only used when AMD_ENV=dev; in prod the IDs pass through unchanged.
+var devAppointmentTypes = map[int]int{
+	1006: 12,   // New Adult Medical
+	1004: 20,   // New Pediatric Medical
+	1007: 18,   // Established Adult Medical (Follow Up)
+	1005: 8,    // Established Pediatric Medical (Follow Up)
+	1008: 1627, // Post Op
+}
+
+// isDevEnv tracks whether we're running in dev mode. Set by InitRegistry.
+var isDevEnv bool
+
+// ResolveAppointmentTypeID translates a prod type ID to the env-specific ID.
+// In prod, returns the ID unchanged. In dev, maps to the dev ID.
+func ResolveAppointmentTypeID(typeID int) (int, bool) {
+	if _, ok := DefaultAppointmentTypeColors[typeID]; !ok {
+		return 0, false
+	}
+	if isDevEnv {
+		devID, ok := devAppointmentTypes[typeID]
+		return devID, ok
+	}
+	return typeID, true
+}
+
 // prodOffices contains office configs with production AMD IDs.
 var prodOffices = map[string]*OfficeConfig{
 	"spring_hill": {
@@ -190,9 +216,11 @@ func InitRegistry(env string) {
 	switch env {
 	case "dev":
 		OfficeRegistry = devOffices
+		isDevEnv = true
 		log.Printf("Office registry: dev")
 	default:
 		OfficeRegistry = prodOffices
+		isDevEnv = false
 		log.Printf("Office registry: prod")
 	}
 	rebuildPhoneMap()

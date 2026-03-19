@@ -877,12 +877,22 @@ func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate appointment type and resolve color
-	color, ok := office.AppointmentColor(req.AppointmentTypeID)
+	// Resolve appointment type ID for current environment (prod IDs → env IDs)
+	envTypeID, ok := domain.ResolveAppointmentTypeID(req.AppointmentTypeID)
 	if !ok {
 		json.NewEncoder(w).Encode(BookAppointmentResponse{
 			Status:  "error",
 			Message: fmt.Sprintf("Invalid appointment type ID: %d. Valid types: 1004 (New Pediatric), 1005 (Established Pediatric), 1006 (New Adult), 1007 (Established Adult), 1008 (Post Op)", req.AppointmentTypeID),
+		})
+		return
+	}
+
+	// Resolve color from canonical (prod) type ID
+	color, ok := office.AppointmentColor(req.AppointmentTypeID)
+	if !ok {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Invalid appointment type ID: %d", req.AppointmentTypeID),
 		})
 		return
 	}
@@ -919,7 +929,7 @@ func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request)
 		Duration:      req.Duration,
 		AppointmentType: []struct {
 			ID int `json:"id"`
-		}{{ID: req.AppointmentTypeID}},
+		}{{ID: envTypeID}},
 		EpisodeID:  1,
 		FacilityID: facilityIDInt,
 		Color:      color,
