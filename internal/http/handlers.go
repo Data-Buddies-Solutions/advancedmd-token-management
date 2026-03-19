@@ -766,6 +766,157 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// BookAppointmentRequest is the expected JSON body for booking an appointment.
+type BookAppointmentRequest struct {
+	PatientID         string `json:"patientId"`
+	ColumnID          int    `json:"columnId"`
+	ProfileID         int    `json:"profileId"`
+	StartDatetime     string `json:"startDatetime"`
+	Duration          int    `json:"duration"`
+	AppointmentTypeID int    `json:"appointmentTypeId"`
+}
+
+// BookAppointmentResponse is returned after booking an appointment.
+type BookAppointmentResponse struct {
+	Status        string `json:"status"`
+	AppointmentID int    `json:"appointmentId,omitempty"`
+	Message       string `json:"message"`
+}
+
+// appointmentTypeColors maps AMD appointment type IDs to their booking colors.
+var appointmentTypeColors = map[int]string{
+	1006: "RED",    // New Adult Medical
+	1004: "GREEN",  // New Pediatric Medical
+	1007: "ORANGE", // Established Adult Medical (Follow Up)
+	1005: "PINK",   // Established Pediatric Medical (Follow Up)
+	1008: "BLUE",   // Post Op
+}
+
+// HandleBookAppointment books an appointment in AdvancedMD.
+func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req BookAppointmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "Invalid JSON body",
+		})
+		return
+	}
+
+	log.Printf("book-appointment: patientId=%s columnId=%d profileId=%d startDatetime=%s duration=%d typeId=%d",
+		req.PatientID, req.ColumnID, req.ProfileID, req.StartDatetime, req.Duration, req.AppointmentTypeID)
+
+	// Validate required fields
+	if req.PatientID == "" {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "patientId is required"})
+		return
+	}
+	if req.ColumnID == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "columnId is required"})
+		return
+	}
+	if req.ProfileID == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "profileId is required"})
+		return
+	}
+	if req.StartDatetime == "" {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "startDatetime is required"})
+		return
+	}
+	if req.Duration == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "duration is required"})
+		return
+	}
+	if req.AppointmentTypeID == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "appointmentTypeId is required"})
+		return
+	}
+
+	// Validate columnId is allowed
+	colIDStr := strconv.Itoa(req.ColumnID)
+	if !domain.IsAllowedColumn(colIDStr) {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Column %d is not a valid provider column", req.ColumnID),
+		})
+		return
+	}
+
+	// Validate appointment type and resolve color
+	color, ok := appointmentTypeColors[req.AppointmentTypeID]
+	if !ok {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Invalid appointment type ID: %d. Valid types: 1004 (New Pediatric), 1005 (Established Pediatric), 1006 (New Adult), 1007 (Established Adult), 1008 (Post Op)", req.AppointmentTypeID),
+		})
+		return
+	}
+
+	// Parse patient ID
+	patientIDInt, err := strconv.Atoi(req.PatientID)
+	if err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "patientId must be numeric",
+		})
+		return
+	}
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "Failed to get authentication token: " + err.Error(),
+		})
+		return
+	}
+
+	// Book via AMD REST API
+	apptID, err := h.amdRestClient.BookAppointment(r.Context(), tokenData, clients.BookAppointmentParams{
+		PatientID:     patientIDInt,
+		ColumnID:      req.ColumnID,
+		ProfileID:     req.ProfileID,
+		StartDatetime: req.StartDatetime,
+		Duration:      req.Duration,
+		AppointmentType: []struct {
+			ID int `json:"id"`
+		}{{ID: req.AppointmentTypeID}},
+		EpisodeID:  1,
+		FacilityID: 1568,
+		Color:      color,
+	})
+	if err != nil {
+		log.Printf("book-appointment: AMD error: %v", err)
+
+		// Handle 409 conflict errors with clear messages
+		errStr := err.Error()
+		if strings.Contains(errStr, "conflict") {
+			json.NewEncoder(w).Encode(BookAppointmentResponse{
+				Status:  "error",
+				Message: "This time slot is no longer available. Please check availability again and choose a different slot.",
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "Failed to book appointment: " + err.Error(),
+		})
+		return
+	}
+
+	log.Printf("book-appointment: success appointmentId=%d", apptID)
+
+	json.NewEncoder(w).Encode(BookAppointmentResponse{
+		Status:        "booked",
+		AppointmentID: apptID,
+		Message:       "Appointment booked successfully",
+	})
+}
+
 // AvailabilityRequest is the expected JSON body for availability lookup.
 type AvailabilityRequest struct {
 	Date            string `json:"date"`            // Required: YYYY-MM-DD format

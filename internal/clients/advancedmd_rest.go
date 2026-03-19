@@ -275,6 +275,69 @@ func (c *AdvancedMDRestClient) GetAppointmentsByMonth(ctx context.Context, token
 	return appts, nil
 }
 
+// BookAppointmentParams holds the parameters for booking an appointment.
+type BookAppointmentParams struct {
+	PatientID      int    `json:"patientid"`
+	ColumnID       int    `json:"columnid"`
+	ProfileID      int    `json:"profileid"`
+	StartDatetime  string `json:"startdatetime"`
+	Duration       int    `json:"duration"`
+	AppointmentType []struct {
+		ID int `json:"id"`
+	} `json:"type"`
+	EpisodeID  int    `json:"episodeid"`
+	FacilityID int    `json:"facilityid"`
+	Color      string `json:"color"`
+}
+
+// BookAppointmentResponse represents the AMD response after booking.
+type BookAppointmentResponse struct {
+	ID int `json:"id"`
+}
+
+// BookAppointment creates an appointment via AMD's REST API.
+// Returns the appointment ID on success.
+func (c *AdvancedMDRestClient) BookAppointment(ctx context.Context, tokenData *domain.TokenData, params BookAppointmentParams) (int, error) {
+	url := fmt.Sprintf("https://%s/scheduler/Appointments", tokenData.RestApiBase)
+
+	bodyBytes, err := json.Marshal(params)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", tokenData.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusConflict {
+		return 0, fmt.Errorf("conflict: %s", string(body))
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result BookAppointmentResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result.ID, nil
+}
+
 // CancelAppointment cancels an appointment via AMD's REST API.
 func (c *AdvancedMDRestClient) CancelAppointment(ctx context.Context, tokenData *domain.TokenData, appointmentID int) error {
 	url := fmt.Sprintf("https://%s/scheduler/appointments/%d/cancel",
