@@ -151,34 +151,6 @@ var AmbiguousCarriers = map[string]bool{
 	"car301345": true, // CIGNA HMO
 }
 
-// ColumnsForRouting returns the allowed column IDs for a routing rule.
-func ColumnsForRouting(rule RoutingRule) map[string]bool {
-	switch rule {
-	case RoutingNotAccepted:
-		return nil
-	case RoutingBachOnly:
-		return map[string]bool{"1513": true}
-	case RoutingBachLicht:
-		return map[string]bool{"1513": true, "1551": true}
-	default:
-		return map[string]bool{"1513": true, "1551": true, "1550": true}
-	}
-}
-
-// ProvidersForRouting returns the display names for a routing rule.
-func ProvidersForRouting(rule RoutingRule) []string {
-	switch rule {
-	case RoutingNotAccepted:
-		return nil
-	case RoutingBachOnly:
-		return []string{"Dr. Bach"}
-	case RoutingBachLicht:
-		return []string{"Dr. Bach", "Dr. Licht"}
-	default:
-		return []string{"Dr. Bach", "Dr. Licht", "Dr. Noel"}
-	}
-}
-
 // InsuranceAliases maps common shorthand names to canonical InsuranceNameMap keys.
 // Catches what patients naturally say and what the LLM might truncate to.
 // Only alias when ALL plans under that shorthand share the same routing.

@@ -359,7 +359,7 @@ All fields are required. `columnId`, `profileId`, `startDatetime`, and `duration
 - Maps `appointmentTypeId` → color (1006→RED, 1004→GREEN, 1007→ORANGE, 1005→PINK, 1008→BLUE)
 - Sets `facilityId: 1568` (Spring Hill) and `episodeId: 1` automatically
 - Wraps type as `[{id: X}]` for AMD's expected format
-- Validates `columnId` against `AllowedColumns`
+- Validates `columnId` against the office's allowed columns
 - AMD 409 conflicts return a clear "slot no longer available" message
 
 ### POST /api/appointment/cancel

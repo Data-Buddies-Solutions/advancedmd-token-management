@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -200,20 +199,3 @@ func printJSON(v interface{}) {
 	fmt.Println(string(data))
 }
 
-// friendlyProviderName maps AMD provider names to friendly display names.
-func friendlyProviderName(amdName string) string {
-	upper := strings.ToUpper(amdName)
-	for _, entry := range []struct {
-		match   string
-		display string
-	}{
-		{"BACH", "Dr. Austin Bach"},
-		{"LICHT", "Dr. J. Licht"},
-		{"NOEL", "Dr. D. Noel"},
-	} {
-		if strings.Contains(upper, entry.match) {
-			return entry.display
-		}
-	}
-	return amdName
-}

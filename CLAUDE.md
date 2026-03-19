@@ -167,7 +167,7 @@ Workweek format: 7 chars for Mon-Sun where `1` = works, `0` = off.
 
 Updated 2026-02-19 from live AMD system (office 139464).
 
-Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` to change):
+Only these columns are exposed (edit `OfficeRegistry` in `domain/office.go` to change):
 
 | Column ID | Name | Profile ID | Facility ID | Hours | Interval | Max/Slot | Workweek |
 |-----------|------|------------|-------------|-------|----------|----------|----------|

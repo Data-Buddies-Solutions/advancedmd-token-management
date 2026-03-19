@@ -12,13 +12,6 @@ import (
 	"advancedmd-token-management/internal/domain"
 )
 
-// providerDisplayNames maps profile IDs to friendly display names.
-var providerDisplayNames = map[string]string{
-	"620":  "Dr. Austin Bach",
-	"2064": "Dr. J. Licht",
-	"2076": "Dr. D. Noel",
-}
-
 func availabilityCmd() *cobra.Command {
 	var (
 		date, provider, office, routing string
@@ -30,7 +23,7 @@ func availabilityCmd() *cobra.Command {
 		Short: "Check available appointment slots",
 		Example: `  amd availability --date 2026-03-20
   amd availability --date 2026-03-20 --provider Bach
-  amd availability --date 2026-03-20 --routing bach_only --preauth`,
+  amd availability --date 2026-03-20 --office spring_hill --routing bach_only --preauth`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if date == "" {
 				return fmt.Errorf("--date is required (YYYY-MM-DD format)")
@@ -43,6 +36,16 @@ func availabilityCmd() *cobra.Command {
 
 			if err := mustBootstrap(); err != nil {
 				return err
+			}
+
+			// Resolve office config
+			officeConfig := domain.DefaultOffice()
+			if office != "" {
+				oc, ok := domain.LookupOffice(office)
+				if !ok {
+					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
+				}
+				officeConfig = oc
 			}
 
 			// Reject same-day
@@ -60,8 +63,8 @@ func availabilityCmd() *cobra.Command {
 				startDate, date = enforcePreauthMinDate(startDate, time.Now().In(eastern))
 			}
 
-			log.Printf("checking availability: date=%s provider=%q office=%q routing=%q preauth=%v",
-				date, provider, office, routing, preauthRequired)
+			log.Printf("checking availability: date=%s provider=%q office=%s routing=%q preauth=%v",
+				date, provider, officeConfig.ID, routing, preauthRequired)
 
 			tokenData := getToken()
 
@@ -81,23 +84,13 @@ func availabilityCmd() *cobra.Command {
 				facilityMap[f.ID] = f
 			}
 
-			// Office filter
-			var facilityFilter string
-			if office != "" {
-				facilityID, ok := domain.LookupFacilityID(office)
-				if !ok {
-					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
-				}
-				facilityFilter = facilityID
-			}
-
-			// Filter to allowed columns
+			// Filter to office's allowed columns
 			var allowedColumns []domain.SchedulerColumn
 			for _, col := range setup.Columns {
-				if !domain.IsAllowedColumn(col.ID) {
+				if !officeConfig.IsAllowedColumn(col.ID) {
 					continue
 				}
-				if facilityFilter != "" && col.FacilityID != facilityFilter {
+				if col.FacilityID != officeConfig.FacilityID {
 					continue
 				}
 				if provider != "" {
@@ -117,7 +110,7 @@ func availabilityCmd() *cobra.Command {
 			// Routing filter
 			if routing != "" {
 				rule := domain.ParseRoutingRule(routing)
-				routingColumns := domain.ColumnsForRouting(rule)
+				routingColumns := officeConfig.ColumnsForRouting(rule)
 				if routingColumns != nil {
 					var filtered []domain.SchedulerColumn
 					for _, col := range allowedColumns {
@@ -132,15 +125,8 @@ func availabilityCmd() *cobra.Command {
 			}
 
 			// Location name
-			locationName := "All Locations"
-			if facilityFilter != "" {
-				for _, f := range setup.Facilities {
-					if f.ID == facilityFilter {
-						locationName = f.Name
-						break
-					}
-				}
-			} else if len(allowedColumns) > 0 {
+			locationName := officeConfig.DisplayName
+			if len(allowedColumns) > 0 {
 				if fac, ok := facilityMap[allowedColumns[0].FacilityID]; ok {
 					locationName = fac.Name
 				}
@@ -148,7 +134,7 @@ func availabilityCmd() *cobra.Command {
 
 			if len(allowedColumns) == 0 {
 				if provider != "" {
-					return fmt.Errorf("no provider found matching %q — valid: %s", provider, strings.Join(domain.ValidProviderNames(), ", "))
+					return fmt.Errorf("no provider found matching %q — valid: %s", provider, strings.Join(officeConfig.ValidProviderNames(), ", "))
 				}
 				printJSON(domain.AvailabilityResponse{
 					SearchedDate: date,
@@ -188,7 +174,7 @@ func availabilityCmd() *cobra.Command {
 					profile := profileMap[col.ProfileID]
 					facility := facilityMap[col.FacilityID]
 
-					displayName := providerDisplayNames[col.ProfileID]
+					displayName := officeConfig.ProviderDisplayName(col.ProfileID)
 					if displayName == "" {
 						displayName = profile.Name
 					}
@@ -269,7 +255,7 @@ func availabilityCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&date, "date", "", "Date to check (YYYY-MM-DD, required)")
 	cmd.Flags().StringVar(&provider, "provider", "", "Filter by provider name")
-	cmd.Flags().StringVar(&office, "office", "", "Filter by office name")
+	cmd.Flags().StringVar(&office, "office", "", "Office name (e.g., spring_hill)")
 	cmd.Flags().StringVar(&routing, "routing", "", "Routing rule: bach_only, bach_licht, all_three")
 	cmd.Flags().BoolVar(&preauthRequired, "preauth", false, "Enforce 14-day minimum lead time")
 
