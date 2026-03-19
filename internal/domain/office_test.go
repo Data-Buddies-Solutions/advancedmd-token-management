@@ -184,6 +184,53 @@ func TestLookupOfficeByColumnID(t *testing.T) {
 	}
 }
 
+func TestInitRegistry(t *testing.T) {
+	// Ensure we restore prod after this test
+	defer InitRegistry("prod")
+
+	// Dev environment
+	InitRegistry("dev")
+	office := DefaultOffice()
+	if office.FacilityID != "1032" {
+		t.Errorf("dev FacilityID = %q, want %q", office.FacilityID, "1032")
+	}
+	if !office.IsAllowedColumn("1716") {
+		t.Error("dev registry should have column 1716 (Bach)")
+	}
+	if office.IsAllowedColumn("1513") {
+		t.Error("dev registry should NOT have prod column 1513")
+	}
+
+	// Phone lookup still works after rebuild
+	ph, ok := LookupOffice("+17275919997")
+	if !ok {
+		t.Error("phone lookup should work after InitRegistry(dev)")
+	}
+	if ph.FacilityID != "1032" {
+		t.Errorf("phone lookup FacilityID = %q, want %q", ph.FacilityID, "1032")
+	}
+
+	// Prod environment
+	InitRegistry("prod")
+	office = DefaultOffice()
+	if office.FacilityID != "1568" {
+		t.Errorf("prod FacilityID = %q, want %q", office.FacilityID, "1568")
+	}
+	if !office.IsAllowedColumn("1513") {
+		t.Error("prod registry should have column 1513 (Bach)")
+	}
+	if office.IsAllowedColumn("1716") {
+		t.Error("prod registry should NOT have dev column 1716")
+	}
+
+	// Default (empty string) = prod
+	InitRegistry("")
+	office = DefaultOffice()
+	if office.FacilityID != "1568" {
+		t.Errorf("default FacilityID = %q, want %q", office.FacilityID, "1568")
+	}
+}
+
 func TestValidOfficeNames(t *testing.T) {
 	names := ValidOfficeNames()
 	if len(names) == 0 {

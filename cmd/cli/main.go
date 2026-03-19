@@ -86,6 +86,9 @@ func mustBootstrap() error {
 }
 
 func bootstrap() error {
+	// Initialize office registry based on AMD_ENV
+	domain.InitRegistry(os.Getenv("AMD_ENV"))
+
 	username := os.Getenv("ADVANCEDMD_USERNAME")
 	password := os.Getenv("ADVANCEDMD_PASSWORD")
 	officeKey := os.Getenv("ADVANCEDMD_OFFICE_KEY")

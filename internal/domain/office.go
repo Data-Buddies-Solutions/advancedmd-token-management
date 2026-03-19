@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"log"
+	"strings"
+)
 
 // OfficeConfig defines the configuration for a single office location.
 type OfficeConfig struct {
@@ -135,8 +138,8 @@ var DefaultAppointmentTypeNames = map[int]string{
 	1008: "Post Op",
 }
 
-// OfficeRegistry maps canonical office IDs to their configurations.
-var OfficeRegistry = map[string]*OfficeConfig{
+// prodOffices contains office configs with production AMD IDs.
+var prodOffices = map[string]*OfficeConfig{
 	"spring_hill": {
 		ID:               "spring_hill",
 		DisplayName:      "Spring Hill",
@@ -156,6 +159,65 @@ var OfficeRegistry = map[string]*OfficeConfig{
 	},
 }
 
+// devOffices contains office configs with dev AMD IDs.
+var devOffices = map[string]*OfficeConfig{
+	"spring_hill": {
+		ID:               "spring_hill",
+		DisplayName:      "Spring Hill",
+		FacilityID:       "1032",
+		DefaultProfileID: "1135",
+		Columns: map[string]OfficeColumn{
+			"1716": {ProfileID: "1135", DisplayName: "Dr. Austin Bach", ShortName: "Dr. Bach", MatchKey: "BACH"},
+			"1723": {ProfileID: "1141", DisplayName: "Dr. J. Licht", ShortName: "Dr. Licht", MatchKey: "LICHT"},
+			"1726": {ProfileID: "1137", DisplayName: "Dr. D. Noel", ShortName: "Dr. Noel", MatchKey: "NOEL"},
+		},
+		RoutingTiers: map[RoutingRule][]string{
+			RoutingBachOnly:  {"1716"},
+			RoutingBachLicht: {"1716", "1723"},
+			RoutingAll:       {"1716", "1723", "1726"},
+		},
+		PediatricRouting: RoutingBachOnly,
+	},
+}
+
+// OfficeRegistry maps canonical office IDs to their configurations.
+// Defaults to prod; call InitRegistry to switch environments.
+var OfficeRegistry = prodOffices
+
+// InitRegistry sets the active office registry based on the AMD_ENV value.
+// "dev" loads dev AMD IDs; anything else (including empty) loads prod.
+func InitRegistry(env string) {
+	switch env {
+	case "dev":
+		OfficeRegistry = devOffices
+		log.Printf("Office registry: dev")
+	default:
+		OfficeRegistry = prodOffices
+		log.Printf("Office registry: prod")
+	}
+	rebuildPhoneMap()
+}
+
+// rebuildPhoneMap reconstructs PhoneToOffice from the active OfficeRegistry.
+func rebuildPhoneMap() {
+	PhoneToOffice = make(map[string]string)
+	for id := range OfficeRegistry {
+		for phone, target := range phoneMap {
+			if target == id {
+				PhoneToOffice[phone] = target
+			}
+		}
+	}
+}
+
+// phoneMap is the master phone→office mapping used to rebuild PhoneToOffice.
+var phoneMap = map[string]string{
+	"17275919997": "spring_hill", // prod: +1 (727) 591-9997
+	"7275919997":  "spring_hill",
+	"14843989071": "spring_hill", // dev: +1 (484) 398-9071
+	"4843989071":  "spring_hill",
+}
+
 // OfficeAliases maps normalized aliases to canonical office IDs.
 var OfficeAliases = map[string]string{
 	"spring_hill":  "spring_hill",
@@ -166,10 +228,12 @@ var OfficeAliases = map[string]string{
 }
 
 // PhoneToOffice maps phone numbers (digits only) to canonical office IDs.
-// Supports both 10-digit and 11-digit (with country code) formats.
+// Rebuilt by InitRegistry from phoneMap.
 var PhoneToOffice = map[string]string{
-	"17275919997": "spring_hill", // +1 (727) 591-9997
+	"17275919997": "spring_hill",
 	"7275919997":  "spring_hill",
+	"14843989071": "spring_hill",
+	"4843989071":  "spring_hill",
 }
 
 // stripToDigits removes all non-digit characters from a string.

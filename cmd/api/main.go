@@ -12,6 +12,7 @@ import (
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/config"
+	"advancedmd-token-management/internal/domain"
 	apphttp "advancedmd-token-management/internal/http"
 )
 
@@ -21,6 +22,9 @@ func main() {
 	// Configure logger to write to stdout (Railway interprets stderr as error-level)
 	log.SetOutput(os.Stdout)
 	log.Printf("Starting gateway v%s", version)
+
+	// Initialize office registry based on AMD_ENV
+	domain.InitRegistry(os.Getenv("AMD_ENV"))
 
 	// Load configuration
 	cfg, err := config.Load()
