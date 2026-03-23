@@ -48,10 +48,10 @@ func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 			expectedMsg: "Invalid JSON body",
 		},
 		{
-			name:        "missing lastName",
+			name:        "missing lastName and phone",
 			method:      "POST",
 			body:        `{"dob":"01/15/1980"}`,
-			expectedMsg: "lastName is required",
+			expectedMsg: "lastName or phone is required",
 		},
 		{
 			name:        "missing dob",

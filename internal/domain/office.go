@@ -264,8 +264,8 @@ var PhoneToOffice = map[string]string{
 	"4843989071":  "spring_hill",
 }
 
-// stripToDigits removes all non-digit characters from a string.
-func stripToDigits(s string) string {
+// StripToDigits removes all non-digit characters from a string.
+func StripToDigits(s string) string {
 	var b strings.Builder
 	for _, c := range s {
 		if c >= '0' && c <= '9' {
@@ -298,7 +298,7 @@ func LookupOffice(name string) (*OfficeConfig, bool) {
 	}
 
 	// Phone number lookup — strip to digits and check
-	digits := stripToDigits(name)
+	digits := StripToDigits(name)
 	if len(digits) >= 10 {
 		if canonical, ok := PhoneToOffice[digits]; ok {
 			if office, ok := OfficeRegistry[canonical]; ok {

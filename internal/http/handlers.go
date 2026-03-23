@@ -1,12 +1,14 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"advancedmd-token-management/internal/auth"
@@ -46,6 +48,7 @@ type VerifyPatientRequest struct {
 	LastName  string `json:"lastName"`
 	DOB       string `json:"dob"`
 	FirstName string `json:"firstName,omitempty"`
+	Phone     string `json:"phone,omitempty"`
 	Office    string `json:"office,omitempty"`
 }
 
@@ -392,11 +395,11 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
-	if req.LastName == "" {
+	// Validate required fields — need either lastName or phone, plus dob
+	if req.LastName == "" && req.Phone == "" {
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
-			Message: "lastName is required",
+			Message: "lastName or phone is required",
 		})
 		return
 	}
@@ -410,8 +413,6 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 
 	// Normalize inputs
 	normalizedDOB := domain.NormalizeDOB(req.DOB)
-	normalizedLastName := domain.StripDiacritics(req.LastName)
-	normalizedFirstName := domain.StripDiacritics(req.FirstName)
 
 	// Get token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -423,17 +424,32 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call AdvancedMD lookuppatient API
-	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName, normalizedFirstName)
-	if err != nil {
-		json.NewEncoder(w).Encode(VerifyPatientResponse{
-			Status:  "error",
-			Message: "Failed to lookup patient: " + err.Error(),
-		})
-		return
+	// Call AdvancedMD lookuppatient API — by phone or by name
+	var patients []domain.Patient
+	if req.Phone != "" {
+		digits := domain.StripToDigits(req.Phone)
+		patients, err = h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
+		if err != nil {
+			json.NewEncoder(w).Encode(VerifyPatientResponse{
+				Status:  "error",
+				Message: "Failed to lookup patient by phone: " + err.Error(),
+			})
+			return
+		}
+		log.Printf("verify-patient: lookup phone=%q returned %d patients", digits, len(patients))
+	} else {
+		normalizedLastName := domain.StripDiacritics(req.LastName)
+		normalizedFirstName := domain.StripDiacritics(req.FirstName)
+		patients, err = h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName, normalizedFirstName)
+		if err != nil {
+			json.NewEncoder(w).Encode(VerifyPatientResponse{
+				Status:  "error",
+				Message: "Failed to lookup patient: " + err.Error(),
+			})
+			return
+		}
+		log.Printf("verify-patient: lookup lastName=%q returned %d patients", normalizedLastName, len(patients))
 	}
-
-	log.Printf("verify-patient: lookup lastName=%q returned %d patients", normalizedLastName, len(patients))
 	for i, p := range patients {
 		log.Printf("verify-patient: result[%d] id=%s name=%q dob=%q", i, p.ID, p.FullName, p.DOB)
 	}
@@ -605,8 +621,7 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 
 	log.Printf("patient-appointments: patientId=%s office=%s", req.PatientID, office.ID)
 
-	patientIDInt, err := strconv.Atoi(req.PatientID)
-	if err != nil {
+	if _, err := strconv.Atoi(req.PatientID); err != nil {
 		json.NewEncoder(w).Encode(PatientApptResponse{
 			Status:  "error",
 			Message: "patientId must be numeric",
@@ -614,7 +629,6 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
 		json.NewEncoder(w).Encode(PatientApptResponse{
@@ -624,10 +638,188 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Build column ID string for office's allowed columns
+	details, err := h.fetchUpcomingAppointments(r.Context(), tokenData, req.PatientID, office)
+	if err != nil {
+		log.Printf("patient-appointments: error: %v", err)
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: "Failed to retrieve appointments: " + err.Error(),
+		})
+		return
+	}
+
+	log.Printf("patient-appointments: found %d upcoming appointments for patient %s", len(details), req.PatientID)
+
+	if len(details) == 0 {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:    "no_appointments",
+			PatientID: req.PatientID,
+			Message:   "No upcoming appointments found for this patient",
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(PatientApptResponse{
+		Status:       "found",
+		PatientID:    req.PatientID,
+		Appointments: details,
+		Message:      fmt.Sprintf("Found %d upcoming appointment(s)", len(details)),
+	})
+}
+
+// PatientLookupRequest is the JSON body for the combined patient lookup endpoint.
+type PatientLookupRequest struct {
+	Phone  string `json:"phone"`
+	DOB    string `json:"dob,omitempty"`
+	Office string `json:"office,omitempty"`
+}
+
+// PatientLookupResponse is the combined response with identity + appointments.
+type PatientLookupResponse struct {
+	Status             string            `json:"status"`
+	PatientID          string            `json:"patientId,omitempty"`
+	Name               string            `json:"name,omitempty"`
+	DOB                string            `json:"dob,omitempty"`
+	Phone              string            `json:"phone,omitempty"`
+	InsuranceCarrier   string            `json:"insuranceCarrier,omitempty"`
+	InsuranceCarrierID string            `json:"insuranceCarrierId,omitempty"`
+	Routing            string            `json:"routing,omitempty"`
+	AllowedProviders   []string          `json:"allowedProviders,omitempty"`
+	RoutingAmbiguous   bool              `json:"routingAmbiguous,omitempty"`
+	Appointments       []PatientApptDetail `json:"appointments,omitempty"`
+	Matches            []PatientMatch    `json:"matches,omitempty"`
+	Message            string            `json:"message,omitempty"`
+}
+
+// HandlePatientLookup verifies a patient and returns their upcoming appointments in one call.
+func (h *Handlers) HandlePatientLookup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req PatientLookupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Invalid JSON body"})
+		return
+	}
+
+	office, err := resolveOffice(req.Office)
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: err.Error()})
+		return
+	}
+
+	if req.Phone == "" {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "phone is required"})
+		return
+	}
+
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Failed to get authentication token: " + err.Error()})
+		return
+	}
+
+	// Lookup patient by phone
+	digits := domain.StripToDigits(req.Phone)
+	patients, err := h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Failed to lookup patient by phone: " + err.Error()})
+		return
+	}
+	log.Printf("patient-lookup: phone=%q returned %d patients", digits, len(patients))
+
+	// Filter by DOB if provided
+	matching := patients
+	if req.DOB != "" {
+		normalizedDOB := domain.NormalizeDOB(req.DOB)
+		matching = nil
+		for _, p := range patients {
+			if domain.NormalizeDOB(p.DOB) == normalizedDOB {
+				matching = append(matching, p)
+			}
+		}
+	}
+
+	// Resolve single patient
+	var patient domain.Patient
+	switch len(matching) {
+	case 0:
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "not_found", Message: "No patient found for that phone number"})
+		return
+	case 1:
+		patient = matching[0]
+	default:
+		// Multiple matches — return list for the agent to disambiguate
+		var matches []PatientMatch
+		for _, p := range matching {
+			matches = append(matches, PatientMatch{FirstName: p.FirstName})
+		}
+		json.NewEncoder(w).Encode(PatientLookupResponse{
+			Status:  "multiple_matches",
+			Message: fmt.Sprintf("Found %d patients for this phone number. Ask the caller to confirm their name.", len(matching)),
+			Matches: matches,
+		})
+		return
+	}
+
+	// Build response with patient identity + insurance routing
+	resp := PatientLookupResponse{
+		Status:    "verified",
+		PatientID: patient.ID,
+		Name:      patient.FullName,
+		DOB:       patient.DOB,
+		Phone:     patient.Phone,
+	}
+
+	carrierName, carrierID, err := h.amdClient.GetDemographic(r.Context(), tokenData, patient.ID)
+	if err != nil {
+		log.Printf("WARNING: patient-lookup: failed to get demographics for %s: %v", patient.ID, err)
+	}
+
+	if carrierName != "" {
+		resp.InsuranceCarrier = carrierName
+	}
+	if carrierID != "" {
+		resp.InsuranceCarrierID = carrierID
+		routing, ambiguous := domain.RoutingForCarrierID(carrierID)
+		resp.Routing = string(routing)
+		resp.AllowedProviders = office.ProvidersForRouting(routing)
+		resp.RoutingAmbiguous = ambiguous
+	}
+
+	// Pediatric override
+	if domain.IsMinor(patient.DOB) && resp.Routing != "" && resp.Routing != string(domain.RoutingNotAccepted) {
+		resp.Routing = string(office.PediatricRouting)
+		resp.AllowedProviders = office.ProvidersForRouting(office.PediatricRouting)
+		resp.RoutingAmbiguous = false
+	}
+
+	// Fetch upcoming appointments
+	appts, err := h.fetchUpcomingAppointments(r.Context(), tokenData, patient.ID, office)
+	if err != nil {
+		log.Printf("WARNING: patient-lookup: failed to get appointments for %s: %v", patient.ID, err)
+		// Still return patient info — appointments are best-effort
+	} else {
+		resp.Appointments = appts
+	}
+
+	if len(resp.Appointments) > 0 {
+		resp.Message = fmt.Sprintf("Patient verified with %d upcoming appointment(s)", len(resp.Appointments))
+	} else {
+		resp.Message = "Patient verified, no upcoming appointments"
+	}
+
+	json.NewEncoder(w).Encode(resp)
+}
+
+// fetchUpcomingAppointments retrieves upcoming appointments for a patient ID.
+func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *domain.TokenData, patientID string, office *domain.OfficeConfig) ([]PatientApptDetail, error) {
+	patientIDInt, err := strconv.Atoi(patientID)
+	if err != nil {
+		return nil, fmt.Errorf("patientId must be numeric: %w", err)
+	}
+
 	columnIDStr := strings.Join(office.AllowedColumnIDs(), "-")
 
-	// Fetch current month + next month (2 REST calls concurrently)
 	now := time.Now().In(eastern)
 	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
 	nextMonth := thisMonth.AddDate(0, 1, 0)
@@ -640,34 +832,22 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 	ch2 := make(chan monthResult, 1)
 
 	go func() {
-		appts, err := h.amdRestClient.GetAppointmentsByMonth(r.Context(), tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
+		appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
 		ch1 <- monthResult{appts, err}
 	}()
 	go func() {
-		appts, err := h.amdRestClient.GetAppointmentsByMonth(r.Context(), tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
+		appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
 		ch2 <- monthResult{appts, err}
 	}()
 
 	r1, r2 := <-ch1, <-ch2
-
 	if r1.err != nil {
-		log.Printf("patient-appointments: AMD error (month 1): %v", r1.err)
-		json.NewEncoder(w).Encode(PatientApptResponse{
-			Status:  "error",
-			Message: "Failed to retrieve appointments: " + r1.err.Error(),
-		})
-		return
+		return nil, r1.err
 	}
 	if r2.err != nil {
-		log.Printf("patient-appointments: AMD error (month 2): %v", r2.err)
-		json.NewEncoder(w).Encode(PatientApptResponse{
-			Status:  "error",
-			Message: "Failed to retrieve appointments: " + r2.err.Error(),
-		})
-		return
+		return nil, r2.err
 	}
 
-	// Combine and filter by patient ID
 	allAppts := append(r1.appts, r2.appts...)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
 
@@ -677,20 +857,15 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 			continue
 		}
 
-		startTime, err := time.Parse("2006-01-02T15:04:05", a.StartDateTime)
+		startTime, err := clients.ParseDateTime(a.StartDateTime)
 		if err != nil {
-			startTime, err = time.Parse("2006-01-02T15:04", a.StartDateTime)
-			if err != nil {
-				continue
-			}
+			continue
 		}
 
-		// Skip past appointments
 		if startTime.Before(today) {
 			continue
 		}
 
-		// Resolve appointment type name
 		typeName := ""
 		if len(a.AppointmentTypes) > 0 {
 			if name, ok := office.AppointmentTypeName(a.AppointmentTypes[0]); ok {
@@ -709,23 +884,7 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		})
 	}
 
-	log.Printf("patient-appointments: found %d upcoming appointments for patient %s (scanned %d total)", len(details), req.PatientID, len(allAppts))
-
-	if len(details) == 0 {
-		json.NewEncoder(w).Encode(PatientApptResponse{
-			Status:    "no_appointments",
-			PatientID: req.PatientID,
-			Message:   "No upcoming appointments found for this patient",
-		})
-		return
-	}
-
-	json.NewEncoder(w).Encode(PatientApptResponse{
-		Status:       "found",
-		PatientID:    req.PatientID,
-		Appointments: details,
-		Message:      fmt.Sprintf("Found %d upcoming appointment(s)", len(details)),
-	})
+	return details, nil
 }
 
 // friendlyFacilityName cleans up AMD facility names to title case.
@@ -996,10 +1155,11 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Reject same-day appointment searches
-	todayEastern := time.Now().In(eastern).Format("2006-01-02")
-	if startDate.Format("2006-01-02") == todayEastern {
-		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Same-day appointments are not available. Please search for tomorrow or later."})
+	// Reject same-day or past date searches
+	todayEastern := time.Now().In(eastern)
+	todayStr := todayEastern.Format("2006-01-02")
+	if startDate.Format("2006-01-02") <= todayStr {
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Same-day and past-date appointments are not available. Please search for tomorrow or later."})
 		return
 	}
 
@@ -1124,30 +1284,47 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	searchDate := startDate
 	var providers []domain.ProviderAvailability
 
-	for attempt := 0; attempt <= 14; attempt++ {
+	maxDate := startDate.AddDate(0, 0, 14)
+	for !searchDate.After(maxDate) {
 		dateStr := searchDate.Format("2006-01-02")
 
-		// Fetch appointments and block holds per column
-		columnIDs := make([]string, len(allowedColumns))
-		for i, col := range allowedColumns {
-			columnIDs[i] = col.ID
+		// Only fetch columns that work this weekday — skip non-working providers
+		var workingColumnIDs []string
+		for _, col := range allowedColumns {
+			if col.WorksOnDay(searchDate.Weekday()) {
+				workingColumnIDs = append(workingColumnIDs, col.ID)
+			}
+		}
+		if len(workingColumnIDs) == 0 {
+			searchDate = searchDate.AddDate(0, 0, 1)
+			log.Printf("availability: no providers work on %s, skipping", dateStr)
+			continue
 		}
 
-		appointmentsByColumn, err := h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, columnIDs, dateStr)
-		if err != nil {
-			log.Printf("availability: failed to get appointments: %v", err)
-			appointmentsByColumn = make(map[string][]domain.Appointment)
-		}
-
-		blockHoldsByColumn, err := h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, columnIDs, dateStr)
-		if err != nil {
-			log.Printf("availability: failed to get block holds: %v", err)
-			blockHoldsByColumn = make(map[string][]domain.BlockHold)
-		}
+		// Fetch appointments and block holds concurrently (independent data)
+		var appointmentsByColumn map[string][]domain.Appointment
+		var blockHoldsByColumn map[string][]domain.BlockHold
+		var fetchWg sync.WaitGroup
+		fetchWg.Add(2)
+		go func() {
+			defer fetchWg.Done()
+			appointmentsByColumn = h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, workingColumnIDs, dateStr)
+		}()
+		go func() {
+			defer fetchWg.Done()
+			blockHoldsByColumn = h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, workingColumnIDs, dateStr)
+		}()
+		fetchWg.Wait()
 
 		// Calculate availability for each provider
 		providers = nil
 		for _, col := range allowedColumns {
+			// Skip columns where appointment data couldn't be fetched —
+			// safer to omit than to show all slots as available
+			if _, ok := appointmentsByColumn[col.ID]; !ok {
+				log.Printf("availability: skipping column %s — appointment data unavailable", col.ID)
+				continue
+			}
 			profile := profileMap[col.ProfileID]
 			facility := facilityMap[col.FacilityID]
 
@@ -1194,7 +1371,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
-		if hasAvailability || attempt == 14 {
+		if hasAvailability {
 			break
 		}
 

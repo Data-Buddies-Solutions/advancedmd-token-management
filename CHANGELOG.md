@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased] - 2026-03-23
+
+### Availability Audit — Bug Fixes, Performance, and Patient Lookup
+
+Comprehensive audit of the availability endpoint uncovered multiple bugs causing booked slots to appear as available in production. Also added parallel fetching, working-day skip optimization, phone-based patient lookup, and a new combined patient-lookup endpoint.
+
+#### Fixed
+
+- **Ghost entries dropping real appointments** — `GetAppointments`/`GetBlockHolds` used pre-allocated slices with `continue` on parse errors, leaving zero-value entries that silently replaced real appointments. Now uses `append` so skipped entries don't leave ghosts.
+- **All-or-nothing error propagation** — If any single column's appointment fetch failed, ALL columns' data was discarded and the handler proceeded with empty data (showing every slot as open). Now per-column errors are isolated — failed columns are logged and omitted; successful columns are preserved.
+- **14-day search window shrinking on non-working days** — The `attempt` counter incremented even when days were skipped (weekends, non-working days), reducing the effective search window. Now uses calendar date comparison (`maxDate = startDate + 14 days`) so skipped days don't consume the budget.
+- **Past dates not rejected** — Same-day was blocked but past dates (e.g., 3 days ago) passed through and returned stale "available" slots. Now rejects any date <= today.
+- **HandleGetPatientAppointments inline datetime parsing** — Used only 2 formats, inconsistent with the 5-format `ParseDateTime`. Now calls the shared helper.
+
+#### Added
+
+- **`ParseDateTime` helper** (`clients/advancedmd_rest.go`) — Robust datetime parser trying 5 formats (ISO 8601, RFC3339, RFC3339Nano, fractional seconds). Strips timezone for consistent wall-clock comparisons. Exported and used by all datetime parsing paths.
+- **Single-object JSON fallback** — `GetAppointments`/`GetBlockHolds` now handle AMD's single-vs-array response quirk (tries `[{...}]` then `{...}`), matching the XMLRPC client's existing pattern.
+- **`LookupPatientByPhone`** (`clients/advancedmd_xmlrpc.go`) — New XMLRPC method using AMD's `@phone` parameter. Extracted `parseLookupResponse` as shared helper for both name and phone lookups.
+- **`POST /api/patient-lookup`** — Combined endpoint: phone → patient identity + insurance routing + upcoming appointments in one call. Designed for precall/early-call agent use.
+- **Phone support on `POST /api/verify-patient`** — Accepts optional `phone` field as alternative to `lastName`.
+- **CLI `--phone` flag** on `amd verify` command.
+- **`StripToDigits` exported** (`domain/office.go`) — Previously unexported, now available to CLI and handlers.
+
+#### Improved
+
+- **Parallel appointment + block hold fetching** — Independent data fetched concurrently per day searched (~2x faster per day).
+- **Working-day skip** — Before making API calls, checks if any allowed column works that weekday. Skips non-working days entirely (zero API calls). For Dr. Licht (Wed-Thu only), a typical search saves 5 out of 8 days of API calls.
+- **Dead error return removed** — `GetAppointmentsForColumns`/`GetBlockHoldsForColumns` now return just the map (error was always nil after per-column isolation).
+- **`HandleGetPatientAppointments` deduplicated** — Was 100+ lines of copy-paste from `fetchUpcomingAppointments`. Now calls the shared helper.
+
+#### Changed
+
+- **`CLAUDE.md`** — Dr. Bach `maxApptsPerSlot` corrected from `0 (unlimited)` to `1` (confirmed via AMD 4186 error in production call).
+
+---
+
 ## [Unreleased] - 2026-03-13
 
 ### Reschedule Flow + Cancel Fix

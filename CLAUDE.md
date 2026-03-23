@@ -171,7 +171,7 @@ Only these columns are exposed (edit `OfficeRegistry` in `domain/office.go` to c
 
 | Column ID | Name | Profile ID | Facility ID | Hours | Interval | Max/Slot | Workweek |
 |-----------|------|------------|-------------|-------|----------|----------|----------|
-| 1513 | DR. BACH - BP | 620 | 1568 | 8:00-17:00 | 15 min | 0 (unlimited) | Mon-Fri |
+| 1513 | DR. BACH - BP | 620 | 1568 | 8:00-17:00 | 15 min | 1 | Mon-Fri |
 | 1551 | DR. LICHT | 2064 | 1568 | 9:00-12:30 | 15 min | 2 | Wed-Thu |
 | 1550 | DR. NOEL | 2076 | 1568 | 8:30-16:30 | 30 min | 2 | Mon-Fri |
 

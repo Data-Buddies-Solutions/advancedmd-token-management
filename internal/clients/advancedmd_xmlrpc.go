@@ -122,11 +122,40 @@ func (c *AdvancedMDClient) LookupPatient(ctx context.Context, tokenData *domain.
 		},
 	}
 
-	body, err := c.doXMLRPCRequest(ctx, tokenData, reqBody)
+	return c.doPatientLookup(ctx, tokenData, reqBody)
+}
+
+// LookupPatientByPhone searches for patients by phone number.
+// Phone should be digits only (e.g., "7863344429").
+func (c *AdvancedMDClient) LookupPatientByPhone(ctx context.Context, tokenData *domain.TokenData, phone string) ([]domain.Patient, error) {
+	payload := map[string]interface{}{
+		"ppmdmsg": map[string]interface{}{
+			"@action": "lookuppatient",
+			"@class":  "api",
+			"@phone":  phone,
+		},
+	}
+
+	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
 	if err != nil {
 		return nil, err
 	}
 
+	return parseLookupResponse(body)
+}
+
+// doPatientLookup executes a lookuppatient request and parses the response.
+func (c *AdvancedMDClient) doPatientLookup(ctx context.Context, tokenData *domain.TokenData, payload interface{}) ([]domain.Patient, error) {
+	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseLookupResponse(body)
+}
+
+// parseLookupResponse handles AMD's single-vs-array patient response format.
+func parseLookupResponse(body []byte) ([]domain.Patient, error) {
 	// Try array response first
 	var arrayResp AMDLookupResponse
 	if err := json.Unmarshal(body, &arrayResp); err == nil {

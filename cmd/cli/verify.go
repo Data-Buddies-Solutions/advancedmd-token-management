@@ -12,17 +12,21 @@ import (
 )
 
 func verifyCmd() *cobra.Command {
-	var lastName, firstName, dob, office string
+	var lastName, firstName, dob, phone, office string
 
 	cmd := &cobra.Command{
 		Use:   "verify",
-		Short: "Verify a patient by name and date of birth",
+		Short: "Verify a patient by name or phone number and date of birth",
 		Example: `  amd verify --last Doe --dob 1990-01-15
   amd verify --last Doe --first John --dob 01/15/1990
+  amd verify --phone 7863344429 --dob 10/31/1996
   amd verify --last Doe --dob 1990-01-15 --office spring_hill`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if lastName == "" || dob == "" {
-				return fmt.Errorf("--last and --dob are required")
+			if lastName == "" && phone == "" {
+				return fmt.Errorf("--last or --phone is required")
+			}
+			if dob == "" {
+				return fmt.Errorf("--dob is required")
 			}
 
 			if err := mustBootstrap(); err != nil {
@@ -40,17 +44,27 @@ func verifyCmd() *cobra.Command {
 			}
 
 			normalizedDOB := domain.NormalizeDOB(dob)
-			normalizedLastName := domain.StripDiacritics(lastName)
-			normalizedFirstName := domain.StripDiacritics(firstName)
 
 			tokenData := getToken()
 
-			patients, err := app.amdClient.LookupPatient(cmd.Context(), tokenData, normalizedLastName, normalizedFirstName)
-			if err != nil {
-				return fmt.Errorf("failed to lookup patient: %w", err)
+			var patients []domain.Patient
+			var err error
+			if phone != "" {
+				digits := domain.StripToDigits(phone)
+				patients, err = app.amdClient.LookupPatientByPhone(cmd.Context(), tokenData, digits)
+				if err != nil {
+					return fmt.Errorf("failed to lookup patient by phone: %w", err)
+				}
+				log.Printf("lookup returned %d patients for phone %q", len(patients), digits)
+			} else {
+				normalizedLastName := domain.StripDiacritics(lastName)
+				normalizedFirstName := domain.StripDiacritics(firstName)
+				patients, err = app.amdClient.LookupPatient(cmd.Context(), tokenData, normalizedLastName, normalizedFirstName)
+				if err != nil {
+					return fmt.Errorf("failed to lookup patient: %w", err)
+				}
+				log.Printf("lookup returned %d patients for %q", len(patients), normalizedLastName)
 			}
-
-			log.Printf("lookup returned %d patients for %q", len(patients), normalizedLastName)
 
 			// Filter by DOB
 			var matching []domain.Patient
@@ -102,9 +116,10 @@ func verifyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&lastName, "last", "", "Patient last name (required)")
+	cmd.Flags().StringVar(&lastName, "last", "", "Patient last name (required if no --phone)")
 	cmd.Flags().StringVar(&firstName, "first", "", "Patient first name (for disambiguation)")
 	cmd.Flags().StringVar(&dob, "dob", "", "Date of birth (e.g., 01/15/1990 or 1990-01-15)")
+	cmd.Flags().StringVar(&phone, "phone", "", "Phone number (alternative to --last)")
 	cmd.Flags().StringVar(&office, "office", "", "Office name (e.g., spring_hill)")
 
 	return cmd

@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -149,28 +150,45 @@ func availabilityCmd() *cobra.Command {
 			searchDate := startDate
 			var providers []domain.ProviderAvailability
 
-			for attempt := 0; attempt <= 14; attempt++ {
+			maxDate := startDate.AddDate(0, 0, 14)
+			for !searchDate.After(maxDate) {
 				dateStr := searchDate.Format("2006-01-02")
 
-				columnIDs := make([]string, len(allowedColumns))
-				for i, col := range allowedColumns {
-					columnIDs[i] = col.ID
+				// Only fetch columns that work this weekday
+				var workingColumnIDs []string
+				for _, col := range allowedColumns {
+					if col.WorksOnDay(searchDate.Weekday()) {
+						workingColumnIDs = append(workingColumnIDs, col.ID)
+					}
+				}
+				if len(workingColumnIDs) == 0 {
+					searchDate = searchDate.AddDate(0, 0, 1)
+					log.Printf("no providers work on %s, skipping", dateStr)
+					continue
 				}
 
-				appointmentsByColumn, err := app.amdRestClient.GetAppointmentsForColumns(cmd.Context(), tokenData, columnIDs, dateStr)
-				if err != nil {
-					log.Printf("failed to get appointments: %v", err)
-					appointmentsByColumn = make(map[string][]domain.Appointment)
-				}
-
-				blockHoldsByColumn, err := app.amdRestClient.GetBlockHoldsForColumns(cmd.Context(), tokenData, columnIDs, dateStr)
-				if err != nil {
-					log.Printf("failed to get block holds: %v", err)
-					blockHoldsByColumn = make(map[string][]domain.BlockHold)
-				}
+				// Fetch appointments and block holds concurrently
+				var appointmentsByColumn map[string][]domain.Appointment
+				var blockHoldsByColumn map[string][]domain.BlockHold
+				var fetchWg sync.WaitGroup
+				fetchWg.Add(2)
+				go func() {
+					defer fetchWg.Done()
+					appointmentsByColumn = app.amdRestClient.GetAppointmentsForColumns(cmd.Context(), tokenData, workingColumnIDs, dateStr)
+				}()
+				go func() {
+					defer fetchWg.Done()
+					blockHoldsByColumn = app.amdRestClient.GetBlockHoldsForColumns(cmd.Context(), tokenData, workingColumnIDs, dateStr)
+				}()
+				fetchWg.Wait()
 
 				providers = nil
 				for _, col := range allowedColumns {
+					// Skip columns where appointment data couldn't be fetched
+					if _, ok := appointmentsByColumn[col.ID]; !ok {
+						log.Printf("availability: skipping column %s — appointment data unavailable", col.ID)
+						continue
+					}
 					profile := profileMap[col.ProfileID]
 					facility := facilityMap[col.FacilityID]
 
@@ -216,7 +234,7 @@ func availabilityCmd() *cobra.Command {
 					}
 				}
 
-				if hasAvailability || attempt == 14 {
+				if hasAvailability {
 					break
 				}
 
