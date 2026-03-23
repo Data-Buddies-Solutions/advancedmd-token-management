@@ -50,7 +50,7 @@ func verifyCmd() *cobra.Command {
 			var patients []domain.Patient
 			var err error
 			if phone != "" {
-				digits := domain.StripToDigits(phone)
+				digits := domain.NormalizePhoneDigits(phone)
 				patients, err = app.amdClient.LookupPatientByPhone(cmd.Context(), tokenData, digits)
 				if err != nil {
 					return fmt.Errorf("failed to lookup patient by phone: %w", err)

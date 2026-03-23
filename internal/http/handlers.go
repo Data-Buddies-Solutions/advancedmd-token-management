@@ -427,7 +427,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	// Call AdvancedMD lookuppatient API — by phone or by name
 	var patients []domain.Patient
 	if req.Phone != "" {
-		digits := domain.StripToDigits(req.Phone)
+		digits := domain.NormalizePhoneDigits(req.Phone)
 		patients, err = h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
 		if err != nil {
 			json.NewEncoder(w).Encode(VerifyPatientResponse{
@@ -719,7 +719,7 @@ func (h *Handlers) HandlePatientLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Lookup patient by phone
-	digits := domain.StripToDigits(req.Phone)
+	digits := domain.NormalizePhoneDigits(req.Phone)
 	patients, err := h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
 	if err != nil {
 		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Failed to lookup patient by phone: " + err.Error()})

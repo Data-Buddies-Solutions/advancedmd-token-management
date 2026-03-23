@@ -275,6 +275,17 @@ func StripToDigits(s string) string {
 	return b.String()
 }
 
+// NormalizePhoneDigits strips a phone number to digits and removes the
+// leading US country code ("1") if the result is 11 digits. AMD stores
+// 10-digit numbers and won't match on 11.
+func NormalizePhoneDigits(s string) string {
+	digits := StripToDigits(s)
+	if len(digits) == 11 && digits[0] == '1' {
+		return digits[1:]
+	}
+	return digits
+}
+
 // LookupOffice resolves an office name, alias, or phone number to its config.
 func LookupOffice(name string) (*OfficeConfig, bool) {
 	normalized := NormalizeForLookup(name)
