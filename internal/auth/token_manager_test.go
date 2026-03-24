@@ -2,37 +2,15 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
 )
-
-// mockRedisClient provides a test double for RedisClient
-type mockRedisClient struct {
-	tokenData *domain.TokenData
-	saveErr   error
-	getErr    error
-}
-
-func (m *mockRedisClient) SaveToken(ctx context.Context, data *domain.TokenData) error {
-	if m.saveErr != nil {
-		return m.saveErr
-	}
-	m.tokenData = data
-	return nil
-}
-
-func (m *mockRedisClient) GetToken(ctx context.Context) (*domain.TokenData, error) {
-	if m.getErr != nil {
-		return nil, m.getErr
-	}
-	return m.tokenData, nil
-}
 
 func TestTokenManager_GetToken_Cached(t *testing.T) {
 	// Setup mock authenticator that tracks calls
@@ -91,18 +69,12 @@ func TestTokenManager_GetToken_Cached(t *testing.T) {
 }
 
 func TestTokenManager_GetToken_RefreshOnEmpty(t *testing.T) {
-	// This test verifies that when no token is cached, GetToken triggers a refresh
-	// In a real test, we'd use a mock Redis client
-
 	t.Run("triggers refresh when cache empty", func(t *testing.T) {
-		// Token manager with nil tokenData should trigger refresh
 		tm := &TokenManager{
 			tokenData: nil,
 			stopCh:    make(chan struct{}),
 		}
 
-		// Without authenticator and redis, this would fail
-		// This test documents the expected behavior
 		if tm.tokenData != nil {
 			t.Error("Expected nil tokenData")
 		}
@@ -136,43 +108,29 @@ func TestBuildTokenData(t *testing.T) {
 		})
 	}
 
-	// CreatedAt should be a valid timestamp
 	if data.CreatedAt == "" {
 		t.Error("CreatedAt should not be empty")
 	}
 }
 
-// Integration test with real Redis would go here
-// For CI/CD, use testcontainers or mock
-
-func TestTokenManager_IntegrationWithMockRedis(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
+func TestIsTokenError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"random error", fmt.Errorf("network timeout"), false},
+		{"security error", fmt.Errorf("Security error: The User Context attached to your request is invalid"), true},
+		{"lowercase security", fmt.Errorf("security error: invalid token"), true},
+		{"invalid token", fmt.Errorf("AMD returned invalid token response"), true},
 	}
 
-	// This would use a real Redis instance or testcontainers
-	// For now, we document the test structure
-
-	t.Run("saves and retrieves token from Redis", func(t *testing.T) {
-		// 1. Create Redis client (mock or testcontainers)
-		// 2. Create TokenManager with the client
-		// 3. Call Start() to trigger initial token fetch
-		// 4. Verify token is saved to Redis
-		// 5. Create new TokenManager with same Redis
-		// 6. Verify it loads the cached token
-	})
-}
-
-// Example of how to use a real Redis client in tests
-func newTestRedisClient(t *testing.T) *clients.RedisClient {
-	t.Helper()
-
-	// In CI, use REDIS_URL from environment or skip
-	// redisURL := os.Getenv("REDIS_URL")
-	// if redisURL == "" {
-	//     t.Skip("REDIS_URL not set, skipping Redis integration test")
-	// }
-	// return clients.NewRedisClient(redisURL)
-
-	return nil
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsTokenError(tt.err); got != tt.want {
+				t.Errorf("IsTokenError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

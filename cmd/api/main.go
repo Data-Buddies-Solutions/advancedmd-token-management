@@ -32,14 +32,6 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Initialize Redis client
-	redisClient, err := clients.NewRedisClient(cfg.RedisURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	defer redisClient.Close()
-	log.Println("Connected to Redis")
-
 	// Initialize shared HTTP client for AdvancedMD calls
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
@@ -59,7 +51,7 @@ func main() {
 	}, httpClient)
 
 	// Initialize token manager
-	tokenManager := auth.NewTokenManager(authenticator, redisClient)
+	tokenManager := auth.NewTokenManager(authenticator)
 
 	// Start token manager (loads cache and starts background refresh)
 	ctx := context.Background()
