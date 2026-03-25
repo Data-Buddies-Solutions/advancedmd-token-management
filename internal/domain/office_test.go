@@ -9,20 +9,9 @@ func TestLookupOffice(t *testing.T) {
 		wantID  string
 		wantOK  bool
 	}{
-		{"canonical ID", "spring_hill", "spring_hill", true},
-		{"alias springhill", "springhill", "spring_hill", true},
-		{"alias spring hill", "spring hill", "spring_hill", true},
-		{"alias spring", "spring", "spring_hill", true},
-		{"alias sh", "sh", "spring_hill", true},
-		{"case insensitive", "Spring Hill", "spring_hill", true},
-		{"case insensitive alias", "SH", "spring_hill", true},
-		{"phone E.164", "+17275919997", "spring_hill", true},
-		{"phone 11 digits", "17275919997", "spring_hill", true},
-		{"phone 10 digits", "7275919997", "spring_hill", true},
-		{"phone formatted", "(727) 591-9997", "spring_hill", true},
-		{"phone with country code formatted", "+1 (727) 591-9997", "spring_hill", true},
+		{"spring hill", "+17275919997", "spring_hill", true},
+		{"crystal river", "+13523202007", "crystal_river", true},
 		{"unknown phone", "+15551234567", "", false},
-		{"unknown office", "unknown", "", false},
 		{"empty string", "", "", false},
 	}
 
@@ -158,39 +147,16 @@ func TestOfficeConfig_AppointmentColor(t *testing.T) {
 	}
 }
 
-func TestLookupOfficeByColumnID(t *testing.T) {
-	tests := []struct {
-		columnID string
-		wantID   string
-		wantOK   bool
-	}{
-		{"1513", "spring_hill", true},
-		{"1551", "spring_hill", true},
-		{"1550", "spring_hill", true},
-		{"9999", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.columnID, func(t *testing.T) {
-			office, ok := LookupOfficeByColumnID(tt.columnID)
-			if ok != tt.wantOK {
-				t.Errorf("LookupOfficeByColumnID(%q) ok = %v, want %v", tt.columnID, ok, tt.wantOK)
-				return
-			}
-			if ok && office.ID != tt.wantID {
-				t.Errorf("LookupOfficeByColumnID(%q).ID = %q, want %q", tt.columnID, office.ID, tt.wantID)
-			}
-		})
-	}
-}
-
 func TestInitRegistry(t *testing.T) {
 	// Ensure we restore prod after this test
 	defer InitRegistry("prod")
 
 	// Dev environment
 	InitRegistry("dev")
-	office := DefaultOffice()
+	office, ok := LookupOffice("+14843989071")
+	if !ok {
+		t.Fatal("dev registry should have +14843989071")
+	}
 	if office.FacilityID != "1032" {
 		t.Errorf("dev FacilityID = %q, want %q", office.FacilityID, "1032")
 	}
@@ -201,13 +167,19 @@ func TestInitRegistry(t *testing.T) {
 		t.Error("dev registry should NOT have prod column 1513")
 	}
 
-	// Phone lookup still works after rebuild
-	ph, ok := LookupOffice("+17275919997")
-	if !ok {
-		t.Error("phone lookup should work after InitRegistry(dev)")
+	// Prod phone should not exist in dev registry
+	_, ok = LookupOffice("+17275919997")
+	if ok {
+		t.Error("dev registry should NOT have prod phone +17275919997")
 	}
-	if ph.FacilityID != "1032" {
-		t.Errorf("phone lookup FacilityID = %q, want %q", ph.FacilityID, "1032")
+
+	// DefaultOffice works in dev
+	devDefault := DefaultOffice()
+	if devDefault == nil {
+		t.Fatal("DefaultOffice() returned nil in dev mode")
+	}
+	if devDefault.FacilityID != "1032" {
+		t.Errorf("dev DefaultOffice().FacilityID = %q, want %q", devDefault.FacilityID, "1032")
 	}
 
 	// Prod environment
@@ -231,19 +203,3 @@ func TestInitRegistry(t *testing.T) {
 	}
 }
 
-func TestValidOfficeNames(t *testing.T) {
-	names := ValidOfficeNames()
-	if len(names) == 0 {
-		t.Fatal("ValidOfficeNames() returned empty list")
-	}
-
-	found := false
-	for _, n := range names {
-		if n == "Spring Hill" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("ValidOfficeNames() missing 'Spring Hill': %v", names)
-	}
-}

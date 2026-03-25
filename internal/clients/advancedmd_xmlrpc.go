@@ -493,41 +493,14 @@ type AMDColumnList struct {
 	Columns interface{} `json:"column"` // Can be single object or array
 }
 
-// AMDColumn represents a single scheduler column from AMD.
-type AMDColumn struct {
-	ID              string `json:"@id"`
-	Name            string `json:"@name"`
-	Profile         string `json:"@profile"`
-	Facility        string `json:"@facility"`
-	StartTime       string `json:"@starttime"`
-	EndTime         string `json:"@endtime"`
-	Interval        string `json:"@interval"`
-	MaxApptsPerSlot string `json:"@maxapptsperslot"`
-	Workweek        string `json:"@workweek"`
-}
-
 // AMDProfileList holds the list of provider profiles.
 type AMDProfileList struct {
 	Profiles interface{} `json:"profile"` // Can be single object or array
 }
 
-// AMDProfile represents a single provider profile from AMD.
-type AMDProfile struct {
-	ID   string `json:"@id"`
-	Code string `json:"@code"`
-	Name string `json:"@name"`
-}
-
 // AMDFacilityList holds the list of facilities.
 type AMDFacilityList struct {
 	Facilities interface{} `json:"facility"` // Can be single object or array
-}
-
-// AMDFacility represents a single facility from AMD.
-type AMDFacility struct {
-	ID   string `json:"@id"`
-	Code string `json:"@code"`
-	Name string `json:"@name"`
 }
 
 // GetSchedulerSetup retrieves the scheduler configuration from AdvancedMD.
@@ -736,14 +709,14 @@ func normalizeTime(t string) string {
 		return t
 	}
 
+	// Handle "H:MM" format (e.g., "8:00") — must check before HHMM
+	if len(t) == 4 && t[1] == ':' {
+		return "0" + t
+	}
+
 	// Handle "HHMM" format (e.g., "0800")
 	if len(t) == 4 {
 		return t[:2] + ":" + t[2:]
-	}
-
-	// Handle "H:MM" format (e.g., "8:00")
-	if len(t) == 4 && t[1] == ':' {
-		return "0" + t
 	}
 
 	return t

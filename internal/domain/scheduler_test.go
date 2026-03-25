@@ -195,31 +195,3 @@ func TestIsAllowedColumn(t *testing.T) {
 	}
 }
 
-func TestLookupOffice_Aliases(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		wantID    string
-		wantFound bool
-	}{
-		{"exact match", "spring_hill", "spring_hill", true},
-		{"case insensitive", "Spring Hill", "spring_hill", true},
-		{"abbreviation sh", "SH", "spring_hill", true},
-		{"no space", "springhill", "spring_hill", true},
-		{"with periods", "S.H.", "spring_hill", true},
-		{"unknown office", "unknown", "", false},
-		{"empty string", "", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			office, gotFound := LookupOffice(tt.input)
-			if gotFound != tt.wantFound {
-				t.Errorf("LookupOffice(%q) found = %v, want %v", tt.input, gotFound, tt.wantFound)
-			}
-			if gotFound && office.ID != tt.wantID {
-				t.Errorf("LookupOffice(%q).ID = %q, want %q", tt.input, office.ID, tt.wantID)
-			}
-		})
-	}
-}

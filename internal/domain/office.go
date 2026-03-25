@@ -164,9 +164,9 @@ func ResolveAppointmentTypeID(typeID int) (int, bool) {
 	return typeID, true
 }
 
-// prodOffices contains office configs with production AMD IDs.
+// prodOffices contains office configs keyed by SIP trunk phone number (E.164).
 var prodOffices = map[string]*OfficeConfig{
-	"spring_hill": {
+	"+17275919997": {
 		ID:               "spring_hill",
 		DisplayName:      "Spring Hill",
 		FacilityID:       "1568",
@@ -183,11 +183,26 @@ var prodOffices = map[string]*OfficeConfig{
 		},
 		PediatricRouting: RoutingBachOnly,
 	},
+	"+13523202007": {
+		ID:               "crystal_river",
+		DisplayName:      "Crystal River",
+		FacilityID:       "1576",
+		DefaultProfileID: "2064",
+		Columns: map[string]OfficeColumn{
+			"1593": {ProfileID: "2064", DisplayName: "Dr. J. Licht", ShortName: "Dr. Licht", MatchKey: "LICHT"},
+		},
+		RoutingTiers: map[RoutingRule][]string{
+			RoutingBachOnly:  {"1593"},
+			RoutingBachLicht: {"1593"},
+			RoutingAll:       {"1593"},
+		},
+		PediatricRouting: RoutingNotAccepted,
+	},
 }
 
-// devOffices contains office configs with dev AMD IDs.
+// devOffices contains office configs keyed by SIP trunk phone number (E.164).
 var devOffices = map[string]*OfficeConfig{
-	"spring_hill": {
+	"+14843989071": {
 		ID:               "spring_hill",
 		DisplayName:      "Spring Hill",
 		FacilityID:       "1032",
@@ -206,9 +221,13 @@ var devOffices = map[string]*OfficeConfig{
 	},
 }
 
-// OfficeRegistry maps canonical office IDs to their configurations.
+// OfficeRegistry maps SIP trunk phone numbers (E.164) to office configurations.
 // Defaults to prod; call InitRegistry to switch environments.
 var OfficeRegistry = prodOffices
+
+// DefaultPhone is the fallback phone key when no office is specified in a request.
+// Updated by InitRegistry to match the active environment.
+var DefaultPhone = "+17275919997"
 
 // InitRegistry sets the active office registry based on the AMD_ENV value.
 // "dev" loads dev AMD IDs; anything else (including empty) loads prod.
@@ -216,52 +235,15 @@ func InitRegistry(env string) {
 	switch env {
 	case "dev":
 		OfficeRegistry = devOffices
+		DefaultPhone = "+14843989071"
 		isDevEnv = true
 		log.Printf("Office registry: dev")
 	default:
 		OfficeRegistry = prodOffices
+		DefaultPhone = "+17275919997"
 		isDevEnv = false
 		log.Printf("Office registry: prod")
 	}
-	rebuildPhoneMap()
-}
-
-// rebuildPhoneMap reconstructs PhoneToOffice from the active OfficeRegistry.
-func rebuildPhoneMap() {
-	PhoneToOffice = make(map[string]string)
-	for id := range OfficeRegistry {
-		for phone, target := range phoneMap {
-			if target == id {
-				PhoneToOffice[phone] = target
-			}
-		}
-	}
-}
-
-// phoneMap is the master phone→office mapping used to rebuild PhoneToOffice.
-var phoneMap = map[string]string{
-	"17275919997": "spring_hill", // prod: +1 (727) 591-9997
-	"7275919997":  "spring_hill",
-	"14843989071": "spring_hill", // dev: +1 (484) 398-9071
-	"4843989071":  "spring_hill",
-}
-
-// OfficeAliases maps normalized aliases to canonical office IDs.
-var OfficeAliases = map[string]string{
-	"spring_hill":  "spring_hill",
-	"springhill":   "spring_hill",
-	"spring hill":  "spring_hill",
-	"spring":       "spring_hill",
-	"sh":           "spring_hill",
-}
-
-// PhoneToOffice maps phone numbers (digits only) to canonical office IDs.
-// Rebuilt by InitRegistry from phoneMap.
-var PhoneToOffice = map[string]string{
-	"17275919997": "spring_hill",
-	"7275919997":  "spring_hill",
-	"14843989071": "spring_hill",
-	"4843989071":  "spring_hill",
 }
 
 // StripToDigits removes all non-digit characters from a string.
@@ -286,54 +268,15 @@ func NormalizePhoneDigits(s string) string {
 	return digits
 }
 
-// LookupOffice resolves an office name, alias, or phone number to its config.
-func LookupOffice(name string) (*OfficeConfig, bool) {
-	normalized := NormalizeForLookup(name)
-	// Also try underscore variant
-	underscored := strings.ReplaceAll(normalized, " ", "_")
-
-	// Check aliases first
-	for _, key := range []string{normalized, underscored} {
-		if canonical, ok := OfficeAliases[key]; ok {
-			if office, ok := OfficeRegistry[canonical]; ok {
-				return office, true
-			}
-		}
-	}
-
-	// Direct registry lookup
-	for _, key := range []string{normalized, underscored} {
-		if office, ok := OfficeRegistry[key]; ok {
-			return office, true
-		}
-	}
-
-	// Phone number lookup — strip to digits and check
-	digits := StripToDigits(name)
-	if len(digits) >= 10 {
-		if canonical, ok := PhoneToOffice[digits]; ok {
-			if office, ok := OfficeRegistry[canonical]; ok {
-				return office, true
-			}
-		}
-	}
-
-	return nil, false
+// LookupOffice resolves a SIP trunk phone number (E.164) to its office config.
+func LookupOffice(phone string) (*OfficeConfig, bool) {
+	office, ok := OfficeRegistry[phone]
+	return office, ok
 }
 
-// DefaultOffice returns the default office config (Spring Hill).
+// DefaultOffice returns the fallback office config (Spring Hill).
 func DefaultOffice() *OfficeConfig {
-	return OfficeRegistry["spring_hill"]
-}
-
-// LookupOfficeByColumnID finds the office that contains a given column ID.
-func LookupOfficeByColumnID(columnID string) (*OfficeConfig, bool) {
-	for _, office := range OfficeRegistry {
-		if _, ok := office.Columns[columnID]; ok {
-			return office, true
-		}
-	}
-	return nil, false
+	return OfficeRegistry[DefaultPhone]
 }
 
 // ValidOfficeNames returns the list of recognized office display names.
@@ -344,3 +287,5 @@ func ValidOfficeNames() []string {
 	}
 	return names
 }
+
+

@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -113,24 +112,3 @@ func TestBuildTokenData(t *testing.T) {
 	}
 }
 
-func TestIsTokenError(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil error", nil, false},
-		{"random error", fmt.Errorf("network timeout"), false},
-		{"security error", fmt.Errorf("Security error: The User Context attached to your request is invalid"), true},
-		{"lowercase security", fmt.Errorf("security error: invalid token"), true},
-		{"invalid token", fmt.Errorf("AMD returned invalid token response"), true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsTokenError(tt.err); got != tt.want {
-				t.Errorf("IsTokenError() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}

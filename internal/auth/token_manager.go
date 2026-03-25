@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -72,23 +71,6 @@ func (tm *TokenManager) GetToken(ctx context.Context) (*domain.TokenData, error)
 	return tm.tokenData, nil
 }
 
-// ForceRefresh re-authenticates with AMD immediately.
-// Called when an AMD API returns a security/token error.
-func (tm *TokenManager) ForceRefresh(ctx context.Context) error {
-	log.Println("Force-refreshing token (AMD reported invalid token)")
-	return tm.refresh(ctx)
-}
-
-// IsTokenError returns true if the error indicates an expired/invalid AMD token.
-func IsTokenError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "security error") ||
-		strings.Contains(msg, "user context") ||
-		strings.Contains(msg, "invalid") && strings.Contains(msg, "token")
-}
 
 // refresh performs authentication and updates the in-memory cache.
 func (tm *TokenManager) refresh(ctx context.Context) error {

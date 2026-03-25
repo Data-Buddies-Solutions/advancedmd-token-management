@@ -124,7 +124,12 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	var req TokenRequest
 	json.NewDecoder(r.Body).Decode(&req) // ignore errors — body may be empty
 
-	office, err := resolveOffice(req.Office)
+	officePhone := req.Office
+	if officePhone == "" {
+		officePhone = domain.DefaultPhone
+	}
+
+	office, err := resolveOffice(officePhone)
 	if err != nil {
 		json.NewEncoder(w).Encode(ErrorResponse{
 			Status:  "error",
@@ -132,6 +137,7 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	_ = office // resolved for validation only; phone key is returned below
 
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
@@ -142,17 +148,15 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := tokenData.ToResponse()
-
 	nowEST := time.Now().In(eastern)
 
 	dynamicVars := map[string]interface{}{
-		"amd_token":         resp.Token,
-		"amd_rest_api_base": resp.RestApiBase,
+		"amd_token":         tokenData.Token,
+		"amd_rest_api_base": tokenData.RestApiBase,
 		"patient_id":        "1",
 		"current_date":      nowEST.Format("Monday, January 2, 2006"),
 		"current_time":      nowEST.Format("3:04 PM"),
-		"office":            office.ID,
+		"office":            officePhone,
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{

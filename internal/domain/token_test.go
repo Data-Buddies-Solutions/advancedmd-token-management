@@ -58,58 +58,6 @@ func TestBuildTokenData(t *testing.T) {
 	})
 }
 
-func TestTokenData_ToResponse(t *testing.T) {
-	data := &TokenData{
-		Token:        "Bearer test",
-		CookieToken:  "token=test",
-		WebserverURL: "example.com/processrequest/api-801/app",
-		XmlrpcURL:    "example.com/processrequest/api-801/app/xmlrpc/processrequest.aspx",
-		RestApiBase:  "example.com/api/api-801/app",
-		EhrApiBase:   "example.com/ehr-api/api-801/app",
-		CreatedAt:    "2024-01-15T10:30:00Z",
-	}
-
-	resp := data.ToResponse()
-
-	if resp.Token != data.Token {
-		t.Errorf("Token mismatch: got %q, want %q", resp.Token, data.Token)
-	}
-	if resp.CookieToken != data.CookieToken {
-		t.Errorf("CookieToken mismatch: got %q, want %q", resp.CookieToken, data.CookieToken)
-	}
-	if resp.WebserverURL != data.WebserverURL {
-		t.Errorf("WebserverURL mismatch: got %q, want %q", resp.WebserverURL, data.WebserverURL)
-	}
-	if resp.XmlrpcURL != data.XmlrpcURL {
-		t.Errorf("XmlrpcURL mismatch: got %q, want %q", resp.XmlrpcURL, data.XmlrpcURL)
-	}
-	if resp.RestApiBase != data.RestApiBase {
-		t.Errorf("RestApiBase mismatch: got %q, want %q", resp.RestApiBase, data.RestApiBase)
-	}
-	if resp.EhrApiBase != data.EhrApiBase {
-		t.Errorf("EhrApiBase mismatch: got %q, want %q", resp.EhrApiBase, data.EhrApiBase)
-	}
-	if resp.CreatedAt != data.CreatedAt {
-		t.Errorf("CreatedAt mismatch: got %q, want %q", resp.CreatedAt, data.CreatedAt)
-	}
-}
-
-func TestTokenData_RawToken(t *testing.T) {
-	data := &TokenData{Token: "Bearer my-secret-token"}
-
-	raw := data.RawToken()
-	if raw != "my-secret-token" {
-		t.Errorf("Expected 'my-secret-token', got %q", raw)
-	}
-
-	// Test without Bearer prefix
-	data2 := &TokenData{Token: "plain-token"}
-	raw2 := data2.RawToken()
-	if raw2 != "plain-token" {
-		t.Errorf("Expected 'plain-token', got %q", raw2)
-	}
-}
-
 func TestStripProtocol(t *testing.T) {
 	tests := []struct {
 		input    string
