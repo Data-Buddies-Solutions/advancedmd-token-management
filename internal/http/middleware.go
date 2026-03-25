@@ -1,7 +1,9 @@
 package http
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -59,7 +61,15 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Wrap response writer to capture status code
+		// Read and log request body (re-buffer for handler)
+		var reqBody string
+		if r.Body != nil {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			reqBody = string(bodyBytes)
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+
+		// Wrap response writer to capture status code + body
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
 		next.ServeHTTP(wrapped, r)
@@ -67,25 +77,33 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 		requestID := GetRequestID(r.Context())
 
-		log.Printf("[%s] %s %s %d %v",
+		log.Printf("[%s] %s %s %d %v req=%s resp=%s",
 			requestID,
 			r.Method,
 			r.URL.Path,
 			wrapped.statusCode,
 			duration,
+			reqBody,
+			wrapped.body.String(),
 		)
 	})
 }
 
-// responseWriter wraps http.ResponseWriter to capture the status code.
+// responseWriter wraps http.ResponseWriter to capture the status code and body.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
+	body       bytes.Buffer
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	rw.body.Write(b)
+	return rw.ResponseWriter.Write(b)
 }
 
 // GetRequestID retrieves the request ID from the context.
