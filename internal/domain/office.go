@@ -269,8 +269,12 @@ func NormalizePhoneDigits(s string) string {
 }
 
 // LookupOffice resolves a SIP trunk phone number (E.164) to its office config.
+// Accepts with or without the "+" prefix (e.g. "14843989071" or "+14843989071").
 func LookupOffice(phone string) (*OfficeConfig, bool) {
 	office, ok := OfficeRegistry[phone]
+	if !ok && len(phone) > 0 && phone[0] != '+' {
+		office, ok = OfficeRegistry["+"+phone]
+	}
 	return office, ok
 }
 
