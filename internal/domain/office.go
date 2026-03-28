@@ -198,6 +198,22 @@ var prodOffices = map[string]*OfficeConfig{
 		},
 		PediatricRouting: RoutingNotAccepted,
 	},
+	// TODO: clean up — placeholder number for Crystal River, duplicates config above
+	"+16182265883": {
+		ID:               "crystal_river",
+		DisplayName:      "Crystal River",
+		FacilityID:       "1576",
+		DefaultProfileID: "2064",
+		Columns: map[string]OfficeColumn{
+			"1593": {ProfileID: "2064", DisplayName: "Dr. J. Licht", ShortName: "Dr. Licht", MatchKey: "LICHT"},
+		},
+		RoutingTiers: map[RoutingRule][]string{
+			RoutingBachOnly:  {"1593"},
+			RoutingBachLicht: {"1593"},
+			RoutingAll:       {"1593"},
+		},
+		PediatricRouting: RoutingNotAccepted,
+	},
 }
 
 // devOffices contains office configs keyed by SIP trunk phone number (E.164).
