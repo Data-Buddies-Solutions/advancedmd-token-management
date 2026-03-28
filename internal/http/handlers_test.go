@@ -51,13 +51,13 @@ func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 			name:        "missing lastName and phone",
 			method:      "POST",
 			body:        `{"dob":"01/15/1980"}`,
-			expectedMsg: "lastName or phone is required",
+			expectedMsg: "Provide phone + firstName, phone + dob, or lastName + dob",
 		},
 		{
 			name:        "missing dob",
 			method:      "POST",
 			body:        `{"lastName":"Smith"}`,
-			expectedMsg: "dob is required",
+			expectedMsg: "Provide phone + firstName, phone + dob, or lastName + dob",
 		},
 	}
 

@@ -399,24 +399,32 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields — need either lastName or phone, plus dob
-	if req.LastName == "" && req.Phone == "" {
+	// Validate required fields:
+	//   phone + firstName  — search by phone, filter by first name
+	//   phone + dob        — search by phone, filter by DOB
+	//   lastName + dob     — search by name, filter by DOB
+	hasPhone := req.Phone != ""
+	hasLastName := req.LastName != ""
+	hasFirstName := req.FirstName != ""
+	hasDOB := req.DOB != ""
+
+	if hasPhone && (hasFirstName || hasDOB) {
+		// valid: phone + firstName, phone + dob, or phone + both
+	} else if hasLastName && hasDOB {
+		// valid: lastName + dob
+	} else {
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
-			Message: "lastName or phone is required",
-		})
-		return
-	}
-	if req.DOB == "" {
-		json.NewEncoder(w).Encode(VerifyPatientResponse{
-			Status:  "error",
-			Message: "dob is required",
+			Message: "Provide phone + firstName, phone + dob, or lastName + dob",
 		})
 		return
 	}
 
 	// Normalize inputs
-	normalizedDOB := domain.NormalizeDOB(req.DOB)
+	var normalizedDOB string
+	if hasDOB {
+		normalizedDOB = domain.NormalizeDOB(req.DOB)
+	}
 
 	// Get token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -430,7 +438,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 
 	// Call AdvancedMD lookuppatient API — by phone or by name
 	var patients []domain.Patient
-	if req.Phone != "" {
+	if hasPhone {
 		digits := domain.NormalizePhoneDigits(req.Phone)
 		patients, err = h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
 		if err != nil {
@@ -458,11 +466,20 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		log.Printf("verify-patient: result[%d] id=%s name=%q dob=%q", i, p.ID, p.FullName, p.DOB)
 	}
 
-	// Filter patients by DOB (normalize both sides — AMD may return different formats)
+	// Filter patients — by DOB if provided, otherwise by first name (phone + firstName path)
 	var matchingPatients []domain.Patient
-	for _, p := range patients {
-		if domain.NormalizeDOB(p.DOB) == normalizedDOB {
-			matchingPatients = append(matchingPatients, p)
+	if hasDOB {
+		for _, p := range patients {
+			if domain.NormalizeDOB(p.DOB) == normalizedDOB {
+				matchingPatients = append(matchingPatients, p)
+			}
+		}
+	} else {
+		upperFirstName := strings.ToUpper(domain.StripDiacritics(req.FirstName))
+		for _, p := range patients {
+			if strings.HasPrefix(p.FirstName, upperFirstName) {
+				matchingPatients = append(matchingPatients, p)
+			}
 		}
 	}
 
@@ -471,7 +488,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	case 0:
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "not_found",
-			Message: "No patient found with that last name and date of birth",
+			Message: "No patient found matching the provided information",
 		})
 		return
 
@@ -510,9 +527,18 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 
 	default:
-		// Multiple matches - try to disambiguate by first name
-		if req.FirstName != "" {
-			upperFirstName := strings.ToUpper(req.FirstName)
+		if !hasDOB {
+			// Phone + firstName path: first name already used as filter, ask for DOB to disambiguate
+			json.NewEncoder(w).Encode(VerifyPatientResponse{
+				Status:  "multiple_matches",
+				Message: fmt.Sprintf("Found %d patients with that name and phone number. Please provide date of birth.", len(matchingPatients)),
+			})
+			return
+		}
+
+		// DOB path: try to disambiguate by first name
+		if hasFirstName {
+			upperFirstName := strings.ToUpper(domain.StripDiacritics(req.FirstName))
 			for _, p := range matchingPatients {
 				if strings.HasPrefix(p.FirstName, upperFirstName) {
 					carrierName, carrierID, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
