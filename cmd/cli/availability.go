@@ -317,7 +317,7 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			continue
 		}
 
-		if hasOverlappingAppointment(slotTime, appointments) {
+		if hasOverlappingAppointment(slotTime, interval, appointments) {
 			continue
 		}
 
@@ -337,10 +337,11 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	return slots
 }
 
-func hasOverlappingAppointment(slotTime time.Time, appointments []domain.Appointment) bool {
+func hasOverlappingAppointment(slotTime time.Time, slotDuration time.Duration, appointments []domain.Appointment) bool {
+	slotEnd := slotTime.Add(slotDuration)
 	for _, appt := range appointments {
 		apptEnd := appt.StartDateTime.Add(time.Duration(appt.Duration) * time.Minute)
-		if !slotTime.Before(appt.StartDateTime) && slotTime.Before(apptEnd) {
+		if slotTime.Before(apptEnd) && appt.StartDateTime.Before(slotEnd) {
 			return true
 		}
 	}

@@ -50,6 +50,7 @@ func TestOfficeConfig_IsAllowedColumn(t *testing.T) {
 		want     bool
 	}{
 		{"1513", true},
+		{"1598", true},
 		{"1551", true},
 		{"1550", true},
 		{"9999", false},
@@ -70,8 +71,8 @@ func TestOfficeConfig_AllowedColumnIDs(t *testing.T) {
 	office := DefaultOffice()
 	ids := office.AllowedColumnIDs()
 
-	if len(ids) != 3 {
-		t.Fatalf("AllowedColumnIDs() len = %d, want 3", len(ids))
+	if len(ids) != 4 {
+		t.Fatalf("AllowedColumnIDs() len = %d, want 4", len(ids))
 	}
 
 	// Check all expected IDs are present
@@ -79,7 +80,7 @@ func TestOfficeConfig_AllowedColumnIDs(t *testing.T) {
 	for _, id := range ids {
 		idSet[id] = true
 	}
-	for _, want := range []string{"1513", "1551", "1550"} {
+	for _, want := range []string{"1513", "1598", "1551", "1550"} {
 		if !idSet[want] {
 			t.Errorf("AllowedColumnIDs() missing %q", want)
 		}

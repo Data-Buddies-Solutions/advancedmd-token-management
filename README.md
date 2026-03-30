@@ -237,10 +237,10 @@ Only `date` is required. `routing` comes from verify/add-patient response. When 
       "columnId": 1513,
       "profileId": 620,
       "facility": "ABITA EYE GROUP SPRING HILL",
-      "slotDuration": 15,
-      "totalAvailable": 28,
+      "slotDuration": 30,
+      "totalAvailable": 12,
       "firstAvailable": "8:00 AM",
-      "lastAvailable": "4:45 PM",
+      "lastAvailable": "4:30 PM",
       "slots": [
         {"time": "8:00 AM", "datetime": "2026-03-03T08:00"}
       ]
@@ -257,7 +257,7 @@ A slot is available only if it passes all four checks in order:
 
 1. **Same-day block** — If date is today (Eastern time), the request is rejected with a 400 error. Same-day appointments are not available.
 2. **Block holds** — Slot is not inside any block hold (lunch, out of office, etc.)
-3. **Duration overlap (AMD 4101)** — No appointment from a *different* start time has a duration that covers this slot. A 30-min appointment at 9:00 blocks the 9:15 slot because 9:15 falls within `[9:00, 9:30)`. This is a hard block — `maxApptsPerSlot` does not override it.
+3. **Duration overlap (AMD 4101)** — The slot's full booking range `[slotStart, slotStart+slotDuration)` must not overlap any existing appointment's range `[apptStart, apptStart+apptDuration)`. This is a bidirectional check: a 30-min booking at 8:30 is blocked by an appointment at 8:45, and a slot at 9:15 is blocked by a 30-min appointment starting at 9:00. This is a hard block — `maxApptsPerSlot` does not override it.
 4. **Same-start capacity (AMD 4186)** — The number of appointments starting at this exact time is less than `maxApptsPerSlot` (0 = unlimited, skip this check)
 
 The distinction between checks 3 and 4 matters: `maxApptsPerSlot=2` means two appointments can start at 9:00 simultaneously (double-booking), but you still cannot book at 9:15 if a 9:00 appointment's duration extends past it.
@@ -324,7 +324,7 @@ Books an appointment in AdvancedMD. Handles appointment type → color mapping, 
   "columnId": 1513,
   "profileId": 620,
   "startDatetime": "2026-03-20T09:00",
-  "duration": 15,
+  "duration": 30,
   "appointmentTypeId": 1006
 }
 ```

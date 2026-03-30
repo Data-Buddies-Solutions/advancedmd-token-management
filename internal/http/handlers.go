@@ -1480,8 +1480,8 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			continue
 		}
 
-		// AMD 4101: Block if any appointment from a different start time overlaps this slot
-		if hasOverlappingAppointment(slotTime, appointments) {
+		// AMD 4101: Block if any existing appointment overlaps this slot's full booking range
+		if hasOverlappingAppointment(slotTime, interval, appointments) {
 			continue
 		}
 
@@ -1502,15 +1502,18 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	return slots
 }
 
-// hasOverlappingAppointment checks if any existing appointment's duration covers
-// this slot. AMD returns error 4101 ("Overlaps existing appointment") for ANY
-// overlap, including same-start times. This means maxApptsPerSlot (4186) is
-// effectively unreachable when appointments have duration > 0.
-func hasOverlappingAppointment(slotTime time.Time, appointments []domain.Appointment) bool {
+// hasOverlappingAppointment checks if any existing appointment overlaps with the
+// full booking range [slotTime, slotTime+slotDuration). AMD returns error 4101
+// for ANY overlap between the new appointment's range and an existing appointment,
+// not just when the new start falls inside an existing range. This matters when
+// off-grid appointments exist (e.g., a 15-min appointment at 8:45 from when the
+// column had 15-min intervals blocks a 30-min booking at 8:30).
+func hasOverlappingAppointment(slotTime time.Time, slotDuration time.Duration, appointments []domain.Appointment) bool {
+	slotEnd := slotTime.Add(slotDuration)
 	for _, appt := range appointments {
-		// Block if this slot falls within [apptStart, apptStart+duration)
 		apptEnd := appt.StartDateTime.Add(time.Duration(appt.Duration) * time.Minute)
-		if !slotTime.Before(appt.StartDateTime) && slotTime.Before(apptEnd) {
+		// Two intervals overlap when each starts before the other ends
+		if slotTime.Before(apptEnd) && appt.StartDateTime.Before(slotEnd) {
 			return true
 		}
 	}
