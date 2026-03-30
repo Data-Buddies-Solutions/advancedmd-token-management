@@ -5,19 +5,13 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"advancedmd-token-management/internal/domain"
 )
-
-// providerDisplayNames maps profile IDs to friendly display names.
-var providerDisplayNames = map[string]string{
-	"620":  "Dr. Austin Bach",
-	"2064": "Dr. J. Licht",
-	"2076": "Dr. D. Noel",
-}
 
 func availabilityCmd() *cobra.Command {
 	var (
@@ -30,7 +24,7 @@ func availabilityCmd() *cobra.Command {
 		Short: "Check available appointment slots",
 		Example: `  amd availability --date 2026-03-20
   amd availability --date 2026-03-20 --provider Bach
-  amd availability --date 2026-03-20 --routing bach_only --preauth`,
+  amd availability --date 2026-03-20 --office spring_hill --routing bach_only --preauth`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if date == "" {
 				return fmt.Errorf("--date is required (YYYY-MM-DD format)")
@@ -43,6 +37,16 @@ func availabilityCmd() *cobra.Command {
 
 			if err := mustBootstrap(); err != nil {
 				return err
+			}
+
+			// Resolve office config
+			officeConfig := domain.DefaultOffice()
+			if office != "" {
+				oc, ok := domain.LookupOffice(office)
+				if !ok {
+					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
+				}
+				officeConfig = oc
 			}
 
 			// Reject same-day
@@ -60,8 +64,8 @@ func availabilityCmd() *cobra.Command {
 				startDate, date = enforcePreauthMinDate(startDate, time.Now().In(eastern))
 			}
 
-			log.Printf("checking availability: date=%s provider=%q office=%q routing=%q preauth=%v",
-				date, provider, office, routing, preauthRequired)
+			log.Printf("checking availability: date=%s provider=%q office=%s routing=%q preauth=%v",
+				date, provider, officeConfig.ID, routing, preauthRequired)
 
 			tokenData := getToken()
 
@@ -81,23 +85,13 @@ func availabilityCmd() *cobra.Command {
 				facilityMap[f.ID] = f
 			}
 
-			// Office filter
-			var facilityFilter string
-			if office != "" {
-				facilityID, ok := domain.LookupFacilityID(office)
-				if !ok {
-					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
-				}
-				facilityFilter = facilityID
-			}
-
-			// Filter to allowed columns
+			// Filter to office's allowed columns
 			var allowedColumns []domain.SchedulerColumn
 			for _, col := range setup.Columns {
-				if !domain.IsAllowedColumn(col.ID) {
+				if !officeConfig.IsAllowedColumn(col.ID) {
 					continue
 				}
-				if facilityFilter != "" && col.FacilityID != facilityFilter {
+				if col.FacilityID != officeConfig.FacilityID {
 					continue
 				}
 				if provider != "" {
@@ -117,7 +111,7 @@ func availabilityCmd() *cobra.Command {
 			// Routing filter
 			if routing != "" {
 				rule := domain.ParseRoutingRule(routing)
-				routingColumns := domain.ColumnsForRouting(rule)
+				routingColumns := officeConfig.ColumnsForRouting(rule)
 				if routingColumns != nil {
 					var filtered []domain.SchedulerColumn
 					for _, col := range allowedColumns {
@@ -132,15 +126,8 @@ func availabilityCmd() *cobra.Command {
 			}
 
 			// Location name
-			locationName := "All Locations"
-			if facilityFilter != "" {
-				for _, f := range setup.Facilities {
-					if f.ID == facilityFilter {
-						locationName = f.Name
-						break
-					}
-				}
-			} else if len(allowedColumns) > 0 {
+			locationName := officeConfig.DisplayName
+			if len(allowedColumns) > 0 {
 				if fac, ok := facilityMap[allowedColumns[0].FacilityID]; ok {
 					locationName = fac.Name
 				}
@@ -148,7 +135,7 @@ func availabilityCmd() *cobra.Command {
 
 			if len(allowedColumns) == 0 {
 				if provider != "" {
-					return fmt.Errorf("no provider found matching %q — valid: %s", provider, strings.Join(domain.ValidProviderNames(), ", "))
+					return fmt.Errorf("no provider found matching %q — valid: %s", provider, strings.Join(officeConfig.ValidProviderNames(), ", "))
 				}
 				printJSON(domain.AvailabilityResponse{
 					SearchedDate: date,
@@ -163,32 +150,49 @@ func availabilityCmd() *cobra.Command {
 			searchDate := startDate
 			var providers []domain.ProviderAvailability
 
-			for attempt := 0; attempt <= 14; attempt++ {
+			maxDate := startDate.AddDate(0, 0, 14)
+			for !searchDate.After(maxDate) {
 				dateStr := searchDate.Format("2006-01-02")
 
-				columnIDs := make([]string, len(allowedColumns))
-				for i, col := range allowedColumns {
-					columnIDs[i] = col.ID
+				// Only fetch columns that work this weekday
+				var workingColumnIDs []string
+				for _, col := range allowedColumns {
+					if col.WorksOnDay(searchDate.Weekday()) {
+						workingColumnIDs = append(workingColumnIDs, col.ID)
+					}
+				}
+				if len(workingColumnIDs) == 0 {
+					searchDate = searchDate.AddDate(0, 0, 1)
+					log.Printf("no providers work on %s, skipping", dateStr)
+					continue
 				}
 
-				appointmentsByColumn, err := app.amdRestClient.GetAppointmentsForColumns(cmd.Context(), tokenData, columnIDs, dateStr)
-				if err != nil {
-					log.Printf("failed to get appointments: %v", err)
-					appointmentsByColumn = make(map[string][]domain.Appointment)
-				}
-
-				blockHoldsByColumn, err := app.amdRestClient.GetBlockHoldsForColumns(cmd.Context(), tokenData, columnIDs, dateStr)
-				if err != nil {
-					log.Printf("failed to get block holds: %v", err)
-					blockHoldsByColumn = make(map[string][]domain.BlockHold)
-				}
+				// Fetch appointments and block holds concurrently
+				var appointmentsByColumn map[string][]domain.Appointment
+				var blockHoldsByColumn map[string][]domain.BlockHold
+				var fetchWg sync.WaitGroup
+				fetchWg.Add(2)
+				go func() {
+					defer fetchWg.Done()
+					appointmentsByColumn = app.amdRestClient.GetAppointmentsForColumns(cmd.Context(), tokenData, workingColumnIDs, dateStr)
+				}()
+				go func() {
+					defer fetchWg.Done()
+					blockHoldsByColumn = app.amdRestClient.GetBlockHoldsForColumns(cmd.Context(), tokenData, workingColumnIDs, dateStr)
+				}()
+				fetchWg.Wait()
 
 				providers = nil
 				for _, col := range allowedColumns {
+					// Skip columns where appointment data couldn't be fetched
+					if _, ok := appointmentsByColumn[col.ID]; !ok {
+						log.Printf("availability: skipping column %s — appointment data unavailable", col.ID)
+						continue
+					}
 					profile := profileMap[col.ProfileID]
 					facility := facilityMap[col.FacilityID]
 
-					displayName := providerDisplayNames[col.ProfileID]
+					displayName := officeConfig.ProviderDisplayName(col.ProfileID)
 					if displayName == "" {
 						displayName = profile.Name
 					}
@@ -230,7 +234,7 @@ func availabilityCmd() *cobra.Command {
 					}
 				}
 
-				if hasAvailability || attempt == 14 {
+				if hasAvailability {
 					break
 				}
 
@@ -269,7 +273,7 @@ func availabilityCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&date, "date", "", "Date to check (YYYY-MM-DD, required)")
 	cmd.Flags().StringVar(&provider, "provider", "", "Filter by provider name")
-	cmd.Flags().StringVar(&office, "office", "", "Filter by office name")
+	cmd.Flags().StringVar(&office, "office", "", "Office name (e.g., spring_hill)")
 	cmd.Flags().StringVar(&routing, "routing", "", "Routing rule: bach_only, bach_licht, all_three")
 	cmd.Flags().BoolVar(&preauthRequired, "preauth", false, "Enforce 14-day minimum lead time")
 
@@ -313,7 +317,7 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			continue
 		}
 
-		if hasOverlappingAppointment(slotTime, appointments) {
+		if hasOverlappingAppointment(slotTime, interval, appointments) {
 			continue
 		}
 
@@ -333,10 +337,11 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	return slots
 }
 
-func hasOverlappingAppointment(slotTime time.Time, appointments []domain.Appointment) bool {
+func hasOverlappingAppointment(slotTime time.Time, slotDuration time.Duration, appointments []domain.Appointment) bool {
+	slotEnd := slotTime.Add(slotDuration)
 	for _, appt := range appointments {
 		apptEnd := appt.StartDateTime.Add(time.Duration(appt.Duration) * time.Minute)
-		if !slotTime.Before(appt.StartDateTime) && slotTime.Before(apptEnd) {
+		if slotTime.Before(apptEnd) && appt.StartDateTime.Before(slotEnd) {
 			return true
 		}
 	}

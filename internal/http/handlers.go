@@ -1,12 +1,14 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"advancedmd-token-management/internal/auth"
@@ -46,6 +48,8 @@ type VerifyPatientRequest struct {
 	LastName  string `json:"lastName"`
 	DOB       string `json:"dob"`
 	FirstName string `json:"firstName,omitempty"`
+	Phone     string `json:"phone,omitempty"`
+	Office    string `json:"office,omitempty"`
 }
 
 // VerifyPatientResponse is returned on successful patient verification.
@@ -85,10 +89,28 @@ func NewHandlers(tm *auth.TokenManager, amdClient *clients.AdvancedMDClient, amd
 	}
 }
 
+// resolveOffice resolves an office name to its config.
+// Empty name defaults to Spring Hill for backward compatibility.
+func resolveOffice(officeName string) (*domain.OfficeConfig, error) {
+	if officeName == "" {
+		return domain.DefaultOffice(), nil
+	}
+	office, ok := domain.LookupOffice(officeName)
+	if !ok {
+		return nil, fmt.Errorf("unknown office: %q. Valid options: %s", officeName, strings.Join(domain.ValidOfficeNames(), ", "))
+	}
+	return office, nil
+}
+
 // HandleHealth returns a simple health check response.
 func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// TokenRequest is the optional JSON body for the token/precall webhook.
+type TokenRequest struct {
+	Office string `json:"office,omitempty"`
 }
 
 // HandleGetToken returns the cached AdvancedMD token for ElevenLabs agents.
@@ -97,6 +119,25 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	log.Printf("token: received webhook request")
+
+	// Parse optional office from request body
+	var req TokenRequest
+	json.NewDecoder(r.Body).Decode(&req) // ignore errors — body may be empty
+
+	officePhone := req.Office
+	if officePhone == "" {
+		officePhone = domain.DefaultPhone
+	}
+
+	office, err := resolveOffice(officePhone)
+	if err != nil {
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Status:  "error",
+			Message: err.Error(),
+		})
+		return
+	}
+	_ = office // resolved for validation only; phone key is returned below
 
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
@@ -107,16 +148,15 @@ func (h *Handlers) HandleGetToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := tokenData.ToResponse()
-
 	nowEST := time.Now().In(eastern)
 
 	dynamicVars := map[string]interface{}{
-		"amd_token":         resp.Token,
-		"amd_rest_api_base": resp.RestApiBase,
+		"amd_token":         tokenData.Token,
+		"amd_rest_api_base": tokenData.RestApiBase,
 		"patient_id":        "1",
 		"current_date":      nowEST.Format("Monday, January 2, 2006"),
 		"current_time":      nowEST.Format("3:04 PM"),
+		"office":            officePhone,
 	}
 
 	json.NewEncoder(w).Encode(ElevenLabsWebhookResponse{
@@ -141,6 +181,7 @@ type AddPatientRequest struct {
 	Insurance      string `json:"insurance"`
 	SubscriberName string `json:"subscriberName"`
 	SubscriberNum  string `json:"subscriberNum"`
+	Office         string `json:"office,omitempty"`
 }
 
 // AddPatientResponse is returned after creating a patient.
@@ -169,8 +210,17 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("add-patient: received request: firstName=%q lastName=%q dob=%q phone=%q email=%q street=%q aptSuite=%q city=%q state=%q zip=%q sex=%q insurance=%q subscriberName=%q subscriberNum=%q",
-		req.FirstName, req.LastName, req.DOB, req.Phone, req.Email, req.Street, req.AptSuite, req.City, req.State, req.Zip, req.Sex, req.Insurance, req.SubscriberName, req.SubscriberNum)
+	office, err := resolveOffice(req.Office)
+	if err != nil {
+		json.NewEncoder(w).Encode(AddPatientResponse{
+			Status:  "error",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	log.Printf("add-patient: received request: firstName=%q lastName=%q dob=%q phone=%q email=%q street=%q aptSuite=%q city=%q state=%q zip=%q sex=%q insurance=%q subscriberName=%q subscriberNum=%q office=%q",
+		req.FirstName, req.LastName, req.DOB, req.Phone, req.Email, req.Street, req.AptSuite, req.City, req.State, req.Zip, req.Sex, req.Insurance, req.SubscriberName, req.SubscriberNum, office.ID)
 
 	// Validate required fields (aptSuite is optional)
 	missing := []string{}
@@ -251,6 +301,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		State:     strings.ToUpper(req.State),
 		Zip:       req.Zip,
 		Sex:       normalizedSex,
+		ProfileID: office.DefaultProfileID,
 	})
 	if err != nil {
 		log.Printf("add-patient: AMD error: %v", err)
@@ -283,14 +334,14 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject insurance not accepted at Spring Hill
+	// Reject insurance not accepted at this office
 	if insEntry.Routing == domain.RoutingNotAccepted {
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:    "partial",
 			PatientID: strippedID,
 			Name:      patientName,
 			DOB:       normalizedDOB,
-			Message:   fmt.Sprintf("%s is not accepted at Spring Hill. The patient may self-pay or contact the office for options.", req.Insurance),
+			Message:   fmt.Sprintf("%s is not accepted at %s. The patient may self-pay or contact the office for options.", req.Insurance, office.DisplayName),
 		})
 		return
 	}
@@ -307,10 +358,10 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pediatric override: under-18 patients → Dr. Bach only
+	// Pediatric override: under-18 patients → office pediatric routing
 	routing := insEntry.Routing
 	if domain.IsMinor(normalizedDOB) && routing != domain.RoutingNotAccepted {
-		routing = domain.RoutingBachOnly
+		routing = office.PediatricRouting
 	}
 
 	json.NewEncoder(w).Encode(AddPatientResponse{
@@ -319,7 +370,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		Name:             patientName,
 		DOB:              normalizedDOB,
 		Routing:          string(routing),
-		AllowedProviders: domain.ProvidersForRouting(routing),
+		AllowedProviders: office.ProvidersForRouting(routing),
 		PreauthRequired:  insEntry.PreauthRequired,
 		Message:          "Patient created and insurance attached successfully",
 	})
@@ -339,26 +390,41 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
-	if req.LastName == "" {
+	office, err := resolveOffice(req.Office)
+	if err != nil {
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
-			Message: "lastName is required",
+			Message: err.Error(),
 		})
 		return
 	}
-	if req.DOB == "" {
+
+	// Validate required fields:
+	//   phone + firstName  — search by phone, filter by first name
+	//   phone + dob        — search by phone, filter by DOB
+	//   lastName + dob     — search by name, filter by DOB
+	hasPhone := req.Phone != ""
+	hasLastName := req.LastName != ""
+	hasFirstName := req.FirstName != ""
+	hasDOB := req.DOB != ""
+
+	if hasPhone && (hasFirstName || hasDOB) {
+		// valid: phone + firstName, phone + dob, or phone + both
+	} else if hasLastName && hasDOB {
+		// valid: lastName + dob
+	} else {
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "error",
-			Message: "dob is required",
+			Message: "Provide phone + firstName, phone + dob, or lastName + dob",
 		})
 		return
 	}
 
 	// Normalize inputs
-	normalizedDOB := domain.NormalizeDOB(req.DOB)
-	normalizedLastName := domain.StripDiacritics(req.LastName)
-	normalizedFirstName := domain.StripDiacritics(req.FirstName)
+	var normalizedDOB string
+	if hasDOB {
+		normalizedDOB = domain.NormalizeDOB(req.DOB)
+	}
 
 	// Get token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -370,26 +436,50 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call AdvancedMD lookuppatient API
-	patients, err := h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName, normalizedFirstName)
-	if err != nil {
-		json.NewEncoder(w).Encode(VerifyPatientResponse{
-			Status:  "error",
-			Message: "Failed to lookup patient: " + err.Error(),
-		})
-		return
+	// Call AdvancedMD lookuppatient API — by phone or by name
+	var patients []domain.Patient
+	if hasPhone {
+		digits := domain.NormalizePhoneDigits(req.Phone)
+		patients, err = h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
+		if err != nil {
+			json.NewEncoder(w).Encode(VerifyPatientResponse{
+				Status:  "error",
+				Message: "Failed to lookup patient by phone: " + err.Error(),
+			})
+			return
+		}
+		log.Printf("verify-patient: lookup phone=%q returned %d patients", digits, len(patients))
+	} else {
+		normalizedLastName := domain.StripDiacritics(req.LastName)
+		normalizedFirstName := domain.StripDiacritics(req.FirstName)
+		patients, err = h.amdClient.LookupPatient(r.Context(), tokenData, normalizedLastName, normalizedFirstName)
+		if err != nil {
+			json.NewEncoder(w).Encode(VerifyPatientResponse{
+				Status:  "error",
+				Message: "Failed to lookup patient: " + err.Error(),
+			})
+			return
+		}
+		log.Printf("verify-patient: lookup lastName=%q returned %d patients", normalizedLastName, len(patients))
 	}
-
-	log.Printf("verify-patient: lookup lastName=%q returned %d patients", normalizedLastName, len(patients))
 	for i, p := range patients {
 		log.Printf("verify-patient: result[%d] id=%s name=%q dob=%q", i, p.ID, p.FullName, p.DOB)
 	}
 
-	// Filter patients by DOB (normalize both sides — AMD may return different formats)
+	// Filter patients — by DOB if provided, otherwise by first name (phone + firstName path)
 	var matchingPatients []domain.Patient
-	for _, p := range patients {
-		if domain.NormalizeDOB(p.DOB) == normalizedDOB {
-			matchingPatients = append(matchingPatients, p)
+	if hasDOB {
+		for _, p := range patients {
+			if domain.NormalizeDOB(p.DOB) == normalizedDOB {
+				matchingPatients = append(matchingPatients, p)
+			}
+		}
+	} else {
+		upperFirstName := strings.ToUpper(domain.StripDiacritics(req.FirstName))
+		for _, p := range patients {
+			if strings.HasPrefix(p.FirstName, upperFirstName) {
+				matchingPatients = append(matchingPatients, p)
+			}
 		}
 	}
 
@@ -398,7 +488,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 	case 0:
 		json.NewEncoder(w).Encode(VerifyPatientResponse{
 			Status:  "not_found",
-			Message: "No patient found with that last name and date of birth",
+			Message: "No patient found matching the provided information",
 		})
 		return
 
@@ -422,14 +512,14 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 			resp.InsuranceCarrierID = carrierID
 			routing, ambiguous := domain.RoutingForCarrierID(carrierID)
 			resp.Routing = string(routing)
-			resp.AllowedProviders = domain.ProvidersForRouting(routing)
+			resp.AllowedProviders = office.ProvidersForRouting(routing)
 			resp.RoutingAmbiguous = ambiguous
 		}
 
-		// Pediatric override: under-18 patients → Dr. Bach only
+		// Pediatric override: under-18 patients → office pediatric routing
 		if domain.IsMinor(p.DOB) && resp.Routing != "" && resp.Routing != string(domain.RoutingNotAccepted) {
-			resp.Routing = string(domain.RoutingBachOnly)
-			resp.AllowedProviders = domain.ProvidersForRouting(domain.RoutingBachOnly)
+			resp.Routing = string(office.PediatricRouting)
+			resp.AllowedProviders = office.ProvidersForRouting(office.PediatricRouting)
 			resp.RoutingAmbiguous = false
 		}
 
@@ -437,9 +527,18 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 		return
 
 	default:
-		// Multiple matches - try to disambiguate by first name
-		if req.FirstName != "" {
-			upperFirstName := strings.ToUpper(req.FirstName)
+		if !hasDOB {
+			// Phone + firstName path: first name already used as filter, ask for DOB to disambiguate
+			json.NewEncoder(w).Encode(VerifyPatientResponse{
+				Status:  "multiple_matches",
+				Message: fmt.Sprintf("Found %d patients with that name and phone number. Please provide date of birth.", len(matchingPatients)),
+			})
+			return
+		}
+
+		// DOB path: try to disambiguate by first name
+		if hasFirstName {
+			upperFirstName := strings.ToUpper(domain.StripDiacritics(req.FirstName))
 			for _, p := range matchingPatients {
 				if strings.HasPrefix(p.FirstName, upperFirstName) {
 					carrierName, carrierID, err := h.amdClient.GetDemographic(r.Context(), tokenData, p.ID)
@@ -460,14 +559,14 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 						resp.InsuranceCarrierID = carrierID
 						routing, ambiguous := domain.RoutingForCarrierID(carrierID)
 						resp.Routing = string(routing)
-						resp.AllowedProviders = domain.ProvidersForRouting(routing)
+						resp.AllowedProviders = office.ProvidersForRouting(routing)
 						resp.RoutingAmbiguous = ambiguous
 					}
 
-					// Pediatric override: under-18 patients → Dr. Bach only
+					// Pediatric override: under-18 patients → office pediatric routing
 					if domain.IsMinor(p.DOB) && resp.Routing != "" && resp.Routing != string(domain.RoutingNotAccepted) {
-						resp.Routing = string(domain.RoutingBachOnly)
-						resp.AllowedProviders = domain.ProvidersForRouting(domain.RoutingBachOnly)
+						resp.Routing = string(office.PediatricRouting)
+						resp.AllowedProviders = office.ProvidersForRouting(office.PediatricRouting)
 						resp.RoutingAmbiguous = false
 					}
 
@@ -498,6 +597,7 @@ func (h *Handlers) HandleVerifyPatient(w http.ResponseWriter, r *http.Request) {
 // GetAppointmentsRequest is the expected JSON body for patient appointment lookup.
 type GetAppointmentsRequest struct {
 	PatientID string `json:"patientId"`
+	Office    string `json:"office,omitempty"`
 }
 
 // PatientApptResponse is returned on successful appointment lookup.
@@ -517,15 +617,6 @@ type PatientApptDetail struct {
 	Type      string `json:"type,omitempty"`       // e.g., "New Adult Medical"
 	Facility  string `json:"facility,omitempty"`   // e.g., "Abita Eye Group Spring Hill"
 	Confirmed bool   `json:"confirmed"`            // Whether the appointment has been confirmed
-}
-
-// appointmentTypeNames maps AMD appointment type IDs to friendly names.
-var appointmentTypeNames = map[int]string{
-	1006: "New Adult Medical",
-	1004: "New Pediatric Medical",
-	1007: "Established Adult Medical (Follow Up)",
-	1005: "Established Pediatric Medical (Follow Up)",
-	1008: "Post Op",
 }
 
 // HandleGetPatientAppointments retrieves upcoming appointments for a verified patient.
@@ -549,10 +640,18 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	log.Printf("patient-appointments: patientId=%s", req.PatientID)
-
-	patientIDInt, err := strconv.Atoi(req.PatientID)
+	office, err := resolveOffice(req.Office)
 	if err != nil {
+		json.NewEncoder(w).Encode(PatientApptResponse{
+			Status:  "error",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	log.Printf("patient-appointments: patientId=%s office=%s", req.PatientID, office.ID)
+
+	if _, err := strconv.Atoi(req.PatientID); err != nil {
 		json.NewEncoder(w).Encode(PatientApptResponse{
 			Status:  "error",
 			Message: "patientId must be numeric",
@@ -560,7 +659,6 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
 	if err != nil {
 		json.NewEncoder(w).Encode(PatientApptResponse{
@@ -570,96 +668,17 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Build column ID string for all allowed columns
-	var colIDs []string
-	for id := range domain.AllowedColumns {
-		colIDs = append(colIDs, id)
-	}
-	columnIDStr := strings.Join(colIDs, "-")
-
-	// Fetch current month + next month (2 REST calls concurrently)
-	now := time.Now().In(eastern)
-	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
-	nextMonth := thisMonth.AddDate(0, 1, 0)
-
-	type monthResult struct {
-		appts []clients.AMDAppointmentResponse
-		err   error
-	}
-	ch1 := make(chan monthResult, 1)
-	ch2 := make(chan monthResult, 1)
-
-	go func() {
-		appts, err := h.amdRestClient.GetAppointmentsByMonth(r.Context(), tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
-		ch1 <- monthResult{appts, err}
-	}()
-	go func() {
-		appts, err := h.amdRestClient.GetAppointmentsByMonth(r.Context(), tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
-		ch2 <- monthResult{appts, err}
-	}()
-
-	r1, r2 := <-ch1, <-ch2
-
-	if r1.err != nil {
-		log.Printf("patient-appointments: AMD error (month 1): %v", r1.err)
+	details, err := h.fetchUpcomingAppointments(r.Context(), tokenData, req.PatientID, office)
+	if err != nil {
+		log.Printf("patient-appointments: error: %v", err)
 		json.NewEncoder(w).Encode(PatientApptResponse{
 			Status:  "error",
-			Message: "Failed to retrieve appointments: " + r1.err.Error(),
-		})
-		return
-	}
-	if r2.err != nil {
-		log.Printf("patient-appointments: AMD error (month 2): %v", r2.err)
-		json.NewEncoder(w).Encode(PatientApptResponse{
-			Status:  "error",
-			Message: "Failed to retrieve appointments: " + r2.err.Error(),
+			Message: "Failed to retrieve appointments: " + err.Error(),
 		})
 		return
 	}
 
-	// Combine and filter by patient ID
-	allAppts := append(r1.appts, r2.appts...)
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
-
-	var details []PatientApptDetail
-	for _, a := range allAppts {
-		if a.PatientID != patientIDInt {
-			continue
-		}
-
-		startTime, err := time.Parse("2006-01-02T15:04:05", a.StartDateTime)
-		if err != nil {
-			startTime, err = time.Parse("2006-01-02T15:04", a.StartDateTime)
-			if err != nil {
-				continue
-			}
-		}
-
-		// Skip past appointments
-		if startTime.Before(today) {
-			continue
-		}
-
-		// Resolve appointment type name
-		typeName := ""
-		if len(a.AppointmentTypes) > 0 {
-			if name, ok := appointmentTypeNames[a.AppointmentTypes[0]]; ok {
-				typeName = name
-			}
-		}
-
-		details = append(details, PatientApptDetail{
-			ID:        a.ID,
-			Date:      startTime.Format("Monday, January 2, 2006"),
-			Time:      startTime.Format("3:04 PM"),
-			Provider:  friendlyProviderName(a.Provider),
-			Type:      typeName,
-			Facility:  friendlyFacilityName(a.Facility),
-			Confirmed: a.ConfirmDate != nil,
-		})
-	}
-
-	log.Printf("patient-appointments: found %d upcoming appointments for patient %s (scanned %d total)", len(details), req.PatientID, len(allAppts))
+	log.Printf("patient-appointments: found %d upcoming appointments for patient %s", len(details), req.PatientID)
 
 	if len(details) == 0 {
 		json.NewEncoder(w).Encode(PatientApptResponse{
@@ -678,22 +697,224 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 	})
 }
 
-// friendlyProviderName maps AMD provider names to friendly display names.
-func friendlyProviderName(amdName string) string {
-	upper := strings.ToUpper(amdName)
-	for _, entry := range []struct {
-		match   string
-		display string
-	}{
-		{"BACH", "Dr. Austin Bach"},
-		{"LICHT", "Dr. J. Licht"},
-		{"NOEL", "Dr. D. Noel"},
-	} {
-		if strings.Contains(upper, entry.match) {
-			return entry.display
+// PatientLookupRequest is the JSON body for the combined patient lookup endpoint.
+type PatientLookupRequest struct {
+	Phone  string `json:"phone"`
+	DOB    string `json:"dob,omitempty"`
+	Office string `json:"office,omitempty"`
+}
+
+// PatientLookupResponse is the combined response with identity + appointments.
+type PatientLookupResponse struct {
+	Status             string            `json:"status"`
+	PatientID          string            `json:"patientId,omitempty"`
+	Name               string            `json:"name,omitempty"`
+	DOB                string            `json:"dob,omitempty"`
+	Phone              string            `json:"phone,omitempty"`
+	InsuranceCarrier   string            `json:"insuranceCarrier,omitempty"`
+	InsuranceCarrierID string            `json:"insuranceCarrierId,omitempty"`
+	Routing            string            `json:"routing,omitempty"`
+	AllowedProviders   []string          `json:"allowedProviders,omitempty"`
+	RoutingAmbiguous   bool              `json:"routingAmbiguous,omitempty"`
+	Appointments       []PatientApptDetail `json:"appointments,omitempty"`
+	Matches            []PatientMatch    `json:"matches,omitempty"`
+	Message            string            `json:"message,omitempty"`
+}
+
+// HandlePatientLookup verifies a patient and returns their upcoming appointments in one call.
+func (h *Handlers) HandlePatientLookup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req PatientLookupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Invalid JSON body"})
+		return
+	}
+
+	office, err := resolveOffice(req.Office)
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: err.Error()})
+		return
+	}
+
+	if req.Phone == "" {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "phone is required"})
+		return
+	}
+
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Failed to get authentication token: " + err.Error()})
+		return
+	}
+
+	// Lookup patient by phone
+	digits := domain.NormalizePhoneDigits(req.Phone)
+	patients, err := h.amdClient.LookupPatientByPhone(r.Context(), tokenData, digits)
+	if err != nil {
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "error", Message: "Failed to lookup patient by phone: " + err.Error()})
+		return
+	}
+	log.Printf("patient-lookup: phone=%q returned %d patients", digits, len(patients))
+
+	// Filter by DOB if provided
+	matching := patients
+	if req.DOB != "" {
+		normalizedDOB := domain.NormalizeDOB(req.DOB)
+		matching = nil
+		for _, p := range patients {
+			if domain.NormalizeDOB(p.DOB) == normalizedDOB {
+				matching = append(matching, p)
+			}
 		}
 	}
-	return amdName
+
+	// Resolve single patient
+	var patient domain.Patient
+	switch len(matching) {
+	case 0:
+		json.NewEncoder(w).Encode(PatientLookupResponse{Status: "not_found", Message: "No patient found for that phone number"})
+		return
+	case 1:
+		patient = matching[0]
+	default:
+		// Multiple matches — return list for the agent to disambiguate
+		var matches []PatientMatch
+		for _, p := range matching {
+			matches = append(matches, PatientMatch{FirstName: p.FirstName})
+		}
+		json.NewEncoder(w).Encode(PatientLookupResponse{
+			Status:  "multiple_matches",
+			Message: fmt.Sprintf("Found %d patients for this phone number. Ask the caller to confirm their name.", len(matching)),
+			Matches: matches,
+		})
+		return
+	}
+
+	// Build response with patient identity + insurance routing
+	resp := PatientLookupResponse{
+		Status:    "verified",
+		PatientID: patient.ID,
+		Name:      patient.FullName,
+		DOB:       patient.DOB,
+		Phone:     patient.Phone,
+	}
+
+	carrierName, carrierID, err := h.amdClient.GetDemographic(r.Context(), tokenData, patient.ID)
+	if err != nil {
+		log.Printf("WARNING: patient-lookup: failed to get demographics for %s: %v", patient.ID, err)
+	}
+
+	if carrierName != "" {
+		resp.InsuranceCarrier = carrierName
+	}
+	if carrierID != "" {
+		resp.InsuranceCarrierID = carrierID
+		routing, ambiguous := domain.RoutingForCarrierID(carrierID)
+		resp.Routing = string(routing)
+		resp.AllowedProviders = office.ProvidersForRouting(routing)
+		resp.RoutingAmbiguous = ambiguous
+	}
+
+	// Pediatric override
+	if domain.IsMinor(patient.DOB) && resp.Routing != "" && resp.Routing != string(domain.RoutingNotAccepted) {
+		resp.Routing = string(office.PediatricRouting)
+		resp.AllowedProviders = office.ProvidersForRouting(office.PediatricRouting)
+		resp.RoutingAmbiguous = false
+	}
+
+	// Fetch upcoming appointments
+	appts, err := h.fetchUpcomingAppointments(r.Context(), tokenData, patient.ID, office)
+	if err != nil {
+		log.Printf("WARNING: patient-lookup: failed to get appointments for %s: %v", patient.ID, err)
+		// Still return patient info — appointments are best-effort
+	} else {
+		resp.Appointments = appts
+	}
+
+	if len(resp.Appointments) > 0 {
+		resp.Message = fmt.Sprintf("Patient verified with %d upcoming appointment(s)", len(resp.Appointments))
+	} else {
+		resp.Message = "Patient verified, no upcoming appointments"
+	}
+
+	json.NewEncoder(w).Encode(resp)
+}
+
+// fetchUpcomingAppointments retrieves upcoming appointments for a patient ID.
+func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *domain.TokenData, patientID string, office *domain.OfficeConfig) ([]PatientApptDetail, error) {
+	patientIDInt, err := strconv.Atoi(patientID)
+	if err != nil {
+		return nil, fmt.Errorf("patientId must be numeric: %w", err)
+	}
+
+	columnIDStr := strings.Join(office.AllowedColumnIDs(), "-")
+
+	now := time.Now().In(eastern)
+	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
+	nextMonth := thisMonth.AddDate(0, 1, 0)
+
+	type monthResult struct {
+		appts []clients.AMDAppointmentResponse
+		err   error
+	}
+	ch1 := make(chan monthResult, 1)
+	ch2 := make(chan monthResult, 1)
+
+	go func() {
+		appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
+		ch1 <- monthResult{appts, err}
+	}()
+	go func() {
+		appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
+		ch2 <- monthResult{appts, err}
+	}()
+
+	r1, r2 := <-ch1, <-ch2
+	if r1.err != nil {
+		return nil, r1.err
+	}
+	if r2.err != nil {
+		return nil, r2.err
+	}
+
+	allAppts := append(r1.appts, r2.appts...)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
+
+	var details []PatientApptDetail
+	for _, a := range allAppts {
+		if a.PatientID != patientIDInt {
+			continue
+		}
+
+		startTime, err := clients.ParseDateTime(a.StartDateTime)
+		if err != nil {
+			continue
+		}
+
+		if startTime.Before(today) {
+			continue
+		}
+
+		typeName := ""
+		if len(a.AppointmentTypes) > 0 {
+			if name, ok := office.AppointmentTypeName(a.AppointmentTypes[0]); ok {
+				typeName = name
+			}
+		}
+
+		details = append(details, PatientApptDetail{
+			ID:        a.ID,
+			Date:      startTime.Format("Monday, January 2, 2006"),
+			Time:      startTime.Format("3:04 PM"),
+			Provider:  office.FriendlyProviderName(a.Provider),
+			Type:      typeName,
+			Facility:  friendlyFacilityName(a.Facility),
+			Confirmed: a.ConfirmDate != nil,
+		})
+	}
+
+	return details, nil
 }
 
 // friendlyFacilityName cleans up AMD facility names to title case.
@@ -766,6 +987,171 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// BookAppointmentRequest is the expected JSON body for booking an appointment.
+type BookAppointmentRequest struct {
+	PatientID         string `json:"patientId"`
+	ColumnID          int    `json:"columnId"`
+	ProfileID         int    `json:"profileId"`
+	StartDatetime     string `json:"startDatetime"`
+	Duration          int    `json:"duration"`
+	AppointmentTypeID int    `json:"appointmentTypeId"`
+	Office            string `json:"office,omitempty"`
+}
+
+// BookAppointmentResponse is returned after booking an appointment.
+type BookAppointmentResponse struct {
+	Status        string `json:"status"`
+	AppointmentID int    `json:"appointmentId,omitempty"`
+	Message       string `json:"message"`
+}
+
+// HandleBookAppointment books an appointment in AdvancedMD.
+func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req BookAppointmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "Invalid JSON body",
+		})
+		return
+	}
+
+	office, err := resolveOffice(req.Office)
+	if err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	log.Printf("book-appointment: patientId=%s columnId=%d profileId=%d startDatetime=%s duration=%d typeId=%d office=%s",
+		req.PatientID, req.ColumnID, req.ProfileID, req.StartDatetime, req.Duration, req.AppointmentTypeID, office.ID)
+
+	// Validate required fields
+	if req.PatientID == "" {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "patientId is required"})
+		return
+	}
+	if req.ColumnID == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "columnId is required"})
+		return
+	}
+	if req.ProfileID == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "profileId is required"})
+		return
+	}
+	if req.StartDatetime == "" {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "startDatetime is required"})
+		return
+	}
+	if req.Duration == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "duration is required"})
+		return
+	}
+	if req.AppointmentTypeID == 0 {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "appointmentTypeId is required"})
+		return
+	}
+
+	// Validate columnId is allowed for this office
+	colIDStr := strconv.Itoa(req.ColumnID)
+	if !office.IsAllowedColumn(colIDStr) {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Column %d is not a valid provider column for %s", req.ColumnID, office.DisplayName),
+		})
+		return
+	}
+
+	// Resolve appointment type ID for current environment (prod IDs → env IDs)
+	envTypeID, ok := domain.ResolveAppointmentTypeID(req.AppointmentTypeID)
+	if !ok {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Invalid appointment type ID: %d. Valid types: 1004 (New Pediatric), 1005 (Established Pediatric), 1006 (New Adult), 1007 (Established Adult), 1008 (Post Op)", req.AppointmentTypeID),
+		})
+		return
+	}
+
+	// Resolve color from canonical (prod) type ID
+	color, ok := office.AppointmentColor(req.AppointmentTypeID)
+	if !ok {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("Invalid appointment type ID: %d", req.AppointmentTypeID),
+		})
+		return
+	}
+
+	// Parse patient ID
+	patientIDInt, err := strconv.Atoi(req.PatientID)
+	if err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "patientId must be numeric",
+		})
+		return
+	}
+
+	// Get auth token
+	tokenData, err := h.tokenManager.GetToken(r.Context())
+	if err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "Failed to get authentication token: " + err.Error(),
+		})
+		return
+	}
+
+	// Resolve facility ID from office config
+	facilityIDInt, _ := strconv.Atoi(office.FacilityID)
+
+	// Book via AMD REST API
+	apptID, err := h.amdRestClient.BookAppointment(r.Context(), tokenData, clients.BookAppointmentParams{
+		PatientID:     patientIDInt,
+		ColumnID:      req.ColumnID,
+		ProfileID:     req.ProfileID,
+		StartDatetime: req.StartDatetime,
+		Duration:      req.Duration,
+		AppointmentType: []struct {
+			ID int `json:"id"`
+		}{{ID: envTypeID}},
+		EpisodeID:  1,
+		FacilityID: facilityIDInt,
+		Color:      color,
+	})
+	if err != nil {
+		log.Printf("book-appointment: AMD error: %v", err)
+
+		// Handle 409 conflict errors with clear messages
+		errStr := err.Error()
+		if strings.Contains(errStr, "conflict") {
+			json.NewEncoder(w).Encode(BookAppointmentResponse{
+				Status:  "error",
+				Message: "This time slot is no longer available. Please check availability again and choose a different slot.",
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Message: "Failed to book appointment: " + err.Error(),
+		})
+		return
+	}
+
+	log.Printf("book-appointment: success appointmentId=%d", apptID)
+
+	json.NewEncoder(w).Encode(BookAppointmentResponse{
+		Status:        "booked",
+		AppointmentID: apptID,
+		Message:       "Appointment booked successfully",
+	})
+}
+
 // AvailabilityRequest is the expected JSON body for availability lookup.
 type AvailabilityRequest struct {
 	Date            string `json:"date"`            // Required: YYYY-MM-DD format
@@ -773,13 +1159,6 @@ type AvailabilityRequest struct {
 	Office          string `json:"office"`          // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
 	Routing         string `json:"routing"`         // Optional: routing rule from verify/add-patient (e.g., "bach_only")
 	PreauthRequired bool   `json:"preauthRequired"` // Optional: if true, enforces 14-day minimum lead time
-}
-
-// providerDisplayNames maps profile IDs to friendly display names.
-var providerDisplayNames = map[string]string{
-	"620":  "Dr. Austin Bach",
-	"2064": "Dr. J. Licht",
-	"2076": "Dr. D. Noel",
 }
 
 // HandleGetAvailability returns available appointment slots for providers.
@@ -806,10 +1185,11 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Reject same-day appointment searches
-	todayEastern := time.Now().In(eastern).Format("2006-01-02")
-	if startDate.Format("2006-01-02") == todayEastern {
-		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Same-day appointments are not available. Please search for tomorrow or later."})
+	// Reject same-day or past date searches
+	todayEastern := time.Now().In(eastern)
+	todayStr := todayEastern.Format("2006-01-02")
+	if startDate.Format("2006-01-02") <= todayStr {
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Same-day and past-date appointments are not available. Please search for tomorrow or later."})
 		return
 	}
 
@@ -818,7 +1198,17 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		startDate, req.Date = enforcePreauthMinDate(startDate, time.Now().In(eastern))
 	}
 
-	log.Printf("availability: date=%s provider=%q office=%q routing=%q preauthRequired=%v", req.Date, req.Provider, req.Office, req.Routing, req.PreauthRequired)
+	// Resolve office config
+	office, err := resolveOffice(req.Office)
+	if err != nil {
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Status:  "error",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	log.Printf("availability: date=%s provider=%q office=%s routing=%q preauthRequired=%v", req.Date, req.Provider, office.ID, req.Routing, req.PreauthRequired)
 
 	// Get auth token
 	tokenData, err := h.tokenManager.GetToken(r.Context())
@@ -851,46 +1241,33 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		facilityMap[f.ID] = f
 	}
 
-	// Resolve office filter to facility ID if provided
-	var facilityFilter string
-	if req.Office != "" {
-		facilityID, ok := domain.LookupFacilityID(req.Office)
-		if !ok {
-			json.NewEncoder(w).Encode(ErrorResponse{
-				Status:  "error",
-				Message: fmt.Sprintf("Unknown office: %q. Valid options: %s", req.Office, strings.Join(domain.ValidOfficeNames(), ", ")),
-			})
-			return
-		}
-		facilityFilter = facilityID
-	}
-
-	// Filter columns to allowed providers
+	// Filter columns to office's allowed providers
 	var allowedColumns []domain.SchedulerColumn
 	for _, col := range setup.Columns {
-		if domain.IsAllowedColumn(col.ID) {
-			if facilityFilter != "" && col.FacilityID != facilityFilter {
+		if !office.IsAllowedColumn(col.ID) {
+			continue
+		}
+		if col.FacilityID != office.FacilityID {
+			continue
+		}
+		if req.Provider != "" {
+			profile, ok := profileMap[col.ProfileID]
+			if !ok {
 				continue
 			}
-			if req.Provider != "" {
-				profile, ok := profileMap[col.ProfileID]
-				if !ok {
-					continue
-				}
-				normalizedProvider := strings.ToUpper(domain.NormalizeForLookup(req.Provider))
-				if !strings.Contains(strings.ToUpper(domain.NormalizeForLookup(profile.Name)), normalizedProvider) &&
-					!strings.Contains(strings.ToUpper(domain.NormalizeForLookup(col.Name)), normalizedProvider) {
-					continue
-				}
+			normalizedProvider := strings.ToUpper(domain.NormalizeForLookup(req.Provider))
+			if !strings.Contains(strings.ToUpper(domain.NormalizeForLookup(profile.Name)), normalizedProvider) &&
+				!strings.Contains(strings.ToUpper(domain.NormalizeForLookup(col.Name)), normalizedProvider) {
+				continue
 			}
-			allowedColumns = append(allowedColumns, col)
 		}
+		allowedColumns = append(allowedColumns, col)
 	}
 
 	// Apply routing filter (insurance-based provider restriction)
 	if req.Routing != "" {
 		rule := domain.ParseRoutingRule(req.Routing)
-		routingColumns := domain.ColumnsForRouting(rule)
+		routingColumns := office.ColumnsForRouting(rule)
 		if routingColumns != nil {
 			var filtered []domain.SchedulerColumn
 			for _, col := range allowedColumns {
@@ -906,15 +1283,8 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Determine location name for response
-	locationName := "All Locations"
-	if facilityFilter != "" {
-		for _, f := range setup.Facilities {
-			if f.ID == facilityFilter {
-				locationName = f.Name
-				break
-			}
-		}
-	} else if len(allowedColumns) > 0 {
+	locationName := office.DisplayName
+	if len(allowedColumns) > 0 {
 		if fac, ok := facilityMap[allowedColumns[0].FacilityID]; ok {
 			locationName = fac.Name
 		}
@@ -925,7 +1295,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 			json.NewEncoder(w).Encode(ErrorResponse{
 				Status:  "error",
 				Message: fmt.Sprintf("No provider found matching %q. Valid providers: %s",
-					req.Provider, strings.Join(domain.ValidProviderNames(), ", ")),
+					req.Provider, strings.Join(office.ValidProviderNames(), ", ")),
 			})
 			return
 		}
@@ -944,34 +1314,51 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	searchDate := startDate
 	var providers []domain.ProviderAvailability
 
-	for attempt := 0; attempt <= 14; attempt++ {
+	maxDate := startDate.AddDate(0, 0, 14)
+	for !searchDate.After(maxDate) {
 		dateStr := searchDate.Format("2006-01-02")
 
-		// Fetch appointments and block holds per column
-		columnIDs := make([]string, len(allowedColumns))
-		for i, col := range allowedColumns {
-			columnIDs[i] = col.ID
+		// Only fetch columns that work this weekday — skip non-working providers
+		var workingColumnIDs []string
+		for _, col := range allowedColumns {
+			if col.WorksOnDay(searchDate.Weekday()) {
+				workingColumnIDs = append(workingColumnIDs, col.ID)
+			}
+		}
+		if len(workingColumnIDs) == 0 {
+			searchDate = searchDate.AddDate(0, 0, 1)
+			log.Printf("availability: no providers work on %s, skipping", dateStr)
+			continue
 		}
 
-		appointmentsByColumn, err := h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, columnIDs, dateStr)
-		if err != nil {
-			log.Printf("availability: failed to get appointments: %v", err)
-			appointmentsByColumn = make(map[string][]domain.Appointment)
-		}
-
-		blockHoldsByColumn, err := h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, columnIDs, dateStr)
-		if err != nil {
-			log.Printf("availability: failed to get block holds: %v", err)
-			blockHoldsByColumn = make(map[string][]domain.BlockHold)
-		}
+		// Fetch appointments and block holds concurrently (independent data)
+		var appointmentsByColumn map[string][]domain.Appointment
+		var blockHoldsByColumn map[string][]domain.BlockHold
+		var fetchWg sync.WaitGroup
+		fetchWg.Add(2)
+		go func() {
+			defer fetchWg.Done()
+			appointmentsByColumn = h.amdRestClient.GetAppointmentsForColumns(r.Context(), tokenData, workingColumnIDs, dateStr)
+		}()
+		go func() {
+			defer fetchWg.Done()
+			blockHoldsByColumn = h.amdRestClient.GetBlockHoldsForColumns(r.Context(), tokenData, workingColumnIDs, dateStr)
+		}()
+		fetchWg.Wait()
 
 		// Calculate availability for each provider
 		providers = nil
 		for _, col := range allowedColumns {
+			// Skip columns where appointment data couldn't be fetched —
+			// safer to omit than to show all slots as available
+			if _, ok := appointmentsByColumn[col.ID]; !ok {
+				log.Printf("availability: skipping column %s — appointment data unavailable", col.ID)
+				continue
+			}
 			profile := profileMap[col.ProfileID]
 			facility := facilityMap[col.FacilityID]
 
-			displayName := providerDisplayNames[col.ProfileID]
+			displayName := office.ProviderDisplayName(col.ProfileID)
 			if displayName == "" {
 				displayName = profile.Name
 			}
@@ -1014,7 +1401,7 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
-		if hasAvailability || attempt == 14 {
+		if hasAvailability {
 			break
 		}
 
@@ -1093,8 +1480,8 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 			continue
 		}
 
-		// AMD 4101: Block if any appointment from a different start time overlaps this slot
-		if hasOverlappingAppointment(slotTime, appointments) {
+		// AMD 4101: Block if any existing appointment overlaps this slot's full booking range
+		if hasOverlappingAppointment(slotTime, interval, appointments) {
 			continue
 		}
 
@@ -1115,15 +1502,18 @@ func calculateAvailableSlots(col domain.SchedulerColumn, appointments []domain.A
 	return slots
 }
 
-// hasOverlappingAppointment checks if any existing appointment's duration covers
-// this slot. AMD returns error 4101 ("Overlaps existing appointment") for ANY
-// overlap, including same-start times. This means maxApptsPerSlot (4186) is
-// effectively unreachable when appointments have duration > 0.
-func hasOverlappingAppointment(slotTime time.Time, appointments []domain.Appointment) bool {
+// hasOverlappingAppointment checks if any existing appointment overlaps with the
+// full booking range [slotTime, slotTime+slotDuration). AMD returns error 4101
+// for ANY overlap between the new appointment's range and an existing appointment,
+// not just when the new start falls inside an existing range. This matters when
+// off-grid appointments exist (e.g., a 15-min appointment at 8:45 from when the
+// column had 15-min intervals blocks a 30-min booking at 8:30).
+func hasOverlappingAppointment(slotTime time.Time, slotDuration time.Duration, appointments []domain.Appointment) bool {
+	slotEnd := slotTime.Add(slotDuration)
 	for _, appt := range appointments {
-		// Block if this slot falls within [apptStart, apptStart+duration)
 		apptEnd := appt.StartDateTime.Add(time.Duration(appt.Duration) * time.Minute)
-		if !slotTime.Before(appt.StartDateTime) && slotTime.Before(apptEnd) {
+		// Two intervals overlap when each starts before the other ends
+		if slotTime.Before(apptEnd) && appt.StartDateTime.Before(slotEnd) {
 			return true
 		}
 	}

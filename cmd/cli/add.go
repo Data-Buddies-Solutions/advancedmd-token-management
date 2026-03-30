@@ -16,6 +16,7 @@ func addPatientCmd() *cobra.Command {
 		street, aptSuite, city, state, zip     string
 		sex, insurance                         string
 		subscriberName, subscriberNum          string
+		office                                 string
 	)
 
 	cmd := &cobra.Command{
@@ -47,6 +48,16 @@ func addPatientCmd() *cobra.Command {
 				return err
 			}
 
+			// Resolve office config
+			officeConfig := domain.DefaultOffice()
+			if office != "" {
+				oc, ok := domain.LookupOffice(office)
+				if !ok {
+					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
+				}
+				officeConfig = oc
+			}
+
 			// Normalize inputs
 			normalizedDOB := domain.NormalizeDOB(dob)
 			formattedPhone := domain.FormatPhone(phone)
@@ -68,6 +79,7 @@ func addPatientCmd() *cobra.Command {
 				State:     strings.ToUpper(state),
 				Zip:       zip,
 				Sex:       normalizedSex,
+				ProfileID: officeConfig.DefaultProfileID,
 			})
 			if err != nil {
 				if strings.Contains(err.Error(), "Duplicate name/DOB") {
@@ -100,7 +112,7 @@ func addPatientCmd() *cobra.Command {
 					"patientId": strippedID,
 					"name":      patientName,
 					"dob":       normalizedDOB,
-					"message":   fmt.Sprintf("%s is not accepted at Spring Hill.", insurance),
+					"message":   fmt.Sprintf("%s is not accepted at %s.", insurance, officeConfig.DisplayName),
 				})
 				return nil
 			}
@@ -118,7 +130,7 @@ func addPatientCmd() *cobra.Command {
 
 			routing := insEntry.Routing
 			if domain.IsMinor(normalizedDOB) && routing != domain.RoutingNotAccepted {
-				routing = domain.RoutingBachOnly
+				routing = officeConfig.PediatricRouting
 			}
 
 			printJSON(map[string]interface{}{
@@ -127,7 +139,7 @@ func addPatientCmd() *cobra.Command {
 				"name":             patientName,
 				"dob":              normalizedDOB,
 				"routing":          string(routing),
-				"allowedProviders": domain.ProvidersForRouting(routing),
+				"allowedProviders": officeConfig.ProvidersForRouting(routing),
 				"preauthRequired":  insEntry.PreauthRequired,
 				"message":          "Patient created and insurance attached successfully",
 			})
@@ -149,6 +161,7 @@ func addPatientCmd() *cobra.Command {
 	cmd.Flags().StringVar(&insurance, "insurance", "", "Insurance plan name (required)")
 	cmd.Flags().StringVar(&subscriberName, "subscriber-name", "", "Subscriber name (required)")
 	cmd.Flags().StringVar(&subscriberNum, "subscriber-num", "", "Subscriber/member number (required)")
+	cmd.Flags().StringVar(&office, "office", "", "Office name (e.g., spring_hill)")
 
 	return cmd
 }

@@ -68,7 +68,7 @@ advancedmd-token-management/
 │   ├── clients/
 │   │   ├── redis.go             # Pooled Redis client
 │   │   ├── advancedmd_xmlrpc.go # XMLRPC client (patients, scheduler setup)
-│   │   └── advancedmd_rest.go   # REST client (appointments, block holds)
+│   │   └── advancedmd_rest.go   # REST client (appointments, booking, block holds)
 │   ├── http/
 │   │   ├── router.go            # chi router setup
 │   │   ├── handlers.go          # Request handlers
@@ -120,6 +120,9 @@ railway up
 | `POST /api/verify-patient` | Yes | Patient lookup by name + DOB, returns insurance routing |
 | `POST /api/add-patient` | Yes | Patient creation + insurance attachment |
 | `POST /api/scheduler/availability` | Yes | Available appointment slots (concurrent per-column fetching) |
+| `POST /api/patient/appointments` | Yes | Upcoming appointments for a verified patient |
+| `POST /api/appointment/book` | Yes | Book appointment (type→color mapping, constants handled server-side) |
+| `POST /api/appointment/cancel` | Yes | Cancel an appointment |
 
 ## Scheduler Availability Endpoint
 
@@ -132,8 +135,8 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 3. Calls `GET /scheduler/blockholds` per column **concurrently** (REST, `forView=day`)
 4. Calculates available slots based on:
    - Provider work hours (from `columnsetting`)
-   - Slot interval (15 or 30 min depending on provider)
-   - **Appointment duration overlap** (AMD 4101): If any appointment's `[start, start+duration)` covers a slot, that slot is hard-blocked — you cannot book inside another appointment's time range
+   - Slot interval (30 min for Bach/Noel, 15 min for Licht)
+   - **Appointment duration overlap** (AMD 4101): If the slot's full booking range `[slotStart, slotStart+slotDuration)` overlaps any existing appointment's range `[apptStart, apptStart+apptDuration)`, that slot is hard-blocked. This is a bidirectional check — it catches both existing appointments that cover the slot AND appointments that start after the slot but within the booking duration (e.g., off-grid appointments from old interval settings)
    - **Same-start capacity** (AMD 4186): Multiple appointments can start at the exact same time, up to `maxApptsPerSlot` (0 = unlimited)
    - **Block holds** from AMD (lunch, meetings, out of office, etc.)
    - Provider workweek (e.g., Dr. Licht only works Wed-Thu)
@@ -162,14 +165,15 @@ Workweek format: 7 chars for Mon-Sun where `1` = works, `0` = off.
 
 ### Allowed Providers (Spring Hill) — LIVE IDs
 
-Updated 2026-02-19 from live AMD system (office 139464).
+Updated 2026-03-30 from live AMD system (office 139464).
 
-Only these columns are exposed (edit `AllowedColumns` in `domain/scheduler.go` to change):
+Only these columns are exposed (edit `OfficeRegistry` in `domain/office.go` to change):
 
 | Column ID | Name | Profile ID | Facility ID | Hours | Interval | Max/Slot | Workweek |
 |-----------|------|------------|-------------|-------|----------|----------|----------|
-| 1513 | DR. BACH - BP | 620 | 1568 | 8:00-17:00 | 15 min | 0 (unlimited) | Mon-Fri |
-| 1551 | DR. LICHT | 2064 | 1568 | 9:00-12:30 | 15 min | 2 | Wed-Thu |
+| 1513 | DR. BACH - BP | 620 | 1568 | 8:00-17:00 | 30 min | 2 | Mon-Fri |
+| 1598 | DR BACH - BP OVERFLOW | 620 | 1568 | 8:30-15:30 | 30 min | 2 | Tue-Thu |
+| 1551 | DR. LICHT | 2064 | 1568 | 9:00-12:30 | 15 min | 2 | Tue-Wed |
 | 1550 | DR. NOEL | 2076 | 1568 | 8:30-16:30 | 30 min | 2 | Mon-Fri |
 
 Spring Hill facility ID: **1568**
@@ -225,7 +229,7 @@ Insurance-based provider routing is enforced server-side. See `INSURANCE_CROSSWA
 9. **AMD single-vs-array responses**: AMD returns a single JSON object when there's one result, but an array when there are multiple. All parsing code must handle both formats (see `AMDLookupResponse` vs `AMDLookupResponseSingle` pattern in `advancedmd_xmlrpc.go`).
 
 10. **AMD appointment conflict errors (409) are two separate checks**:
-   - **4101 — Overlaps existing appointment**: Fires when the new appointment's start time falls within another appointment's `[start, start+duration)`. This is a **hard block** — `maxApptsPerSlot` does NOT override it. You cannot book inside another appointment's time range.
+   - **4101 — Overlaps existing appointment**: Fires when the new appointment's range `[newStart, newStart+newDuration)` overlaps any existing appointment's range `[existingStart, existingStart+existingDuration)`. This is a **hard block** — `maxApptsPerSlot` does NOT override it. This is a bidirectional check: it catches both "my start is inside their range" AND "their start is inside my range" (e.g., a 30-min booking at 8:30 is blocked by a 15-min appointment at 8:45).
    - **4186 — Max appointments per slot exceeded**: Fires when too many appointments share the exact same start time. Controlled by `maxApptsPerSlot` (0 = unlimited).
    - These are independent checks. `maxApptsPerSlot=2` means two appointments can start at 9:00 simultaneously, but you still can't book at 9:15 if a 9:00 appointment has a 30-min duration covering that slot.
    - See `hasOverlappingAppointment()` (4101) and `countSameStartAppointments()` (4186) in `handlers.go`.

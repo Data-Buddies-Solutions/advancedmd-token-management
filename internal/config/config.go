@@ -14,9 +14,6 @@ type Config struct {
 	AdvancedMDOfficeKey string
 	AdvancedMDAppName   string
 
-	// Redis connection
-	RedisURL string
-
 	// API authentication
 	APISecret string
 
@@ -31,7 +28,6 @@ func Load() (*Config, error) {
 		AdvancedMDPassword:  os.Getenv("ADVANCEDMD_PASSWORD"),
 		AdvancedMDOfficeKey: os.Getenv("ADVANCEDMD_OFFICE_KEY"),
 		AdvancedMDAppName:   os.Getenv("ADVANCEDMD_APP_NAME"),
-		RedisURL:            os.Getenv("REDIS_URL"),
 		APISecret:           os.Getenv("API_SECRET"),
 		Port:                os.Getenv("PORT"),
 	}
@@ -53,9 +49,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.AdvancedMDAppName == "" {
 		return nil, fmt.Errorf("ADVANCEDMD_APP_NAME is required")
-	}
-	if cfg.RedisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL is required")
 	}
 	if cfg.APISecret == "" {
 		return nil, fmt.Errorf("API_SECRET is required")

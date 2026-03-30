@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -121,11 +122,40 @@ func (c *AdvancedMDClient) LookupPatient(ctx context.Context, tokenData *domain.
 		},
 	}
 
-	body, err := c.doXMLRPCRequest(ctx, tokenData, reqBody)
+	return c.doPatientLookup(ctx, tokenData, reqBody)
+}
+
+// LookupPatientByPhone searches for patients by phone number.
+// Phone should be digits only (e.g., "7863344429").
+func (c *AdvancedMDClient) LookupPatientByPhone(ctx context.Context, tokenData *domain.TokenData, phone string) ([]domain.Patient, error) {
+	payload := map[string]interface{}{
+		"ppmdmsg": map[string]interface{}{
+			"@action": "lookuppatient",
+			"@class":  "api",
+			"@phone":  phone,
+		},
+	}
+
+	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
 	if err != nil {
 		return nil, err
 	}
 
+	return parseLookupResponse(body)
+}
+
+// doPatientLookup executes a lookuppatient request and parses the response.
+func (c *AdvancedMDClient) doPatientLookup(ctx context.Context, tokenData *domain.TokenData, payload interface{}) ([]domain.Patient, error) {
+	body, err := c.doXMLRPCRequest(ctx, tokenData, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseLookupResponse(body)
+}
+
+// parseLookupResponse handles AMD's single-vs-array patient response format.
+func parseLookupResponse(body []byte) ([]domain.Patient, error) {
 	// Try array response first
 	var arrayResp AMDLookupResponse
 	if err := json.Unmarshal(body, &arrayResp); err == nil {
@@ -158,6 +188,7 @@ type AddPatientParams struct {
 	State     string
 	Zip       string
 	Sex       string
+	ProfileID string // Provider profile ID for the office (e.g., "620")
 }
 
 // AddPatient creates a new patient in AdvancedMD.
@@ -165,6 +196,12 @@ type AddPatientParams struct {
 func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.TokenData, params AddPatientParams) (string, string, string, error) {
 	name := params.LastName + "," + params.FirstName
 	msgTime := time.Now().Format("01/02/2006 03:04:05 PM")
+
+	profileID := params.ProfileID
+	if profileID == "" {
+		log.Printf("WARNING: addpatient called without ProfileID, defaulting to 620")
+		profileID = "620"
+	}
 
 	payload := map[string]interface{}{
 		"ppmdmsg": map[string]interface{}{
@@ -182,7 +219,7 @@ func (c *AdvancedMDClient) AddPatient(ctx context.Context, tokenData *domain.Tok
 					"@dob":               params.DOB,
 					"@ssn":               "",
 					"@chart":             "AUTO",
-					"@profile":           "620",
+					"@profile":           profileID,
 					"address": map[string]interface{}{
 						"@address1": params.AptSuite,
 						"@address2": params.Street,
@@ -456,41 +493,14 @@ type AMDColumnList struct {
 	Columns interface{} `json:"column"` // Can be single object or array
 }
 
-// AMDColumn represents a single scheduler column from AMD.
-type AMDColumn struct {
-	ID              string `json:"@id"`
-	Name            string `json:"@name"`
-	Profile         string `json:"@profile"`
-	Facility        string `json:"@facility"`
-	StartTime       string `json:"@starttime"`
-	EndTime         string `json:"@endtime"`
-	Interval        string `json:"@interval"`
-	MaxApptsPerSlot string `json:"@maxapptsperslot"`
-	Workweek        string `json:"@workweek"`
-}
-
 // AMDProfileList holds the list of provider profiles.
 type AMDProfileList struct {
 	Profiles interface{} `json:"profile"` // Can be single object or array
 }
 
-// AMDProfile represents a single provider profile from AMD.
-type AMDProfile struct {
-	ID   string `json:"@id"`
-	Code string `json:"@code"`
-	Name string `json:"@name"`
-}
-
 // AMDFacilityList holds the list of facilities.
 type AMDFacilityList struct {
 	Facilities interface{} `json:"facility"` // Can be single object or array
-}
-
-// AMDFacility represents a single facility from AMD.
-type AMDFacility struct {
-	ID   string `json:"@id"`
-	Code string `json:"@code"`
-	Name string `json:"@name"`
 }
 
 // GetSchedulerSetup retrieves the scheduler configuration from AdvancedMD.
@@ -699,14 +709,14 @@ func normalizeTime(t string) string {
 		return t
 	}
 
+	// Handle "H:MM" format (e.g., "8:00") — must check before HHMM
+	if len(t) == 4 && t[1] == ':' {
+		return "0" + t
+	}
+
 	// Handle "HHMM" format (e.g., "0800")
 	if len(t) == 4 {
 		return t[:2] + ":" + t[2:]
-	}
-
-	// Handle "H:MM" format (e.g., "8:00")
-	if len(t) == 4 && t[1] == ':' {
-		return "0" + t
 	}
 
 	return t

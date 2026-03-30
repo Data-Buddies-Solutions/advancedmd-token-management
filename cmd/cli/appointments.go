@@ -16,22 +16,14 @@ import (
 	"golang.org/x/text/language"
 )
 
-// appointmentTypeNames maps AMD appointment type IDs to friendly names.
-var appointmentTypeNames = map[int]string{
-	1006: "New Adult Medical",
-	1004: "New Pediatric Medical",
-	1007: "Established Adult Medical (Follow Up)",
-	1005: "Established Pediatric Medical (Follow Up)",
-	1008: "Post Op",
-}
-
 func appointmentsCmd() *cobra.Command {
-	var patientID string
+	var patientID, office string
 
 	cmd := &cobra.Command{
 		Use:   "appointments",
 		Short: "Get upcoming appointments for a patient",
-		Example: `  amd appointments --patient-id 12345`,
+		Example: `  amd appointments --patient-id 12345
+  amd appointments --patient-id 12345 --office spring_hill`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if patientID == "" {
 				return fmt.Errorf("--patient-id is required")
@@ -46,14 +38,20 @@ func appointmentsCmd() *cobra.Command {
 				return err
 			}
 
+			// Resolve office config
+			officeConfig := domain.DefaultOffice()
+			if office != "" {
+				oc, ok := domain.LookupOffice(office)
+				if !ok {
+					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
+				}
+				officeConfig = oc
+			}
+
 			tokenData := getToken()
 
-			// Build column ID string for all allowed columns
-			var colIDs []string
-			for id := range domain.AllowedColumns {
-				colIDs = append(colIDs, id)
-			}
-			columnIDStr := strings.Join(colIDs, "-")
+			// Build column ID string for office's allowed columns
+			columnIDStr := strings.Join(officeConfig.AllowedColumnIDs(), "-")
 
 			// Fetch current + next month concurrently
 			now := time.Now().In(eastern)
@@ -119,7 +117,7 @@ func appointmentsCmd() *cobra.Command {
 
 				typeName := ""
 				if len(a.AppointmentTypes) > 0 {
-					if name, ok := appointmentTypeNames[a.AppointmentTypes[0]]; ok {
+					if name, ok := officeConfig.AppointmentTypeName(a.AppointmentTypes[0]); ok {
 						typeName = name
 					}
 				}
@@ -128,7 +126,7 @@ func appointmentsCmd() *cobra.Command {
 					ID:        a.ID,
 					Date:      startTime.Format("Monday, January 2, 2006"),
 					Time:      startTime.Format("3:04 PM"),
-					Provider:  friendlyProviderName(a.Provider),
+					Provider:  officeConfig.FriendlyProviderName(a.Provider),
 					Type:      typeName,
 					Facility:  friendlyFacilityName(a.Facility),
 					Confirmed: a.ConfirmDate != nil,
@@ -157,6 +155,7 @@ func appointmentsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&patientID, "patient-id", "", "Patient ID (required)")
+	cmd.Flags().StringVar(&office, "office", "", "Office name (e.g., spring_hill)")
 
 	return cmd
 }

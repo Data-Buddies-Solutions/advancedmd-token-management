@@ -13,7 +13,6 @@ func setEnvVars(t *testing.T) func() {
 		"ADVANCEDMD_PASSWORD":   "testpass",
 		"ADVANCEDMD_OFFICE_KEY": "991TEST",
 		"ADVANCEDMD_APP_NAME":   "testapp",
-		"REDIS_URL":             "redis://localhost:6379",
 		"API_SECRET":            "test-secret",
 	}
 
@@ -49,9 +48,6 @@ func TestLoad_Success(t *testing.T) {
 	}
 	if cfg.AdvancedMDAppName != "testapp" {
 		t.Errorf("AdvancedMDAppName = %q, want 'testapp'", cfg.AdvancedMDAppName)
-	}
-	if cfg.RedisURL != "redis://localhost:6379" {
-		t.Errorf("RedisURL = %q, want 'redis://localhost:6379'", cfg.RedisURL)
 	}
 	if cfg.APISecret != "test-secret" {
 		t.Errorf("APISecret = %q, want 'test-secret'", cfg.APISecret)
@@ -96,7 +92,6 @@ func TestLoad_MissingRequiredFields(t *testing.T) {
 		{"missing password", "ADVANCEDMD_PASSWORD"},
 		{"missing office key", "ADVANCEDMD_OFFICE_KEY"},
 		{"missing app name", "ADVANCEDMD_APP_NAME"},
-		{"missing redis URL", "REDIS_URL"},
 		{"missing API secret", "API_SECRET"},
 	}
 

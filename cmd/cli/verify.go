@@ -12,34 +12,59 @@ import (
 )
 
 func verifyCmd() *cobra.Command {
-	var lastName, firstName, dob string
+	var lastName, firstName, dob, phone, office string
 
 	cmd := &cobra.Command{
 		Use:   "verify",
-		Short: "Verify a patient by name and date of birth",
+		Short: "Verify a patient by name or phone number and date of birth",
 		Example: `  amd verify --last Doe --dob 1990-01-15
-  amd verify --last Doe --first John --dob 01/15/1990`,
+  amd verify --last Doe --first John --dob 01/15/1990
+  amd verify --phone 7863344429 --dob 10/31/1996
+  amd verify --last Doe --dob 1990-01-15 --office spring_hill`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if lastName == "" || dob == "" {
-				return fmt.Errorf("--last and --dob are required")
+			if lastName == "" && phone == "" {
+				return fmt.Errorf("--last or --phone is required")
+			}
+			if dob == "" {
+				return fmt.Errorf("--dob is required")
 			}
 
 			if err := mustBootstrap(); err != nil {
 				return err
 			}
 
+			// Resolve office config
+			officeConfig := domain.DefaultOffice()
+			if office != "" {
+				oc, ok := domain.LookupOffice(office)
+				if !ok {
+					return fmt.Errorf("unknown office %q — valid: %s", office, strings.Join(domain.ValidOfficeNames(), ", "))
+				}
+				officeConfig = oc
+			}
+
 			normalizedDOB := domain.NormalizeDOB(dob)
-			normalizedLastName := domain.StripDiacritics(lastName)
-			normalizedFirstName := domain.StripDiacritics(firstName)
 
 			tokenData := getToken()
 
-			patients, err := app.amdClient.LookupPatient(cmd.Context(), tokenData, normalizedLastName, normalizedFirstName)
-			if err != nil {
-				return fmt.Errorf("failed to lookup patient: %w", err)
+			var patients []domain.Patient
+			var err error
+			if phone != "" {
+				digits := domain.NormalizePhoneDigits(phone)
+				patients, err = app.amdClient.LookupPatientByPhone(cmd.Context(), tokenData, digits)
+				if err != nil {
+					return fmt.Errorf("failed to lookup patient by phone: %w", err)
+				}
+				log.Printf("lookup returned %d patients for phone %q", len(patients), digits)
+			} else {
+				normalizedLastName := domain.StripDiacritics(lastName)
+				normalizedFirstName := domain.StripDiacritics(firstName)
+				patients, err = app.amdClient.LookupPatient(cmd.Context(), tokenData, normalizedLastName, normalizedFirstName)
+				if err != nil {
+					return fmt.Errorf("failed to lookup patient: %w", err)
+				}
+				log.Printf("lookup returned %d patients for %q", len(patients), normalizedLastName)
 			}
-
-			log.Printf("lookup returned %d patients for %q", len(patients), normalizedLastName)
 
 			// Filter by DOB
 			var matching []domain.Patient
@@ -58,7 +83,7 @@ func verifyCmd() *cobra.Command {
 				return nil
 
 			case 1:
-				return printVerifiedPatient(cmd.Context(), matching[0])
+				return printVerifiedPatient(cmd.Context(), matching[0], officeConfig)
 
 			default:
 				// Multiple matches — try to disambiguate by first name
@@ -66,7 +91,7 @@ func verifyCmd() *cobra.Command {
 					upperFirstName := strings.ToUpper(firstName)
 					for _, p := range matching {
 						if strings.HasPrefix(p.FirstName, upperFirstName) {
-							return printVerifiedPatient(cmd.Context(), p)
+							return printVerifiedPatient(cmd.Context(), p, officeConfig)
 						}
 					}
 					printJSON(map[string]string{
@@ -91,15 +116,17 @@ func verifyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&lastName, "last", "", "Patient last name (required)")
+	cmd.Flags().StringVar(&lastName, "last", "", "Patient last name (required if no --phone)")
 	cmd.Flags().StringVar(&firstName, "first", "", "Patient first name (for disambiguation)")
 	cmd.Flags().StringVar(&dob, "dob", "", "Date of birth (e.g., 01/15/1990 or 1990-01-15)")
+	cmd.Flags().StringVar(&phone, "phone", "", "Phone number (alternative to --last)")
+	cmd.Flags().StringVar(&office, "office", "", "Office name (e.g., spring_hill)")
 
 	return cmd
 }
 
 // printVerifiedPatient fetches demographics and prints the verified patient result.
-func printVerifiedPatient(ctx context.Context, p domain.Patient) error {
+func printVerifiedPatient(ctx context.Context, p domain.Patient, officeConfig *domain.OfficeConfig) error {
 	tokenData := getToken()
 
 	carrierName, carrierID, err := app.amdClient.GetDemographic(ctx, tokenData, p.ID)
@@ -123,13 +150,13 @@ func printVerifiedPatient(ctx context.Context, p domain.Patient) error {
 		resp["insuranceCarrierId"] = carrierID
 		routing, ambiguous := domain.RoutingForCarrierID(carrierID)
 		resp["routing"] = string(routing)
-		resp["allowedProviders"] = domain.ProvidersForRouting(routing)
+		resp["allowedProviders"] = officeConfig.ProvidersForRouting(routing)
 		resp["routingAmbiguous"] = ambiguous
 
 		// Pediatric override
 		if domain.IsMinor(p.DOB) && routing != domain.RoutingNotAccepted {
-			resp["routing"] = string(domain.RoutingBachOnly)
-			resp["allowedProviders"] = domain.ProvidersForRouting(domain.RoutingBachOnly)
+			resp["routing"] = string(officeConfig.PediatricRouting)
+			resp["allowedProviders"] = officeConfig.ProvidersForRouting(officeConfig.PediatricRouting)
 			resp["routingAmbiguous"] = false
 		}
 	}

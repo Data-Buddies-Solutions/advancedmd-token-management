@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
 )
 
@@ -15,10 +14,9 @@ const (
 	refreshInterval = 20 * time.Hour
 )
 
-// TokenManager handles token caching and background refresh.
+// TokenManager handles in-memory token caching and background refresh.
 type TokenManager struct {
 	authenticator *Authenticator
-	redis         *clients.RedisClient
 
 	mu        sync.RWMutex
 	tokenData *domain.TokenData
@@ -28,30 +26,19 @@ type TokenManager struct {
 }
 
 // NewTokenManager creates a new TokenManager.
-func NewTokenManager(auth *Authenticator, redis *clients.RedisClient) *TokenManager {
+func NewTokenManager(auth *Authenticator) *TokenManager {
 	return &TokenManager{
 		authenticator: auth,
-		redis:         redis,
 		stopCh:        make(chan struct{}),
 	}
 }
 
-// Start begins the background token refresh goroutine.
-// It immediately loads the cached token and starts periodic refresh.
+// Start authenticates with AMD and begins the background refresh goroutine.
 func (tm *TokenManager) Start(ctx context.Context) error {
-	// Try to load existing token from Redis
-	if err := tm.loadFromCache(ctx); err != nil {
-		log.Printf("Warning: failed to load token from cache: %v", err)
+	if err := tm.refresh(ctx); err != nil {
+		return err
 	}
 
-	// If no cached token, get a fresh one
-	if tm.tokenData == nil {
-		if err := tm.refresh(ctx); err != nil {
-			return err
-		}
-	}
-
-	// Start background refresh goroutine
 	tm.wg.Add(1)
 	go tm.backgroundRefresh()
 
@@ -75,7 +62,6 @@ func (tm *TokenManager) GetToken(ctx context.Context) (*domain.TokenData, error)
 		return data, nil
 	}
 
-	// On-demand refresh if no token in memory
 	if err := tm.refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -85,24 +71,8 @@ func (tm *TokenManager) GetToken(ctx context.Context) (*domain.TokenData, error)
 	return tm.tokenData, nil
 }
 
-// loadFromCache loads the token from Redis into memory.
-func (tm *TokenManager) loadFromCache(ctx context.Context) error {
-	data, err := tm.redis.GetToken(ctx)
-	if err != nil {
-		return err
-	}
 
-	if data != nil {
-		tm.mu.Lock()
-		tm.tokenData = data
-		tm.mu.Unlock()
-		log.Printf("Loaded token from cache (created: %s)", data.CreatedAt)
-	}
-
-	return nil
-}
-
-// refresh performs authentication and updates both memory and Redis cache.
+// refresh performs authentication and updates the in-memory cache.
 func (tm *TokenManager) refresh(ctx context.Context) error {
 	log.Println("Refreshing AdvancedMD token...")
 
@@ -113,16 +83,9 @@ func (tm *TokenManager) refresh(ctx context.Context) error {
 
 	data := domain.BuildTokenData(token, webserverURL)
 
-	// Update memory cache
 	tm.mu.Lock()
 	tm.tokenData = data
 	tm.mu.Unlock()
-
-	// Update Redis cache
-	if err := tm.redis.SaveToken(ctx, data); err != nil {
-		log.Printf("Warning: failed to save token to Redis: %v", err)
-		// Don't return error - we still have the token in memory
-	}
 
 	log.Printf("Token refreshed successfully (created: %s)", data.CreatedAt)
 	return nil

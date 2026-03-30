@@ -4,6 +4,36 @@ _Tracks every change to the workspace prompt files so we know exactly what shift
 
 ---
 
+## 2026-03-30
+
+### Source: Off-grid appointment overlap bug (booking failure on available slots)
+
+Call transcript showed agent offering 8:30 AM on May 13 for Dr. Bach, but all 3 booking attempts failed with AMD 4101 ("overlaps existing appointment"). Root cause: a 15-min appointment at 8:45 (booked when Bach had 15-min intervals) sat between the 30-min grid lines. The overlap check only tested one direction — whether the slot start fell inside an existing appointment — but not whether the booking's duration would extend into an appointment starting later.
+
+---
+
+### handlers.go + availability.go — Bidirectional overlap check
+
+**Fixed: `hasOverlappingAppointment` now checks both overlap directions**
+- Was: `slotStart ∈ [apptStart, apptEnd)` — only caught appointments that started before the slot
+- Now: `slotStart < apptEnd AND apptStart < slotEnd` — catches any overlap between the booking range and existing appointments
+- Function now accepts `slotDuration` parameter to define the booking footprint
+- Applied to both server handler (`internal/http/handlers.go`) and CLI (`cmd/cli/availability.go`)
+- Added 3 test cases for off-grid scenarios (8:45 blocking 8:30, 9:15 blocking 9:00, 8:45 NOT blocking 8:00)
+
+**Result on May 13 for Dr. Bach:**
+- Before: 10 available slots, first at 8:30 AM (2 phantom slots that would fail to book)
+- After: 8 available slots, first at 10:30 AM (all slots genuinely bookable)
+
+---
+
+### CLAUDE.md — Updated Bach interval + AMD 4101 description
+
+- Bach interval corrected: 15 min → 30 min (changed in AMD since last audit on 2026-02-19)
+- AMD 4101 description updated to reflect bidirectional overlap behavior
+
+---
+
 ## 2026-03-16
 
 ### Source: Transfer resistance + "you are the office" language fix

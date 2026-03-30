@@ -15,17 +15,17 @@ func tokenCmd() *cobra.Command {
 				return err
 			}
 
-			resp := getToken().ToResponse()
+			td := getToken()
 			nowEST := time.Now().In(eastern)
 
 			printJSON(map[string]interface{}{
-				"amd_token":         resp.Token,
-				"amd_rest_api_base": resp.RestApiBase,
-				"amd_xmlrpc_url":    resp.XmlrpcURL,
-				"amd_ehr_api_base":  resp.EhrApiBase,
+				"amd_token":         td.Token,
+				"amd_rest_api_base": td.RestApiBase,
+				"amd_xmlrpc_url":    td.XmlrpcURL,
+				"amd_ehr_api_base":  td.EhrApiBase,
 				"current_date":      nowEST.Format("Monday, January 2, 2006"),
 				"current_time":      nowEST.Format("3:04 PM"),
-				"created_at":        resp.CreatedAt,
+				"created_at":        td.CreatedAt,
 			})
 			return nil
 		},

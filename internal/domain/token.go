@@ -32,16 +32,6 @@ type TokenData struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-// TokenResponse is the JSON response structure for the /api/token endpoint.
-type TokenResponse struct {
-	Token        string `json:"token"`
-	CookieToken  string `json:"cookieToken"`
-	WebserverURL string `json:"webserverUrl"`
-	XmlrpcURL    string `json:"xmlrpcUrl"`
-	RestApiBase  string `json:"restApiBase"`
-	EhrApiBase   string `json:"ehrApiBase"`
-	CreatedAt    string `json:"createdAt"`
-}
 
 // stripProtocol removes the https:// prefix from a URL.
 func stripProtocol(url string) string {
@@ -82,20 +72,3 @@ func BuildTokenData(token, webserverURL string) *TokenData {
 	}
 }
 
-// ToResponse converts TokenData to a TokenResponse for API output.
-func (d *TokenData) ToResponse() TokenResponse {
-	return TokenResponse{
-		Token:        d.Token,
-		CookieToken:  d.CookieToken,
-		WebserverURL: d.WebserverURL,
-		XmlrpcURL:    d.XmlrpcURL,
-		RestApiBase:  d.RestApiBase,
-		EhrApiBase:   d.EhrApiBase,
-		CreatedAt:    d.CreatedAt,
-	}
-}
-
-// RawToken returns the token without the "Bearer " prefix.
-func (d *TokenData) RawToken() string {
-	return strings.TrimPrefix(d.Token, "Bearer ")
-}

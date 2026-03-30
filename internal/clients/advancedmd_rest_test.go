@@ -76,12 +76,8 @@ func TestGetAppointmentsForColumns_Concurrent(t *testing.T) {
 	columnIDs := []string{"1513", "1551", "1550"}
 
 	start := time.Now()
-	result, err := client.GetAppointmentsForColumns(context.Background(), tokenData, columnIDs, "2026-03-03")
+	result := client.GetAppointmentsForColumns(context.Background(), tokenData, columnIDs, "2026-03-03")
 	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Fatalf("GetAppointmentsForColumns failed: %v", err)
-	}
 
 	// Verify all 3 columns returned
 	if len(result) != 3 {
@@ -128,12 +124,8 @@ func TestGetBlockHoldsForColumns_Concurrent(t *testing.T) {
 	columnIDs := []string{"1513", "1551", "1550"}
 
 	start := time.Now()
-	result, err := client.GetBlockHoldsForColumns(context.Background(), tokenData, columnIDs, "2026-03-03")
+	result := client.GetBlockHoldsForColumns(context.Background(), tokenData, columnIDs, "2026-03-03")
 	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Fatalf("GetBlockHoldsForColumns failed: %v", err)
-	}
 
 	if len(result) != 3 {
 		t.Fatalf("Expected 3 columns in result, got %d", len(result))
@@ -148,7 +140,7 @@ func TestGetBlockHoldsForColumns_Concurrent(t *testing.T) {
 	}
 }
 
-func TestGetAppointmentsForColumns_ErrorPropagation(t *testing.T) {
+func TestGetAppointmentsForColumns_PartialFailure(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		colID := r.URL.Query().Get("columnId")
 		if colID == "1551" {
@@ -163,9 +155,19 @@ func TestGetAppointmentsForColumns_ErrorPropagation(t *testing.T) {
 	client, tokenData, cleanup := newTestRestClient(t, handler)
 	defer cleanup()
 
-	_, err := client.GetAppointmentsForColumns(context.Background(), tokenData, []string{"1513", "1551", "1550"}, "2026-03-03")
-	if err == nil {
-		t.Fatal("Expected error when one column fails, got nil")
+	result := client.GetAppointmentsForColumns(context.Background(), tokenData, []string{"1513", "1551", "1550"}, "2026-03-03")
+
+	// Successful columns should be present
+	if _, ok := result["1513"]; !ok {
+		t.Error("Expected column 1513 in results (succeeded)")
+	}
+	if _, ok := result["1550"]; !ok {
+		t.Error("Expected column 1550 in results (succeeded)")
+	}
+
+	// Failed column should be absent
+	if _, ok := result["1551"]; ok {
+		t.Error("Expected column 1551 to be absent from results (failed)")
 	}
 }
 
@@ -175,10 +177,7 @@ func TestGetAppointmentsForColumns_EmptyColumns(t *testing.T) {
 	}))
 	defer cleanup()
 
-	result, err := client.GetAppointmentsForColumns(context.Background(), tokenData, []string{}, "2026-03-03")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
+	result := client.GetAppointmentsForColumns(context.Background(), tokenData, []string{}, "2026-03-03")
 	if len(result) != 0 {
 		t.Errorf("Expected empty result, got %d entries", len(result))
 	}
@@ -195,10 +194,7 @@ func TestGetAppointmentsForColumns_SingleColumn(t *testing.T) {
 	client, tokenData, cleanup := newTestRestClient(t, handler)
 	defer cleanup()
 
-	result, err := client.GetAppointmentsForColumns(context.Background(), tokenData, []string{"1513"}, "2026-03-03")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
+	result := client.GetAppointmentsForColumns(context.Background(), tokenData, []string{"1513"}, "2026-03-03")
 	if len(result) != 1 {
 		t.Fatalf("Expected 1 column, got %d", len(result))
 	}

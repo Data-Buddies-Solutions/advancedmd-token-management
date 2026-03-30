@@ -34,6 +34,8 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 	"miami childrens health plan":    {CarrierID: "car40907", Routing: RoutingAll},
 	"simply medicaid":                {CarrierID: "car40907", Routing: RoutingAll},
 	"vivida":                         {CarrierID: "car40907", Routing: RoutingAll},
+	"eye care health solutions":      {CarrierID: "car40907", Routing: RoutingAll},
+	"icare":                          {CarrierID: "car40907", Routing: RoutingAll},
 	"doctors health medicare":        {CarrierID: "car40907", Routing: RoutingNotAccepted},
 
 	// ── United Healthcare — car40923 (12 plans) ─────────────────────────
@@ -47,11 +49,14 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 	"united healthcare hmo":                {CarrierID: "car40923", Routing: RoutingAll, PreauthRequired: true},
 	"united healthcare surest":             {CarrierID: "car40923", Routing: RoutingAll},
 	"umr":                                  {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare choice":              {CarrierID: "car40923", Routing: RoutingAll},
+	"united healthcare dual complete":       {CarrierID: "car40923", Routing: RoutingAll},
 	"united healthcare individual exchange": {CarrierID: "car40923", Routing: RoutingBachLicht},
 	"preferred care partners":              {CarrierID: "car40923", Routing: RoutingNotAccepted},
 
 	// ── Envolve Network — car281245 (8 plans) ───────────────────────────
 	"ambetter":                {CarrierID: "car281245", Routing: RoutingAll},
+	"ambetter premier":        {CarrierID: "car281245", Routing: RoutingAll},
 	"ambetter select":         {CarrierID: "car281245", Routing: RoutingAll},
 	"ambetter value":          {CarrierID: "car281245", Routing: RoutingAll},
 	"childrens medical services": {CarrierID: "car281245", Routing: RoutingAll},
@@ -65,6 +70,7 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 	"humana medicaid":         {CarrierID: "car308175", Routing: RoutingBachOnly, PreauthRequired: true},
 	"humana medicare":         {CarrierID: "car308175", Routing: RoutingBachOnly},
 	"humana ppo":              {CarrierID: "car308175", Routing: RoutingBachOnly},
+	"humana healthy horizons":  {CarrierID: "car308175", Routing: RoutingBachOnly},
 	"humana premier hmo":      {CarrierID: "car308175", Routing: RoutingBachOnly},
 	"molina medicare":         {CarrierID: "car308175", Routing: RoutingBachOnly},
 	"cigna medicare advantage": {CarrierID: "car308175", Routing: RoutingBachLicht},
@@ -87,8 +93,9 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 	"cigna local plus":                {CarrierID: "car301345", Routing: RoutingBachOnly},
 
 	// ── Aetna — car40887 (4 plans) ──────────────────────────────────────
-	"aetna":                         {CarrierID: "car40887", Routing: RoutingAll},
-	"aetna qhp individual exchange": {CarrierID: "car40887", Routing: RoutingAll},
+	"aetna":                              {CarrierID: "car40887", Routing: RoutingAll},
+	"aetna medicare signature ppo":       {CarrierID: "car40887", Routing: RoutingAll},
+	"aetna qhp individual exchange":      {CarrierID: "car40887", Routing: RoutingAll},
 	"aetna epo north broward":       {CarrierID: "car40887", Routing: RoutingBachOnly},
 	"aetna epo university of miami": {CarrierID: "car40887", Routing: RoutingNotAccepted},
 
@@ -113,6 +120,11 @@ var InsuranceNameMap = map[string]InsuranceEntry{
 	"multiplan phcs":           {CarrierID: "car301648", Routing: RoutingAll},
 	"sunhealth":                {CarrierID: "car308086", Routing: RoutingAll},
 	"united healthcare global": {CarrierID: "car284971", Routing: RoutingAll},
+
+	// ── Not Accepted at Spring Hill (Medical) ────────────────────────────
+	"care plus":          {CarrierID: "", Routing: RoutingNotAccepted},
+	"optimum healthcare": {CarrierID: "", Routing: RoutingNotAccepted},
+	"care health plus":   {CarrierID: "", Routing: RoutingNotAccepted},
 }
 
 // CarrierRoutingMap maps AMD carrier IDs to routing rules for existing patients.
@@ -151,34 +163,6 @@ var AmbiguousCarriers = map[string]bool{
 	"car301345": true, // CIGNA HMO
 }
 
-// ColumnsForRouting returns the allowed column IDs for a routing rule.
-func ColumnsForRouting(rule RoutingRule) map[string]bool {
-	switch rule {
-	case RoutingNotAccepted:
-		return nil
-	case RoutingBachOnly:
-		return map[string]bool{"1513": true}
-	case RoutingBachLicht:
-		return map[string]bool{"1513": true, "1551": true}
-	default:
-		return map[string]bool{"1513": true, "1551": true, "1550": true}
-	}
-}
-
-// ProvidersForRouting returns the display names for a routing rule.
-func ProvidersForRouting(rule RoutingRule) []string {
-	switch rule {
-	case RoutingNotAccepted:
-		return nil
-	case RoutingBachOnly:
-		return []string{"Dr. Bach"}
-	case RoutingBachLicht:
-		return []string{"Dr. Bach", "Dr. Licht"}
-	default:
-		return []string{"Dr. Bach", "Dr. Licht", "Dr. Noel"}
-	}
-}
-
 // InsuranceAliases maps common shorthand names to canonical InsuranceNameMap keys.
 // Catches what patients naturally say and what the LLM might truncate to.
 // Only alias when ALL plans under that shorthand share the same routing.
@@ -211,7 +195,15 @@ var InsuranceAliases = map[string]string{
 	"doctors health": "doctors health medicare",
 	"miami childrens": "miami childrens health plan",
 	"childrens medical": "childrens medical services",
-	"sun health":     "sunhealth",
+	"sun health":          "sunhealth",
+	"duocomplete":         "united healthcare dual complete",
+	"duo complete":        "united healthcare dual complete",
+	"uhc dual complete":   "united healthcare dual complete",
+	"uhc choice":          "united healthcare choice",
+	"icare health solutions": "icare",
+	"eye care health":     "eye care health solutions",
+	"optimum":             "optimum healthcare",
+	"care health":         "care health plus",
 }
 
 // LookupInsurance looks up an insurance name and returns its entry.

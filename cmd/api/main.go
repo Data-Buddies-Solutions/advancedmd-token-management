@@ -12,6 +12,7 @@ import (
 	"advancedmd-token-management/internal/auth"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/config"
+	"advancedmd-token-management/internal/domain"
 	apphttp "advancedmd-token-management/internal/http"
 )
 
@@ -22,19 +23,14 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.Printf("Starting gateway v%s", version)
 
+	// Initialize office registry based on AMD_ENV
+	domain.InitRegistry(os.Getenv("AMD_ENV"))
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-
-	// Initialize Redis client
-	redisClient, err := clients.NewRedisClient(cfg.RedisURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	defer redisClient.Close()
-	log.Println("Connected to Redis")
 
 	// Initialize shared HTTP client for AdvancedMD calls
 	httpClient := &http.Client{
@@ -55,7 +51,7 @@ func main() {
 	}, httpClient)
 
 	// Initialize token manager
-	tokenManager := auth.NewTokenManager(authenticator, redisClient)
+	tokenManager := auth.NewTokenManager(authenticator)
 
 	// Start token manager (loads cache and starts background refresh)
 	ctx := context.Background()

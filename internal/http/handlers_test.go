@@ -48,16 +48,16 @@ func TestHandleVerifyPatient_ValidationErrors(t *testing.T) {
 			expectedMsg: "Invalid JSON body",
 		},
 		{
-			name:        "missing lastName",
+			name:        "missing lastName and phone",
 			method:      "POST",
 			body:        `{"dob":"01/15/1980"}`,
-			expectedMsg: "lastName is required",
+			expectedMsg: "Provide phone + firstName, phone + dob, or lastName + dob",
 		},
 		{
 			name:        "missing dob",
 			method:      "POST",
 			body:        `{"lastName":"Smith"}`,
-			expectedMsg: "dob is required",
+			expectedMsg: "Provide phone + firstName, phone + dob, or lastName + dob",
 		},
 	}
 
@@ -301,69 +301,104 @@ func TestHasOverlappingAppointment(t *testing.T) {
 	tests := []struct {
 		name         string
 		slotTime     time.Time
+		slotDuration time.Duration
 		appointments []domain.Appointment
 		expected     bool
 	}{
 		{
 			name:         "no appointments",
 			slotTime:     time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
 			appointments: nil,
 			expected:     false,
 		},
 		{
 			name:     "30-min appt ends exactly at slot — no overlap",
 			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 30},
 			},
-			expected: false, // 9:00+30min=9:30, slot 9:30 is NOT inside [9:00, 9:30)
+			expected: false, // 9:00+30min=9:30, [9:30,10:00) does not overlap [9:00,9:30)
 		},
 		{
 			name:     "60-min appt overlaps into next slot — blocked (4101)",
 			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},
 			},
-			expected: true, // 9:30 falls within [9:00, 10:00)
+			expected: true, // [9:30,10:00) overlaps [9:00,10:00)
 		},
 		{
 			name:     "60-min appt does not overlap past its end",
 			slotTime: time.Date(2026, 3, 6, 10, 0, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},
 			},
-			expected: false, // 10:00 is NOT inside [9:00, 10:00)
+			expected: false, // [10:00,10:30) does not overlap [9:00,10:00)
 		},
 		{
 			name:     "same-start-time appt is blocked — no double booking",
 			slotTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 30},
 			},
-			expected: true, // same start time falls within [9:00, 9:30) — blocked
+			expected: true, // [9:00,9:30) overlaps [9:00,9:30)
 		},
 		{
 			name:     "Licht 12:15 scenario — Bourque at 12:00 with 30-min duration blocks 12:15",
 			slotTime: time.Date(2026, 3, 10, 12, 15, 0, 0, eastern),
+			slotDuration: 15 * time.Minute,
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 10, 12, 0, 0, 0, eastern), Duration: 30}, // Bourque 12:00-12:30
 			},
-			expected: true, // 12:15 is inside [12:00, 12:30) — AMD 4101
+			expected: true, // [12:15,12:30) overlaps [12:00,12:30) — AMD 4101
 		},
 		{
 			name:     "overlap from earlier appt even with same-start appt present",
 			slotTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
 			appointments: []domain.Appointment{
 				{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},  // overlaps into 9:30
 				{StartDateTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern), Duration: 30}, // starts at 9:30
 			},
 			expected: true, // the 9:00 appt overlaps — hard block regardless of the 9:30 same-start
 		},
+		{
+			name:     "off-grid appt at 8:45 blocks 30-min booking at 8:30",
+			slotTime: time.Date(2026, 5, 13, 8, 30, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 5, 13, 8, 45, 0, 0, eastern), Duration: 15},
+			},
+			expected: true, // [8:30,9:00) overlaps [8:45,9:00) — the bug this fix addresses
+		},
+		{
+			name:     "off-grid appt at 9:15 blocks 30-min booking at 9:00",
+			slotTime: time.Date(2026, 5, 13, 9, 0, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 5, 13, 9, 15, 0, 0, eastern), Duration: 15},
+			},
+			expected: true, // [9:00,9:30) overlaps [9:15,9:30)
+		},
+		{
+			name:     "off-grid appt at 8:45 does NOT block 8:00 slot",
+			slotTime: time.Date(2026, 5, 13, 8, 0, 0, 0, eastern),
+			slotDuration: 30 * time.Minute,
+			appointments: []domain.Appointment{
+				{StartDateTime: time.Date(2026, 5, 13, 8, 45, 0, 0, eastern), Duration: 15},
+			},
+			expected: false, // [8:00,8:30) does not overlap [8:45,9:00)
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hasOverlappingAppointment(tt.slotTime, tt.appointments)
+			got := hasOverlappingAppointment(tt.slotTime, tt.slotDuration, tt.appointments)
 			if got != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, got)
 			}
@@ -617,6 +652,8 @@ func TestHandleGetPatientAppointments_ValidationErrors(t *testing.T) {
 }
 
 func TestFriendlyProviderName(t *testing.T) {
+	office := domain.DefaultOffice()
+
 	tests := []struct {
 		input    string
 		expected string
@@ -630,9 +667,9 @@ func TestFriendlyProviderName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := friendlyProviderName(tt.input)
+			got := office.FriendlyProviderName(tt.input)
 			if got != tt.expected {
-				t.Errorf("friendlyProviderName(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("FriendlyProviderName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -658,6 +695,8 @@ func TestFriendlyFacilityName(t *testing.T) {
 }
 
 func TestAppointmentTypeNames(t *testing.T) {
+	office := domain.DefaultOffice()
+
 	tests := []struct {
 		typeID   int
 		expected string
@@ -673,12 +712,12 @@ func TestAppointmentTypeNames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			got, ok := appointmentTypeNames[tt.typeID]
+			got, ok := office.AppointmentTypeName(tt.typeID)
 			if ok != tt.found {
-				t.Errorf("appointmentTypeNames[%d] found=%v, want %v", tt.typeID, ok, tt.found)
+				t.Errorf("AppointmentTypeName(%d) found=%v, want %v", tt.typeID, ok, tt.found)
 			}
 			if got != tt.expected {
-				t.Errorf("appointmentTypeNames[%d] = %q, want %q", tt.typeID, got, tt.expected)
+				t.Errorf("AppointmentTypeName(%d) = %q, want %q", tt.typeID, got, tt.expected)
 			}
 		})
 	}

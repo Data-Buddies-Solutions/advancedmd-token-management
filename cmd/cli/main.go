@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -87,6 +86,9 @@ func mustBootstrap() error {
 }
 
 func bootstrap() error {
+	// Initialize office registry based on AMD_ENV
+	domain.InitRegistry(os.Getenv("AMD_ENV"))
+
 	username := os.Getenv("ADVANCEDMD_USERNAME")
 	password := os.Getenv("ADVANCEDMD_PASSWORD")
 	officeKey := os.Getenv("ADVANCEDMD_OFFICE_KEY")
@@ -200,20 +202,3 @@ func printJSON(v interface{}) {
 	fmt.Println(string(data))
 }
 
-// friendlyProviderName maps AMD provider names to friendly display names.
-func friendlyProviderName(amdName string) string {
-	upper := strings.ToUpper(amdName)
-	for _, entry := range []struct {
-		match   string
-		display string
-	}{
-		{"BACH", "Dr. Austin Bach"},
-		{"LICHT", "Dr. J. Licht"},
-		{"NOEL", "Dr. D. Noel"},
-	} {
-		if strings.Contains(upper, entry.match) {
-			return entry.display
-		}
-	}
-	return amdName
-}

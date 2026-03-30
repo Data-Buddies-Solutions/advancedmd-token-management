@@ -45,6 +45,8 @@ func TestRoutingForCarrierID(t *testing.T) {
 }
 
 func TestColumnsForRouting(t *testing.T) {
+	office := DefaultOffice()
+
 	tests := []struct {
 		name    string
 		rule    RoutingRule
@@ -52,14 +54,14 @@ func TestColumnsForRouting(t *testing.T) {
 		wantIDs []string
 	}{
 		{"not accepted returns nil", RoutingNotAccepted, 0, nil},
-		{"bach only returns 1513", RoutingBachOnly, 1, []string{"1513"}},
-		{"bach+licht returns 1513,1551", RoutingBachLicht, 2, []string{"1513", "1551"}},
-		{"all three returns all", RoutingAll, 3, []string{"1513", "1551", "1550"}},
+		{"bach only returns 1513,1598", RoutingBachOnly, 2, []string{"1513", "1598"}},
+		{"bach+licht returns 1513,1598,1551", RoutingBachLicht, 3, []string{"1513", "1598", "1551"}},
+		{"all returns all", RoutingAll, 4, []string{"1513", "1598", "1551", "1550"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cols := ColumnsForRouting(tt.rule)
+			cols := office.ColumnsForRouting(tt.rule)
 			if tt.wantLen == 0 {
 				if cols != nil {
 					t.Errorf("ColumnsForRouting(%q) = %v, want nil", tt.rule, cols)
@@ -79,20 +81,22 @@ func TestColumnsForRouting(t *testing.T) {
 }
 
 func TestProvidersForRouting(t *testing.T) {
+	office := DefaultOffice()
+
 	tests := []struct {
 		name      string
 		rule      RoutingRule
 		wantNames []string
 	}{
 		{"not accepted returns nil", RoutingNotAccepted, nil},
-		{"bach only", RoutingBachOnly, []string{"Dr. Bach"}},
-		{"bach+licht", RoutingBachLicht, []string{"Dr. Bach", "Dr. Licht"}},
-		{"all three", RoutingAll, []string{"Dr. Bach", "Dr. Licht", "Dr. Noel"}},
+		{"bach only", RoutingBachOnly, []string{"Dr. Bach", "Dr. Bach"}},
+		{"bach+licht", RoutingBachLicht, []string{"Dr. Bach", "Dr. Bach", "Dr. Licht"}},
+		{"all", RoutingAll, []string{"Dr. Bach", "Dr. Bach", "Dr. Licht", "Dr. Noel"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			names := ProvidersForRouting(tt.rule)
+			names := office.ProvidersForRouting(tt.rule)
 			if tt.wantNames == nil {
 				if names != nil {
 					t.Errorf("ProvidersForRouting(%q) = %v, want nil", tt.rule, names)
