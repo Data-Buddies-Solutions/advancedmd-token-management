@@ -53,38 +53,32 @@ func appointmentsCmd() *cobra.Command {
 			// Build column ID string for office's allowed columns
 			columnIDStr := strings.Join(officeConfig.AllowedColumnIDs(), "-")
 
-			// Fetch current + next month concurrently
+			// Fetch current + next 3 months concurrently (4 months total)
 			now := time.Now().In(eastern)
 			thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
-			nextMonth := thisMonth.AddDate(0, 1, 0)
 
 			type monthResult struct {
 				appts []clients.AMDAppointmentResponse
 				err   error
 			}
-			ch1 := make(chan monthResult, 1)
-			ch2 := make(chan monthResult, 1)
+			ch := make(chan monthResult, 4)
 
-			go func() {
-				appts, err := app.amdRestClient.GetAppointmentsByMonth(cmd.Context(), tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
-				ch1 <- monthResult{appts, err}
-			}()
-			go func() {
-				appts, err := app.amdRestClient.GetAppointmentsByMonth(cmd.Context(), tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
-				ch2 <- monthResult{appts, err}
-			}()
-
-			r1, r2 := <-ch1, <-ch2
-
-			if r1.err != nil {
-				return fmt.Errorf("failed to retrieve appointments (month 1): %w", r1.err)
-			}
-			if r2.err != nil {
-				return fmt.Errorf("failed to retrieve appointments (month 2): %w", r2.err)
+			for i := 0; i < 4; i++ {
+				m := thisMonth.AddDate(0, i, 0)
+				go func() {
+					appts, err := app.amdRestClient.GetAppointmentsByMonth(cmd.Context(), tokenData, columnIDStr, m.Format("2006-01-02"))
+					ch <- monthResult{appts, err}
+				}()
 			}
 
-			// Combine and filter by patient ID
-			allAppts := append(r1.appts, r2.appts...)
+			var allAppts []clients.AMDAppointmentResponse
+			for range 4 {
+				r := <-ch
+				if r.err != nil {
+					return fmt.Errorf("failed to retrieve appointments: %w", r.err)
+				}
+				allAppts = append(allAppts, r.appts...)
+			}
 			today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
 
 			type apptDetail struct {

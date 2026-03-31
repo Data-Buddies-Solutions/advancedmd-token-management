@@ -275,7 +275,7 @@ The distinction between checks 3 and 4 matters: `maxApptsPerSlot=2` means two ap
 
 ### POST /api/patient/appointments
 
-Retrieves upcoming appointments for a verified patient. Queries all allowed provider columns across the current and next month using AMD's REST `scheduler/appointments` endpoint with `forView=month`, then filters by patient ID server-side.
+Retrieves upcoming appointments for a verified patient. Queries all allowed provider columns across 4 months (current + next 3) using AMD's REST `scheduler/appointments` endpoint with `forView=month`, then filters by patient ID server-side.
 
 **Request:**
 ```json
@@ -289,7 +289,7 @@ Retrieves upcoming appointments for a verified patient. Queries all allowed prov
 | Status | When |
 |--------|------|
 | `found` | Patient has upcoming appointments |
-| `no_appointments` | No upcoming appointments in next 60 days |
+| `no_appointments` | No upcoming appointments in next ~4 months |
 | `error` | Validation, auth, or AMD failure |
 
 **Response (found):**
