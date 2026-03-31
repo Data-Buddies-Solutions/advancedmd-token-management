@@ -852,33 +852,32 @@ func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *dom
 
 	now := time.Now().In(eastern)
 	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
-	nextMonth := thisMonth.AddDate(0, 1, 0)
+	month2 := thisMonth.AddDate(0, 1, 0)
+	month3 := thisMonth.AddDate(0, 2, 0)
+	month4 := thisMonth.AddDate(0, 3, 0)
 
 	type monthResult struct {
 		appts []clients.AMDAppointmentResponse
 		err   error
 	}
-	ch1 := make(chan monthResult, 1)
-	ch2 := make(chan monthResult, 1)
+	ch := make(chan monthResult, 4)
 
-	go func() {
-		appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, thisMonth.Format("2006-01-02"))
-		ch1 <- monthResult{appts, err}
-	}()
-	go func() {
-		appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, nextMonth.Format("2006-01-02"))
-		ch2 <- monthResult{appts, err}
-	}()
-
-	r1, r2 := <-ch1, <-ch2
-	if r1.err != nil {
-		return nil, r1.err
-	}
-	if r2.err != nil {
-		return nil, r2.err
+	for _, m := range []time.Time{thisMonth, month2, month3, month4} {
+		m := m
+		go func() {
+			appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, m.Format("2006-01-02"))
+			ch <- monthResult{appts, err}
+		}()
 	}
 
-	allAppts := append(r1.appts, r2.appts...)
+	var allAppts []clients.AMDAppointmentResponse
+	for range 4 {
+		r := <-ch
+		if r.err != nil {
+			return nil, r.err
+		}
+		allAppts = append(allAppts, r.appts...)
+	}
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
 
 	var details []PatientApptDetail
