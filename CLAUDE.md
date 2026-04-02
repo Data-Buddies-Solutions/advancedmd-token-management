@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-This project exists to **understand and document AdvancedMD APIs** so that **ElevenLabs conversational agents can make tool calls** to interface with AdvancedMD's healthcare practice management system.
+This project exists to **understand and document AdvancedMD APIs** so that **LiveKit conversational agents can make tool calls** to interface with AdvancedMD's healthcare practice management system.
 
 The codebase is a **Go microservice** (middleware) that handles AdvancedMD's complex 2-step authentication, caches tokens, and provides server-side endpoints for patient verification, registration, insurance routing, and appointment availability.
 
@@ -27,24 +27,22 @@ AdvancedMD has **three different API types**, each with different URL patterns a
 | **REST (Practice Manager)** | Replace `/processrequest/` with `/api/` | Standard JSON | appointments, block holds |
 | **EHR REST** | Replace `/processrequest/` with `/ehr-api/` | Standard JSON | documents, files |
 
-### Token Format for ElevenLabs
+### Token Format for LiveKit
 
-The `/api/token` endpoint serves as the **precall webhook** for ElevenLabs. It returns AMD tokens as dynamic variables:
+The `/api/token` endpoint returns AMD tokens as dynamic variables:
 
 - `amd_token`: Includes "Bearer " prefix → Use directly as `Authorization: {amd_token}`
 - `amd_rest_api_base`: Excludes "https://" prefix → Use as `https://{amd_rest_api_base}/endpoint`
 - `patient_id`: Placeholder initial value (`"1"`) — overwritten after verify/add-patient
 
-ElevenLabs doesn't support string concatenation in dynamic variables, which is why URLs exclude the protocol prefix.
-
 ### Workspace Files
 
-Prompt files live in `internal/workspace/` and are tracked in git for diff history. They are **not loaded at runtime** — prompts are managed directly in ElevenLabs. The files here are the source of truth for prompt content and change tracking.
+Prompt files live in `internal/workspace/` and are tracked in git for diff history. They are the source of truth for prompt content and change tracking.
 
 - `SOUL.md` — Personality + boundaries
 - `TOOLS.md` — API tool instructions for the agent
 - `VOICE.md` — Speaking style
-- `KNOWLEDGE.md` — Practice info (synced to ElevenLabs knowledge base)
+- `KNOWLEDGE.md` — Practice info
 - `CHANGELOG.md` — History of all prompt changes with rationale
 
 ## Project Structure
@@ -120,7 +118,7 @@ railway up
 | `POST /api/verify-patient` | Yes | Patient lookup by name + DOB, returns insurance routing |
 | `POST /api/add-patient` | Yes | Patient creation + insurance attachment |
 | `POST /api/scheduler/availability` | Yes | Available appointment slots (concurrent per-column fetching) |
-| `POST /api/patient/appointments` | Yes | Upcoming appointments for a verified patient |
+| `POST /api/patient/appointments` | Yes | Patient appointments (1 month back + 5 months forward) |
 | `POST /api/appointment/book` | Yes | Book appointment (type→color mapping, constants handled server-side) |
 | `POST /api/appointment/cancel` | Yes | Cancel an appointment |
 
@@ -145,7 +143,7 @@ The `/api/scheduler/availability` endpoint orchestrates multiple AMD API calls t
 
 ### Response Format
 
-Optimized for ElevenLabs LLM token efficiency:
+Optimized for LLM token efficiency:
 - Max **5 slots** returned per provider (with `totalAvailable` count for the full day)
 - `firstAvailable` / `lastAvailable` summary fields
 - `searchedDate` (original request) vs `date` (actual result — may differ if auto-expanded)

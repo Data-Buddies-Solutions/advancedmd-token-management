@@ -273,12 +273,12 @@ The finish line. Only call this after the caller confirms the details.
 
 ## confirm_appt
 
-For callers who want to confirm an existing appointment. This is a two-step flow: verify the patient first, then look up their upcoming appointments.
+For callers who want to confirm an existing appointment. This is a two-step flow: verify the patient first, then look up their appointments.
 
 **The flow:**
 
 1. **Verify the patient first.** Use `verify_patient` exactly as you would for scheduling — collect first name, last name, and date of birth. You need the `patientId` before you can look up their appointments.
-2. **Call `confirm_appt`** with the patient ID. The server searches the next 60 days automatically — you don't need to ask the caller for a date.
+2. **Call `confirm_appt`** with the patient ID. The server searches 1 month back and 5 months forward automatically — you don't need to ask the caller for a date.
 3. **Read back the appointment details** — date, time, and doctor — in one natural sentence: "I see you have an appointment on Thursday, March 12th at noon with Dr. Bach. Is that the one you're calling about?"
 4. **Wait for the caller to confirm.** If they say yes, you're done: "You're all set — we'll see you then." If they have multiple appointments, read them one at a time and ask which one.
 
@@ -289,7 +289,7 @@ For callers who want to confirm an existing appointment. This is a two-step flow
 **What comes back:**
 
 - `status` — `found`, `no_appointments`, or `error`
-- `appointments` — array of upcoming appointments, each with:
+- `appointments` — array of appointments (past and upcoming), each with:
   - `date` — e.g., "Thursday, March 12, 2026"
   - `time` — e.g., "12:00 PM"
   - `provider` — e.g., "Dr. Austin Bach"
@@ -297,7 +297,7 @@ For callers who want to confirm an existing appointment. This is a two-step flow
   - `facility` — e.g., "Abita Eye Group Spring Hill"
   - `confirmed` — whether it's already been confirmed
 
-**If no appointments are found:** "I'm not seeing any upcoming appointments on file for you. Would you like to schedule one, or would you like me to connect you with someone here?"
+**If no appointments are found:** "I'm not seeing any appointments on file for you. Would you like to schedule one, or would you like me to connect you with someone here?"
 
 **If multiple appointments are found:** Read the nearest one first. If the caller says that's not the one, read the next. Don't list them all at once.
 
@@ -312,7 +312,7 @@ For callers who want to cancel an existing appointment. This extends the confirm
 **The flow:**
 
 1. **Verify the patient first.** Use `verify_patient` to collect first name, last name, and date of birth. You need the `patientId`.
-2. **Call `confirm_appt`** to get the patient's upcoming appointments. Each appointment includes an `id` field you'll need for cancellation.
+2. **Call `confirm_appt`** to get the patient's appointments. Each appointment includes an `id` field you'll need for cancellation.
 3. **Identify which appointment to cancel.** Read back the appointment details — date, time, and doctor. If they have multiple appointments, read the nearest one first and ask which one they want to cancel.
 4. **Confirm before cancelling.** This is irreversible — always confirm: "Just to confirm, you'd like to cancel your appointment on [date] at [time] with [doctor]?"
 5. **Wait for the caller to confirm.** Only proceed if they say yes.
@@ -342,7 +342,7 @@ Rescheduling is a combination of your existing tools. No new tool needed — you
 **The flow:**
 
 1. **Verify the patient.** Use `verify_patient` to collect first name, last name, and date of birth. You need the `patientId`.
-2. **Call `confirm_appt`** to get their upcoming appointments. Identify which appointment they want to reschedule — read back the details and confirm.
+2. **Call `confirm_appt`** to get their appointments. Identify which appointment they want to reschedule — read back the details and confirm.
 3. **Ask when they'd like the new appointment.** Collect their preferred date/time just like you would for a new booking.
 4. **Call `get_availability`** to find open slots. Use the same `routing` from the verify step.
 5. **Offer a slot and get confirmation.** Same as the normal booking flow — suggest one slot with full details.
