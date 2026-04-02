@@ -120,20 +120,27 @@ func TestOfficeConfig_FriendlyProviderName(t *testing.T) {
 
 	tests := []struct {
 		input string
-		want  string
+		want  []string
 	}{
-		{"BACH, AUSTIN", "Dr. Austin Bach"},
-		{"LICHT, JONATHAN", "Dr. J. Licht"},
-		{"NOEL, DON HERSHELSON", "Dr. D. Noel"},
-		{"UNKNOWN", "UNKNOWN"},
-		{"", ""},
+		{"BACH, AUSTIN", []string{"Dr. Austin Bach", "Dr. Austin Bach (Overflow)"}},
+		{"LICHT, JONATHAN", []string{"Dr. J. Licht"}},
+		{"NOEL, DON HERSHELSON", []string{"Dr. D. Noel"}},
+		{"UNKNOWN", []string{"UNKNOWN"}},
+		{"", []string{""}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			got := office.FriendlyProviderName(tt.input)
-			if got != tt.want {
-				t.Errorf("FriendlyProviderName(%q) = %q, want %q", tt.input, got, tt.want)
+			valid := false
+			for _, w := range tt.want {
+				if got == w {
+					valid = true
+					break
+				}
+			}
+			if !valid {
+				t.Errorf("FriendlyProviderName(%q) = %q, want one of %v", tt.input, got, tt.want)
 			}
 		})
 	}

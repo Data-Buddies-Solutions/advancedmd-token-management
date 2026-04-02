@@ -1,6 +1,6 @@
 # AdvancedMD Token Management Service
 
-A Go microservice that handles AdvancedMD's 2-step authentication flow and serves as the middleware layer between ElevenLabs conversational agents and AdvancedMD's practice management system.
+A Go microservice that handles AdvancedMD's 2-step authentication flow and serves as the middleware layer between LiveKit conversational agents and AdvancedMD's practice management system.
 
 ## Features
 
@@ -36,7 +36,7 @@ A Go microservice that handles AdvancedMD's 2-step authentication flow and serve
 └─────────────────────────────────────────────────────────────────┘
                               │
                       ┌───────┴───────┐
-                      │  ElevenLabs   │
+                      │  LiveKit   │
                       │  Agent        │
                       └───────────────┘
 ```
@@ -124,7 +124,7 @@ Health check (no auth required).
 
 ### POST /api/token (Precall Webhook)
 
-ElevenLabs conversation initiation webhook. Returns AMD authentication tokens as dynamic variables.
+LiveKit conversation initiation webhook. Returns AMD authentication tokens as dynamic variables.
 
 **Request:**
 ```bash
@@ -275,7 +275,7 @@ The distinction between checks 3 and 4 matters: `maxApptsPerSlot=2` means two ap
 
 ### POST /api/patient/appointments
 
-Retrieves upcoming appointments for a verified patient. Queries all allowed provider columns across 4 months (current + next 3) using AMD's REST `scheduler/appointments` endpoint with `forView=month`, then filters by patient ID server-side.
+Retrieves appointments for a verified patient. Queries all allowed provider columns across 7 months (1 past + current + 5 forward) using AMD's REST `scheduler/appointments` endpoint with `forView=month`, then filters by patient ID server-side.
 
 **Request:**
 ```json
@@ -288,8 +288,8 @@ Retrieves upcoming appointments for a verified patient. Queries all allowed prov
 
 | Status | When |
 |--------|------|
-| `found` | Patient has upcoming appointments |
-| `no_appointments` | No upcoming appointments in next ~4 months |
+| `found` | Patient has appointments in range |
+| `no_appointments` | No appointments found in 7-month window |
 | `error` | Validation, auth, or AMD failure |
 
 **Response (found):**

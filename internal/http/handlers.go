@@ -619,7 +619,7 @@ type PatientApptDetail struct {
 	Confirmed bool   `json:"confirmed"`            // Whether the appointment has been confirmed
 }
 
-// HandleGetPatientAppointments retrieves upcoming appointments for a verified patient.
+// HandleGetPatientAppointments retrieves appointments for a verified patient.
 func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -678,13 +678,13 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	log.Printf("patient-appointments: found %d upcoming appointments for patient %s", len(details), req.PatientID)
+	log.Printf("patient-appointments: found %d appointments for patient %s", len(details), req.PatientID)
 
 	if len(details) == 0 {
 		json.NewEncoder(w).Encode(PatientApptResponse{
 			Status:    "no_appointments",
 			PatientID: req.PatientID,
-			Message:   "No upcoming appointments found for this patient",
+			Message:   "No appointments found for this patient",
 		})
 		return
 	}
@@ -693,7 +693,7 @@ func (h *Handlers) HandleGetPatientAppointments(w http.ResponseWriter, r *http.R
 		Status:       "found",
 		PatientID:    req.PatientID,
 		Appointments: details,
-		Message:      fmt.Sprintf("Found %d upcoming appointment(s)", len(details)),
+		Message:      fmt.Sprintf("Found %d appointment(s)", len(details)),
 	})
 }
 
@@ -823,7 +823,7 @@ func (h *Handlers) HandlePatientLookup(w http.ResponseWriter, r *http.Request) {
 		resp.RoutingAmbiguous = false
 	}
 
-	// Fetch upcoming appointments
+	// Fetch appointments
 	appts, err := h.fetchUpcomingAppointments(r.Context(), tokenData, patient.ID, office)
 	if err != nil {
 		log.Printf("WARNING: patient-lookup: failed to get appointments for %s: %v", patient.ID, err)
@@ -833,15 +833,15 @@ func (h *Handlers) HandlePatientLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(resp.Appointments) > 0 {
-		resp.Message = fmt.Sprintf("Patient verified with %d upcoming appointment(s)", len(resp.Appointments))
+		resp.Message = fmt.Sprintf("Patient verified with %d appointment(s)", len(resp.Appointments))
 	} else {
-		resp.Message = "Patient verified, no upcoming appointments"
+		resp.Message = "Patient verified, no appointments found"
 	}
 
 	json.NewEncoder(w).Encode(resp)
 }
 
-// fetchUpcomingAppointments retrieves upcoming appointments for a patient ID.
+// fetchUpcomingAppointments retrieves appointments for a patient ID (1 month back + current month + 5 months forward).
 func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *domain.TokenData, patientID string, office *domain.OfficeConfig) ([]PatientApptDetail, error) {
 	patientIDInt, err := strconv.Atoi(patientID)
 	if err != nil {
@@ -852,17 +852,20 @@ func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *dom
 
 	now := time.Now().In(eastern)
 	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
-	month2 := thisMonth.AddDate(0, 1, 0)
-	month3 := thisMonth.AddDate(0, 2, 0)
-	month4 := thisMonth.AddDate(0, 3, 0)
+
+	months := make([]time.Time, 7)
+	months[0] = thisMonth.AddDate(0, -1, 0)
+	for i := 1; i < 7; i++ {
+		months[i] = thisMonth.AddDate(0, i-1, 0)
+	}
 
 	type monthResult struct {
 		appts []clients.AMDAppointmentResponse
 		err   error
 	}
-	ch := make(chan monthResult, 4)
+	ch := make(chan monthResult, 7)
 
-	for _, m := range []time.Time{thisMonth, month2, month3, month4} {
+	for _, m := range months {
 		m := m
 		go func() {
 			appts, err := h.amdRestClient.GetAppointmentsByMonth(ctx, tokenData, columnIDStr, m.Format("2006-01-02"))
@@ -871,15 +874,13 @@ func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *dom
 	}
 
 	var allAppts []clients.AMDAppointmentResponse
-	for range 4 {
+	for range 7 {
 		r := <-ch
 		if r.err != nil {
 			return nil, r.err
 		}
 		allAppts = append(allAppts, r.appts...)
 	}
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
-
 	var details []PatientApptDetail
 	for _, a := range allAppts {
 		if a.PatientID != patientIDInt {
@@ -888,10 +889,6 @@ func (h *Handlers) fetchUpcomingAppointments(ctx context.Context, tokenData *dom
 
 		startTime, err := clients.ParseDateTime(a.StartDateTime)
 		if err != nil {
-			continue
-		}
-
-		if startTime.Before(today) {
 			continue
 		}
 
