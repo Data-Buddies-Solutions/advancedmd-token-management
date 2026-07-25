@@ -70,8 +70,11 @@ path and middleware filters by DOB when DOB is supplied.
 
 Implementation:
 
+- `internal/patient` owns lookup selection and complete patient resolution.
+- `internal/advancedmd` owns the domain-oriented provider seam and classified
+  errors.
 - `internal/clients/advancedmd_xmlrpc.go`
-- `HandlePatientResolve`
+- `HandlePatientResolve` only validates and maps the Patient module result.
 
 ### `addpatient`
 
@@ -108,7 +111,9 @@ routine-vision only.
 ### `getdemographic`
 
 Used after patient lookup to retrieve insurance carrier, carrier ID, insurance
-plan ID, and responsible party ID. The response is converted to:
+plan ID, and responsible party ID. The AdvancedMD adapter converts the provider
+response to Acuity patient demographics before the Patient module applies
+routing and preauthorization policy:
 
 - `insuranceCarrier`
 - `insuranceCarrierId`
@@ -177,7 +182,8 @@ Hill and Crystal River are grouped together; Hollywood and Sweetwater are
 grouped together. Each returned appointment includes `officeId` and `office`.
 Appointment loading is best effort and reported with
 `appointmentsStatus` so identity resolution can still succeed when appointment
-loading fails.
+loading fails. Provider payloads and session data remain inside the AdvancedMD
+adapter; the Patient module receives only Acuity appointment values.
 
 ### `GET /scheduler/blockholds`
 

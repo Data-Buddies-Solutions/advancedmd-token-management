@@ -9,10 +9,12 @@ import (
 	"syscall"
 	"time"
 
+	"advancedmd-token-management/internal/advancedmd"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/config"
 	"advancedmd-token-management/internal/domain"
 	apphttp "advancedmd-token-management/internal/http"
+	"advancedmd-token-management/internal/patient"
 	"advancedmd-token-management/internal/session"
 )
 
@@ -57,8 +59,18 @@ func main() {
 	// Initialize AdvancedMD REST client
 	amdRestClient := clients.NewAdvancedMDRestClient(httpClient)
 
+	// Compose the patient workflow over the domain-oriented AdvancedMD seam.
+	patientRecords := advancedmd.NewAdapter(amdSession, amdClient, amdRestClient)
+	patients := patient.New(patientRecords)
+
 	// Initialize handlers
-	handlers := apphttp.NewHandlers(amdSession, amdClient, amdRestClient, cfg.BookingTokenSecret)
+	handlers := apphttp.NewHandlers(
+		amdSession,
+		amdClient,
+		amdRestClient,
+		patients,
+		cfg.BookingTokenSecret,
+	)
 	handlers.SetAllowRawSlotBooking(cfg.AllowRawSlotBooking)
 
 	// Create router

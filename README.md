@@ -39,7 +39,9 @@ LiveKit agent
 
 AdvancedMD middleware
   -> in-memory Session owner with authenticated maintenance and request fallback
-  -> AdvancedMD XMLRPC APIs for patients, demographics, scheduler setup
+  -> Patient module for complete patient resolution and partial-result semantics
+  -> domain-oriented AdvancedMD adapter for patient XMLRPC and REST operations
+  -> AdvancedMD XMLRPC APIs for demographics and scheduler setup
   -> AdvancedMD REST APIs for appointments, block holds, booking, cancellation
 
 Cloud Scheduler
@@ -57,6 +59,9 @@ advancedmd-token-management/
 |-- docs/
 |   `-- advancedmd-api.md
 |-- internal/
+|   |-- advancedmd/
+|   |   |-- adapter.go
+|   |   `-- advancedmd.go
 |   |-- clients/
 |   |   |-- advancedmd_rest.go
 |   |   `-- advancedmd_xmlrpc.go
@@ -71,6 +76,8 @@ advancedmd-token-management/
 |   |-- session/
 |   |   |-- authenticator.go
 |   |   `-- session.go
+|   |-- patient/
+|   |   `-- patient.go
 |   `-- http/
 |       |-- handlers.go
 |       |-- middleware.go

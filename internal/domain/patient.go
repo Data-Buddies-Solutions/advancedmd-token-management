@@ -46,6 +46,42 @@ type Patient struct {
 	Phone     string
 }
 
+// PatientSearch describes an Acuity patient lookup without exposing provider
+// request formats.
+type PatientSearch struct {
+	Phone     string
+	FirstName string
+	LastName  string
+}
+
+// PatientDemographics contains the patient fields used for insurance routing.
+type PatientDemographics struct {
+	CarrierName string
+	CarrierID   string
+	InsPlanID   string
+	RespPartyID string
+	DOB         string
+}
+
+// PatientAppointment is an upcoming appointment ready for Acuity workflows.
+type PatientAppointment struct {
+	ID                int
+	Start             time.Time
+	Provider          string
+	Type              string
+	AppointmentTypeID int
+	Facility          string
+	OfficeID          string
+	Office            string
+}
+
+// PatientAppointmentsQuery selects a patient's upcoming appointments by stable
+// Acuity office IDs.
+type PatientAppointmentsQuery struct {
+	PatientID string
+	OfficeIDs []string
+}
+
 // StripPatientPrefix removes the "pat" prefix from patient IDs.
 // AMD returns IDs like "pat45" but the booking API expects just "45".
 func StripPatientPrefix(id string) string {

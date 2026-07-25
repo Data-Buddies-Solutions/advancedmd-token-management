@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"advancedmd-token-management/internal/advancedmd"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
+	patientmodule "advancedmd-token-management/internal/patient"
 	"advancedmd-token-management/internal/safeerrors"
 	"advancedmd-token-management/internal/session"
 
@@ -71,22 +73,23 @@ type PatientResolveResponse struct {
 	Matches             []PatientResolveResponse `json:"matches,omitempty"`
 }
 
-const (
-	appointmentsStatusFound = "found"
-	appointmentsStatusNone  = "none"
-	appointmentsStatusError = "error"
-)
-
 // Handlers holds the dependencies for HTTP handlers.
 type Handlers struct {
 	session            session.Session
 	amdClient          *clients.AdvancedMDClient
 	amdRestClient      *clients.AdvancedMDRestClient
+	patient            patientmodule.Patient
 	schedulingWorkflow *schedulingWorkflow
 }
 
 // NewHandlers creates a new Handlers instance.
-func NewHandlers(amdSession session.Session, amdClient *clients.AdvancedMDClient, amdRestClient *clients.AdvancedMDRestClient, bookingTokenSecret ...string) *Handlers {
+func NewHandlers(
+	amdSession session.Session,
+	amdClient *clients.AdvancedMDClient,
+	amdRestClient *clients.AdvancedMDRestClient,
+	patient patientmodule.Patient,
+	bookingTokenSecret ...string,
+) *Handlers {
 	secret := ""
 	if len(bookingTokenSecret) > 0 {
 		secret = bookingTokenSecret[0]
@@ -95,6 +98,7 @@ func NewHandlers(amdSession session.Session, amdClient *clients.AdvancedMDClient
 		session:       amdSession,
 		amdClient:     amdClient,
 		amdRestClient: amdRestClient,
+		patient:       patient,
 	}
 	handlers.schedulingWorkflow = newSchedulingWorkflow(amdSession, amdClient, amdRestClient, secret)
 	return handlers
@@ -441,25 +445,8 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tokenData, err := h.session.Get(r.Context())
-	if err != nil {
-		log.Printf("patient-resolve: authentication failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(PatientResolveResponse{
-			Status:  "error",
-			Message: "Service authentication is temporarily unavailable. Please try again.",
-		})
-		return
-	}
-
-	if req.PatientID != "" {
-		resp := h.resolveKnownPatient(r.Context(), tokenData, req, office)
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	patients, err := h.resolvePatientCandidates(r.Context(), tokenData, req)
-	if err != nil {
-		log.Printf("patient-resolve: lookup failed category=%s", safeerrors.Classify(err))
+	if h.patient == nil {
+		log.Printf("patient-resolve: module unavailable category=%s", safeerrors.CategoryInternal)
 		json.NewEncoder(w).Encode(PatientResolveResponse{
 			Status:  "error",
 			Message: "Failed to look up patient in AdvancedMD. Please try again.",
@@ -467,28 +454,70 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	patient, matchingPatients := selectResolvedPatient(patients, req)
-	if patient.ID == "" {
-		if len(matchingPatients) == 0 {
-			json.NewEncoder(w).Encode(PatientResolveResponse{
-				Status:       "not_found",
-				Appointments: []PatientApptDetail{},
-				Message:      notFoundMessage(req),
-			})
-			return
+	result, err := h.patient.Resolve(r.Context(), patientmodule.ResolveCommand{
+		PatientID: req.PatientID,
+		LastName:  req.LastName,
+		DOB:       req.DOB,
+		FirstName: req.FirstName,
+		Phone:     req.Phone,
+		OfficeID:  office.ID,
+	})
+	if err != nil {
+		category := advancedmd.CategoryOf(err)
+		log.Printf("patient-resolve: failed category=%s", category)
+		message := "Failed to look up patient in AdvancedMD. Please try again."
+		if category == safeerrors.CategoryAuthentication || category == safeerrors.CategoryUnavailable {
+			message = "Service authentication is temporarily unavailable. Please try again."
 		}
-		matches := h.buildResolvedPatientMatches(r.Context(), tokenData, matchingPatients, office, req.Phone)
 		json.NewEncoder(w).Encode(PatientResolveResponse{
-			Status:       "multiple_matches",
-			Appointments: []PatientApptDetail{},
-			Matches:      matches,
-			Message:      multipleMatchesMessage(req, len(matches)),
+			Status:  "error",
+			Message: message,
 		})
 		return
 	}
 
-	resp := h.buildResolvedPatient(r.Context(), tokenData, patient, office, req.Phone)
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(patientResolveResponse(result))
+}
+
+func patientResolveResponse(result patientmodule.ResolveResult) PatientResolveResponse {
+	appointments := make([]PatientApptDetail, len(result.Appointments))
+	for i, appointment := range result.Appointments {
+		appointments[i] = PatientApptDetail{
+			ID:                appointment.ID,
+			Date:              appointment.Date,
+			Time:              appointment.Time,
+			Provider:          appointment.Provider,
+			Type:              appointment.Type,
+			AppointmentTypeID: appointment.AppointmentTypeID,
+			Facility:          appointment.Facility,
+			OfficeID:          appointment.OfficeID,
+			Office:            appointment.Office,
+		}
+	}
+	matches := make([]PatientResolveResponse, len(result.Matches))
+	for i, match := range result.Matches {
+		matches[i] = patientResolveResponse(match)
+	}
+	return PatientResolveResponse{
+		Status:              string(result.Status),
+		PatientID:           result.PatientID,
+		Name:                result.Name,
+		DOB:                 result.DOB,
+		Phone:               result.Phone,
+		InsuranceCarrier:    result.InsuranceCarrier,
+		InsuranceCarrierID:  result.InsuranceCarrierID,
+		InsPlanID:           result.InsPlanID,
+		RespPartyID:         result.RespPartyID,
+		Routing:             string(result.Routing),
+		AllowedProviders:    result.AllowedProviders,
+		RoutingAmbiguous:    result.RoutingAmbiguous,
+		PreauthRequired:     result.PreauthRequired,
+		AppointmentsStatus:  string(result.AppointmentsStatus),
+		Appointments:        appointments,
+		AppointmentsMessage: result.AppointmentsMessage,
+		Message:             result.Message,
+		Matches:             matches,
+	}
 }
 
 func validatePatientResolveRequest(req PatientResolveRequest) string {
@@ -504,210 +533,15 @@ func validatePatientResolveRequest(req PatientResolveRequest) string {
 		return ""
 	}
 	if req.Phone != "" {
+		if domain.NormalizePhoneDigits(req.Phone) == "" {
+			return "phone must contain at least one digit"
+		}
 		return ""
 	}
 	if req.LastName != "" && req.DOB != "" {
 		return ""
 	}
 	return "Provide patientId, phone, phone + firstName, phone + dob, or lastName + dob"
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func (h *Handlers) resolvePatientCandidates(ctx context.Context, tokenData *domain.TokenData, req PatientResolveRequest) ([]domain.Patient, error) {
-	if req.Phone != "" {
-		digits := domain.NormalizePhoneDigits(req.Phone)
-		patients, err := h.amdClient.LookupPatientByPhone(ctx, tokenData, digits)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to lookup patient by phone: %w", err)
-		}
-		log.Printf("patient-resolve: phone lookup returned %d patients", len(patients))
-		return patients, nil
-	}
-
-	normalizedLastName := domain.StripDiacritics(req.LastName)
-	normalizedFirstName := domain.StripDiacritics(req.FirstName)
-	patients, err := h.amdClient.LookupPatient(ctx, tokenData, normalizedLastName, normalizedFirstName)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to lookup patient: %w", err)
-	}
-	log.Printf("patient-resolve: name lookup returned %d patients", len(patients))
-	return patients, nil
-}
-
-func selectResolvedPatient(patients []domain.Patient, req PatientResolveRequest) (domain.Patient, []domain.Patient) {
-	matching := patients
-	if req.DOB != "" {
-		normalizedDOB := domain.NormalizeDOB(req.DOB)
-		matching = nil
-		for _, p := range patients {
-			if domain.NormalizeDOB(p.DOB) == normalizedDOB {
-				matching = append(matching, p)
-			}
-		}
-	}
-
-	if req.FirstName != "" {
-		firstNameMatches := make([]domain.Patient, 0, len(matching))
-		for _, p := range matching {
-			if patientFirstNameMatches(p, req.FirstName) {
-				firstNameMatches = append(firstNameMatches, p)
-			}
-		}
-		matching = firstNameMatches
-	}
-
-	switch len(matching) {
-	case 0:
-		return domain.Patient{}, nil
-	case 1:
-		return matching[0], nil
-	default:
-		return domain.Patient{}, matching
-	}
-}
-
-func patientFirstNameMatches(patient domain.Patient, firstName string) bool {
-	patientFirst := strings.ToUpper(domain.StripDiacritics(patient.FirstName))
-	requestFirst := strings.ToUpper(domain.StripDiacritics(firstName))
-	return strings.HasPrefix(patientFirst, requestFirst)
-}
-
-func notFoundMessage(req PatientResolveRequest) string {
-	if req.Phone != "" && req.FirstName == "" && req.DOB == "" {
-		return "No patient found for that phone number"
-	}
-	if req.FirstName != "" {
-		return "No patient found matching that first name"
-	}
-	return "No patient found matching the provided information"
-}
-
-func multipleMatchesMessage(req PatientResolveRequest, count int) string {
-	if req.Phone != "" && req.FirstName != "" && req.DOB == "" {
-		return fmt.Sprintf("Found %d patients with that name and phone number. Please provide date of birth.", count)
-	}
-	if req.Phone != "" {
-		return fmt.Sprintf("Found %d patients for this phone number. Ask the caller to confirm their name.", count)
-	}
-	return fmt.Sprintf("Found %d patients with that last name and DOB. Please provide first name.", count)
-}
-
-func (h *Handlers) resolveKnownPatient(ctx context.Context, tokenData *domain.TokenData, req PatientResolveRequest, office *domain.OfficeConfig) PatientResolveResponse {
-	resp := PatientResolveResponse{
-		Status:       "verified",
-		PatientID:    req.PatientID,
-		Appointments: []PatientApptDetail{},
-	}
-
-	demoResult, err := h.amdClient.GetDemographic(ctx, tokenData, req.PatientID)
-	if err != nil {
-		log.Printf("WARNING: patient-resolve: failed to get demographics category=%s", safeerrors.Classify(err))
-	} else if demoResult != nil {
-		applyDemographicsToResolveResponse(&resp, demoResult, office, demoResult.DOB)
-		resp.DOB = demoResult.DOB
-	}
-
-	attachAppointments(ctx, h, tokenData, &resp, req.PatientID, office)
-	setPatientResolveMessage(&resp)
-	return resp
-}
-
-func (h *Handlers) buildResolvedPatient(ctx context.Context, tokenData *domain.TokenData, patient domain.Patient, office *domain.OfficeConfig, lookupPhone string) PatientResolveResponse {
-	resp := PatientResolveResponse{
-		Status:       "verified",
-		PatientID:    patient.ID,
-		Name:         patient.FullName,
-		DOB:          patient.DOB,
-		Phone:        firstNonEmpty(patient.Phone, lookupPhone),
-		Appointments: []PatientApptDetail{},
-	}
-
-	demoResult, err := h.amdClient.GetDemographic(ctx, tokenData, patient.ID)
-	if err != nil {
-		log.Printf("WARNING: patient-resolve: failed to get demographics category=%s", safeerrors.Classify(err))
-	} else if demoResult != nil {
-		applyDemographicsToResolveResponse(&resp, demoResult, office, patient.DOB)
-	}
-
-	attachAppointments(ctx, h, tokenData, &resp, patient.ID, office)
-	setPatientResolveMessage(&resp)
-	return resp
-}
-
-func (h *Handlers) buildResolvedPatientMatches(ctx context.Context, tokenData *domain.TokenData, patients []domain.Patient, office *domain.OfficeConfig, lookupPhone string) []PatientResolveResponse {
-	matches := make([]PatientResolveResponse, 0, len(patients))
-	for _, patient := range patients {
-		matches = append(matches, h.buildResolvedPatient(ctx, tokenData, patient, office, lookupPhone))
-	}
-	return matches
-}
-
-func applyDemographicsToResolveResponse(resp *PatientResolveResponse, demoResult *clients.DemographicResult, office *domain.OfficeConfig, patientDOB string) {
-	policy := domain.NewSchedulingPolicy(office)
-	resp.InsuranceCarrier = demoResult.CarrierName
-	resp.InsPlanID = demoResult.InsPlanID
-	resp.RespPartyID = demoResult.RespPartyID
-
-	if demoResult.CarrierID != "" {
-		resp.InsuranceCarrierID = demoResult.CarrierID
-		routing, ambiguous := domain.RoutingForDemographicInsurance(demoResult.CarrierID, demoResult.CarrierName, office)
-		routing = policy.PatientRouting(routing, patientDOB)
-		resp.Routing = string(routing)
-		resp.AllowedProviders = policy.ProviderNames(routing, patientDOB)
-		resp.RoutingAmbiguous = ambiguous
-		if entry, ok := domain.LookupInsuranceForCoverageAtOffice(demoResult.CarrierName, domain.InsuranceModeMedical, office); ok {
-			resp.PreauthRequired = entry.PreauthRequired
-		}
-		if domain.IsMinor(patientDOB) && routing != domain.RoutingNotAccepted {
-			resp.RoutingAmbiguous = false
-		}
-	}
-}
-
-func attachAppointments(ctx context.Context, h *Handlers, tokenData *domain.TokenData, resp *PatientResolveResponse, patientID string, office *domain.OfficeConfig) {
-	if h.amdRestClient == nil {
-		resp.AppointmentsStatus = appointmentsStatusError
-		resp.Appointments = []PatientApptDetail{}
-		resp.AppointmentsMessage = "AdvancedMD appointment client is not configured"
-		return
-	}
-
-	appts, err := h.fetchUpcomingAppointments(ctx, tokenData, patientID, office)
-	if err != nil {
-		log.Printf("WARNING: patient-resolve: failed to get appointments category=%s", safeerrors.Classify(err))
-		resp.AppointmentsStatus = appointmentsStatusError
-		resp.Appointments = []PatientApptDetail{}
-		resp.AppointmentsMessage = "Failed to retrieve appointments from AdvancedMD. Please try again."
-		return
-	}
-
-	resp.Appointments = appts
-	if len(appts) > 0 {
-		resp.AppointmentsStatus = appointmentsStatusFound
-	} else {
-		resp.AppointmentsStatus = appointmentsStatusNone
-	}
-}
-
-func setPatientResolveMessage(resp *PatientResolveResponse) {
-	switch resp.AppointmentsStatus {
-	case appointmentsStatusFound:
-		resp.Message = fmt.Sprintf("Patient verified with %d appointment(s)", len(resp.Appointments))
-	case appointmentsStatusNone:
-		resp.Message = "Patient verified, no appointments found"
-	case appointmentsStatusError:
-		resp.Message = "Patient verified, appointment lookup unavailable"
-	default:
-		resp.Message = "Patient verified"
-	}
 }
 
 // fetchUpcomingAppointments retrieves future appointments for a patient ID
