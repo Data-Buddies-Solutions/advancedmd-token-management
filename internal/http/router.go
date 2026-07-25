@@ -21,6 +21,7 @@ func NewRouter(handlers *Handlers, apiSecret string, maintenanceAuthorizer Maint
 	r.Get("/health", handlers.HandleLive)
 	r.Get("/live", handlers.HandleLive)
 	r.Get("/ready", handlers.HandleReady)
+	r.Get("/metrics", handlers.HandleMetrics)
 
 	// Operational maintenance uses a dedicated Google-signed scheduler identity.
 	r.With(MaintenanceAuthMiddleware(maintenanceAuthorizer)).

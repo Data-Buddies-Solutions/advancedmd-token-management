@@ -363,9 +363,10 @@ func TestAdvancedMDClient_GetDemographic(t *testing.T) {
 							"insplanlist": {
 								"insplan": {
 									"@id": "ins789",
-									"@carrier": "car40906",
-									"@subscriber": "resp456",
-									"@enddate": "",
+								"@carrier": "car40906",
+								"@subscriber": "resp456",
+								"@subscribernum": "H123",
+								"@enddate": "",
 									"@coverage": "1"
 								}
 							}
@@ -402,6 +403,12 @@ func TestAdvancedMDClient_GetDemographic(t *testing.T) {
 	if result.RespPartyID != "resp456" {
 		t.Errorf("Expected resp party ID 'resp456', got %q", result.RespPartyID)
 	}
+	if result.SubscriberNum != "H123" {
+		t.Errorf("Expected subscriber number 'H123', got %q", result.SubscriberNum)
+	}
+	if !result.InsuranceStateKnown {
+		t.Fatal("Expected complete insurance state")
+	}
 }
 
 func TestAdvancedMDClient_GetDemographic_NoInsurance(t *testing.T) {
@@ -437,6 +444,92 @@ func TestAdvancedMDClient_GetDemographic_NoInsurance(t *testing.T) {
 	}
 	if result.RespPartyID != "resp456" {
 		t.Errorf("Expected resp party ID 'resp456' from patient, got %q", result.RespPartyID)
+	}
+	if !result.InsuranceStateKnown {
+		t.Fatal("Expected absence of insurance to be a complete state")
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic_MalformedInsuranceStateIsIncomplete(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat123",
+							"@respparty": "resp456",
+							"insplanlist": {"insplan": "malformed"}
+						}
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	result, err := client.GetDemographic(context.Background(), tokenData, "pat123")
+	if err != nil {
+		t.Fatalf("GetDemographic failed: %v", err)
+	}
+	if result.InsuranceStateKnown {
+		t.Fatal("Malformed insurance state must not be usable for reconciliation")
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic_EmptyEnvelopeFails(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	if _, err := client.GetDemographic(context.Background(), tokenData, "pat123"); err == nil {
+		t.Fatal("Empty demographic envelope must not be treated as authoritative")
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic_ProviderFaultFails(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"PPMDResults":{"Error":{"Fault":{"detail":{"description":"not found"}}}}}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	if _, err := client.GetDemographic(context.Background(), tokenData, "pat123"); err == nil {
+		t.Fatal("Provider fault must not be treated as authoritative")
+	}
+}
+
+func TestAdvancedMDClient_GetDemographic_MismatchedPatientFails(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat999",
+							"@respparty": "resp999"
+						}
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	if _, err := client.GetDemographic(context.Background(), tokenData, "pat123"); err == nil {
+		t.Fatal("Demographics for another patient must not be authoritative")
 	}
 }
 
@@ -530,6 +623,41 @@ func TestAdvancedMDClient_GetDemographic_MultiplePlansPicksActive(t *testing.T) 
 	}
 }
 
+func TestAdvancedMDClient_GetDemographic_MultipleActivePrimaryPlansIsIncomplete(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"PPMDResults": {
+				"Results": {
+					"patientlist": {
+						"patient": {
+							"@id": "pat123",
+							"@respparty": "resp456",
+							"insplanlist": {
+								"insplan": [
+									{"@id": "ins100", "@carrier": "car40887", "@coverage": "1"},
+									{"@id": "ins200", "@carrier": "car40906", "@coverage": "1"}
+								]
+							}
+						}
+					}
+				}
+			}
+		}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	result, err := client.GetDemographic(context.Background(), tokenData, "pat123")
+	if err != nil {
+		t.Fatalf("GetDemographic failed: %v", err)
+	}
+	if result.InsuranceStateKnown {
+		t.Fatal("Multiple active primary plans must not be authoritative for reconciliation")
+	}
+}
+
 func TestAdvancedMDClient_EndDateInsurance(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -557,6 +685,20 @@ func TestAdvancedMDClient_EndDateInsurance_Error(t *testing.T) {
 	err := client.EndDateInsurance(context.Background(), tokenData, "pat123", "ins789")
 	if err == nil {
 		t.Fatal("Expected error for failed end-date, got nil")
+	}
+}
+
+func TestAdvancedMDClient_EndDateInsurance_EmptyErrorIsNotRejection(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"PPMDResults":{"Results":{"@success":"1"},"Error":{}}}`))
+	})
+
+	client, tokenData, cleanup := newTestXMLRPCClient(t, handler)
+	defer cleanup()
+
+	if err := client.EndDateInsurance(context.Background(), tokenData, "pat123", "ins789"); err != nil {
+		t.Fatalf("Empty Error object must not be explicit rejection: %v", err)
 	}
 }
 

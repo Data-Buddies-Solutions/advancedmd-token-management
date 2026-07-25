@@ -4,9 +4,13 @@ package patient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"advancedmd-token-management/internal/advancedmd"
 	"advancedmd-token-management/internal/domain"
@@ -27,6 +31,33 @@ const (
 	AppointmentsFound AppointmentsStatus = "found"
 	AppointmentsNone  AppointmentsStatus = "none"
 	AppointmentsError AppointmentsStatus = "error"
+)
+
+type CreateStatus string
+
+const (
+	CreateStatusCreated CreateStatus = "created"
+	CreateStatusPartial CreateStatus = "partial"
+	CreateStatusError   CreateStatus = "error"
+)
+
+type MutationOutcome string
+
+const (
+	MutationRejected           MutationOutcome = "rejected"
+	MutationReconciledFailure  MutationOutcome = "reconciled_failure"
+	MutationIndeterminateWrite MutationOutcome = "indeterminate_write"
+	MutationValidationFailed   MutationOutcome = "validation_failed"
+	MutationUnavailable        MutationOutcome = "unavailable"
+	MutationFailed             MutationOutcome = "failed"
+	MutationReconciledSuccess  MutationOutcome = "reconciled_success"
+)
+
+type UpdateInsuranceStatus string
+
+const (
+	UpdateInsuranceStatusUpdated UpdateInsuranceStatus = "updated"
+	UpdateInsuranceStatusError   UpdateInsuranceStatus = "error"
 )
 
 // ResolveCommand is the complete patient-resolution intent accepted from the
@@ -74,17 +105,562 @@ type ResolveResult struct {
 	Matches             []ResolveResult
 }
 
+// CreateCommand is the complete caller intent for creating a patient and
+// attaching primary insurance.
+type CreateCommand struct {
+	FirstName      string
+	LastName       string
+	DOB            string
+	Phone          string
+	Email          string
+	Street         string
+	AptSuite       string
+	City           string
+	State          string
+	Zip            string
+	Sex            string
+	SSN            string
+	Insurance      string
+	CoverageType   string
+	SubscriberName string
+	SubscriberNum  string
+	Office         string
+}
+
+// CreateResult preserves the public patient-creation response contract.
+type CreateResult struct {
+	Status           CreateStatus
+	Outcome          MutationOutcome
+	PatientID        string
+	Name             string
+	DOB              string
+	Routing          domain.RoutingRule
+	AllowedProviders []string
+	PreauthRequired  bool
+	Message          string
+}
+
+// UpdateInsuranceCommand is the complete caller intent for replacing primary
+// insurance.
+type UpdateInsuranceCommand struct {
+	PatientID      string
+	DOB            string
+	InsPlanID      string
+	RespPartyID    string
+	OldInsurance   string
+	Insurance      string
+	CoverageType   string
+	SubscriberName string
+	SubscriberNum  string
+	Office         string
+}
+
+// UpdateInsuranceResult preserves the public insurance-update response
+// contract.
+type UpdateInsuranceResult struct {
+	Status           UpdateInsuranceStatus
+	Outcome          MutationOutcome
+	PatientID        string
+	OldInsurance     string
+	NewInsurance     string
+	Routing          domain.RoutingRule
+	AllowedProviders []string
+	RoutingAmbiguous bool
+	PreauthRequired  bool
+	Message          string
+}
+
 // Patient is the single interface used by patient-facing HTTP routes.
 type Patient interface {
 	Resolve(context.Context, ResolveCommand) (ResolveResult, error)
+	Create(context.Context, CreateCommand) CreateResult
+	UpdateInsurance(context.Context, UpdateInsuranceCommand) UpdateInsuranceResult
 }
 
 type patient struct {
 	advancedMD advancedmd.PatientRecords
 }
 
+type MutationMetric struct {
+	Operation string
+	Outcome   string
+	Count     uint64
+}
+
+type mutationMetricKey struct {
+	operation string
+	outcome   string
+}
+
+const (
+	maxReadAttempts = 3
+	readRetryDelay  = 5 * time.Millisecond
+)
+
+var mutationMetrics = struct {
+	sync.Mutex
+	counts map[mutationMetricKey]uint64
+}{
+	counts: make(map[mutationMetricKey]uint64),
+}
+
 func New(advancedMD advancedmd.PatientRecords) Patient {
 	return &patient{advancedMD: advancedMD}
+}
+
+func (p *patient) Create(ctx context.Context, command CreateCommand) (result CreateResult) {
+	defer func() {
+		recordMutation("create", createOutcome(result))
+	}()
+
+	office, err := domain.ResolveOffice(command.Office)
+	if err != nil {
+		return CreateResult{Status: CreateStatusError, Outcome: MutationValidationFailed, Message: err.Error()}
+	}
+	if domain.IsSelfPayInsurance(command.Insurance) && strings.TrimSpace(command.SubscriberNum) == "" {
+		command.SubscriberNum = "self pay"
+	}
+	if missing := createMissingFields(command); len(missing) > 0 {
+		return CreateResult{
+			Status:  CreateStatusError,
+			Outcome: MutationValidationFailed,
+			Message: fmt.Sprintf("Missing required fields: %s", strings.Join(missing, ", ")),
+		}
+	}
+	selection, message := selectInsurance(command.Insurance, command.CoverageType, office)
+	if message != "" {
+		return CreateResult{Status: CreateStatusError, Outcome: MutationValidationFailed, Message: message}
+	}
+
+	created, createReconciled, outcome := p.createPatient(ctx, command, office)
+	switch outcome {
+	case MutationRejected:
+		return CreateResult{Status: CreateStatusError, Outcome: outcome, Message: "AdvancedMD rejected patient creation. Please contact the office."}
+	case MutationReconciledFailure:
+		return CreateResult{Status: CreateStatusError, Outcome: outcome, Message: "AdvancedMD did not create the patient. Please try again or contact the office."}
+	case MutationIndeterminateWrite:
+		return CreateResult{Status: CreateStatusError, Outcome: outcome, Message: "Patient creation may have been applied, but the outcome could not be confirmed. Do not retry automatically; contact the office."}
+	case MutationUnavailable, MutationFailed:
+		return CreateResult{Status: CreateStatusError, Outcome: outcome, Message: "Failed to create patient in AdvancedMD. Please try again or contact the office."}
+	}
+
+	insuranceReconciled, outcome := p.addInsurance(ctx, domain.PatientInsurance{
+		PatientID:     created.ID,
+		RespPartyID:   created.RespPartyID,
+		CarrierID:     selection.entry.CarrierID,
+		SubscriberNum: command.SubscriberNum,
+	})
+	if outcome != "" {
+		partial := CreateResult{
+			Status:    CreateStatusPartial,
+			Outcome:   outcome,
+			PatientID: created.ID,
+			Name:      created.Name,
+			DOB:       domain.NormalizeDOB(command.DOB),
+		}
+		switch outcome {
+		case MutationRejected:
+			partial.Message = "Patient created, but AdvancedMD rejected the insurance attachment. Please contact the office."
+		case MutationReconciledFailure:
+			partial.Message = "Patient created, but AdvancedMD did not attach the insurance. Please try again or contact the office."
+		case MutationIndeterminateWrite:
+			partial.Message = "Patient created, but the insurance attachment may have been applied and could not be confirmed. Do not retry automatically; contact the office."
+		default:
+			partial.Message = "Patient created but insurance could not be attached. Please contact the office."
+		}
+		return partial
+	}
+
+	routing := selection.entry.Routing
+	if selection.mode == domain.InsuranceModeMedical {
+		routing = selection.policy.SchedulingRouting(routing, domain.NormalizeDOB(command.DOB))
+	}
+	result = CreateResult{
+		Status:           CreateStatusCreated,
+		PatientID:        created.ID,
+		Name:             created.Name,
+		DOB:              domain.NormalizeDOB(command.DOB),
+		Routing:          routing,
+		AllowedProviders: selection.policy.ProviderNames(routing, domain.NormalizeDOB(command.DOB)),
+		PreauthRequired:  selection.entry.PreauthRequired,
+		Message:          "Patient created and insurance attached successfully",
+	}
+	if createReconciled || insuranceReconciled {
+		result.Outcome = MutationReconciledSuccess
+	}
+	return result
+}
+
+type insuranceSelection struct {
+	entry  domain.InsuranceEntry
+	mode   domain.InsuranceMode
+	policy domain.SchedulingPolicy
+}
+
+func selectInsurance(name, coverageType string, office *domain.OfficeConfig) (insuranceSelection, string) {
+	mode := domain.InsuranceModeForCoverage(coverageType)
+	entry, ok := domain.LookupInsuranceForCoverageAtOffice(name, mode, office)
+	policy := domain.NewSchedulingPolicy(office)
+
+	switch {
+	case mode == domain.InsuranceModeVision && !policy.SupportsRouting(domain.RoutingOpticalOnly):
+		return insuranceSelection{}, fmt.Sprintf("Routine vision coverage is not supported at %s. Route the patient to Spring Hill routine vision scheduling.", office.DisplayName)
+	case mode == domain.InsuranceModeMedical && !policy.SupportsMedical():
+		return insuranceSelection{}, fmt.Sprintf("Medical coverage is not supported at %s. Use routine vision coverage for this office or route medical visits to a medical office.", office.DisplayName)
+	case !ok:
+		return insuranceSelection{}, fmt.Sprintf("Insurance not recognized: %q. Please use an insurance name from the accepted list.", name)
+	case entry.Routing == domain.RoutingNotAccepted:
+		return insuranceSelection{}, fmt.Sprintf("%s is not accepted at %s.", name, office.DisplayName)
+	default:
+		return insuranceSelection{entry: entry, mode: mode, policy: policy}, ""
+	}
+}
+
+func createMissingFields(command CreateCommand) []string {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"firstName", command.FirstName},
+		{"lastName", command.LastName},
+		{"dob", command.DOB},
+		{"phone", command.Phone},
+		{"street", command.Street},
+		{"city", command.City},
+		{"state", command.State},
+		{"zip", command.Zip},
+		{"sex", command.Sex},
+		{"insurance", command.Insurance},
+		{"subscriberName", command.SubscriberName},
+		{"subscriberNum", command.SubscriberNum},
+	}
+	missing := make([]string, 0)
+	for _, field := range fields {
+		if field.value == "" {
+			missing = append(missing, field.name)
+		}
+	}
+	return missing
+}
+
+func (p *patient) createPatient(ctx context.Context, command CreateCommand, office *domain.OfficeConfig) (domain.CreatedPatient, bool, MutationOutcome) {
+	created, err := p.advancedMD.CreatePatient(ctx, domain.PatientCreate{
+		FirstName: domain.StripDiacritics(command.FirstName),
+		LastName:  domain.StripDiacritics(command.LastName),
+		DOB:       domain.NormalizeDOB(command.DOB),
+		Phone:     domain.FormatPhone(command.Phone),
+		Email:     strings.TrimSpace(command.Email),
+		Street:    command.Street,
+		AptSuite:  command.AptSuite,
+		City:      command.City,
+		State:     strings.ToUpper(command.State),
+		Zip:       command.Zip,
+		Sex:       domain.NormalizeSex(command.Sex),
+		SSN:       strings.TrimSpace(command.SSN),
+		OfficeID:  office.ID,
+	})
+	if err == nil {
+		return created, false, ""
+	}
+	switch advancedmd.MutationFailureOf(err) {
+	case advancedmd.MutationRejected:
+		return domain.CreatedPatient{}, false, MutationRejected
+	case advancedmd.MutationAmbiguous:
+		created, outcome := p.reconcileCreatedPatient(ctx, command)
+		return created, outcome == "", outcome
+	default:
+		return domain.CreatedPatient{}, false, failureOutcome(err)
+	}
+}
+
+func (p *patient) UpdateInsurance(ctx context.Context, command UpdateInsuranceCommand) (result UpdateInsuranceResult) {
+	defer func() {
+		recordMutation("update_insurance", updateInsuranceOutcome(result))
+	}()
+
+	if domain.IsSelfPayInsurance(command.Insurance) && strings.TrimSpace(command.SubscriberNum) == "" {
+		command.SubscriberNum = "self pay"
+	}
+	if command.PatientID == "" || command.Insurance == "" || command.SubscriberNum == "" {
+		return UpdateInsuranceResult{
+			Status:  UpdateInsuranceStatusError,
+			Outcome: MutationValidationFailed,
+			Message: "patientId, insurance, and subscriberNum are required",
+		}
+	}
+	if err := domain.ValidateOptionalDOB(command.DOB); err != nil {
+		return UpdateInsuranceResult{
+			Status:  UpdateInsuranceStatusError,
+			Outcome: MutationValidationFailed,
+			Message: err.Error(),
+		}
+	}
+	office, err := domain.ResolveOffice(command.Office)
+	if err != nil {
+		return UpdateInsuranceResult{Status: UpdateInsuranceStatusError, Outcome: MutationValidationFailed, Message: err.Error()}
+	}
+	selection, message := selectInsurance(command.Insurance, command.CoverageType, office)
+	if message != "" {
+		return UpdateInsuranceResult{Status: UpdateInsuranceStatusError, Outcome: MutationValidationFailed, Message: message}
+	}
+
+	reconciled, replacementAlreadyActive, outcome := p.endInsurance(ctx, command, selection.entry.CarrierID)
+	if outcome != "" {
+		return updateInsuranceFailure(outcome, "Failed to update existing insurance in AdvancedMD. Please try again or contact the office.")
+	}
+
+	if !replacementAlreadyActive {
+		addReconciled, outcome := p.addInsurance(ctx, domain.PatientInsurance{
+			PatientID:     command.PatientID,
+			RespPartyID:   command.RespPartyID,
+			CarrierID:     selection.entry.CarrierID,
+			SubscriberNum: command.SubscriberNum,
+		})
+		reconciled = reconciled || addReconciled
+		if outcome != "" {
+			return updateInsuranceFailure(outcome, "Failed to attach new insurance in AdvancedMD. Please try again or contact the office.")
+		}
+	}
+
+	routing := selection.policy.SchedulingRouting(selection.entry.Routing, command.DOB)
+	_, ambiguous := domain.RoutingForDemographicInsurance(selection.entry.CarrierID, command.Insurance, office)
+	result = UpdateInsuranceResult{
+		Status:           UpdateInsuranceStatusUpdated,
+		PatientID:        command.PatientID,
+		OldInsurance:     command.OldInsurance,
+		NewInsurance:     command.Insurance,
+		Routing:          routing,
+		AllowedProviders: selection.policy.ProviderNames(routing, command.DOB),
+		RoutingAmbiguous: ambiguous,
+		PreauthRequired:  selection.entry.PreauthRequired,
+		Message:          "Insurance updated successfully",
+	}
+	if reconciled {
+		result.Outcome = MutationReconciledSuccess
+	}
+	return result
+}
+
+func updateInsuranceFailure(outcome MutationOutcome, message string) UpdateInsuranceResult {
+	switch outcome {
+	case MutationRejected:
+		message = "AdvancedMD rejected the insurance update. Please contact the office."
+	case MutationReconciledFailure:
+		message = "AdvancedMD did not apply the insurance update. Please try again or contact the office."
+	case MutationIndeterminateWrite:
+		message = "The insurance update may have been applied, but the outcome could not be confirmed. Do not retry automatically; contact the office."
+	}
+	return UpdateInsuranceResult{Status: UpdateInsuranceStatusError, Outcome: outcome, Message: message}
+}
+
+func (p *patient) endInsurance(ctx context.Context, command UpdateInsuranceCommand, replacementCarrierID string) (bool, bool, MutationOutcome) {
+	if command.InsPlanID == "" {
+		return false, false, ""
+	}
+	err := p.advancedMD.EndDatePatientInsurance(ctx, domain.PatientInsuranceEnd{
+		PatientID: command.PatientID,
+		InsPlanID: command.InsPlanID,
+	})
+	if err == nil {
+		return false, false, ""
+	}
+	switch advancedmd.MutationFailureOf(err) {
+	case advancedmd.MutationRejected:
+		return false, false, MutationRejected
+	case advancedmd.MutationAmbiguous:
+		demographics, known := p.reconcileInsurance(ctx, command.PatientID)
+		if !known {
+			return false, false, MutationIndeterminateWrite
+		}
+		if demographics.InsPlanID == command.InsPlanID {
+			return false, false, MutationReconciledFailure
+		}
+		replacement := domain.PatientInsurance{
+			RespPartyID:   command.RespPartyID,
+			CarrierID:     replacementCarrierID,
+			SubscriberNum: command.SubscriberNum,
+		}
+		return true, insuranceMatches(demographics, replacement), ""
+	default:
+		return false, false, failureOutcome(err)
+	}
+}
+
+func (p *patient) addInsurance(ctx context.Context, command domain.PatientInsurance) (bool, MutationOutcome) {
+	err := p.advancedMD.AddPatientInsurance(ctx, command)
+	if err == nil {
+		return false, ""
+	}
+	switch advancedmd.MutationFailureOf(err) {
+	case advancedmd.MutationRejected:
+		return false, MutationRejected
+	case advancedmd.MutationAmbiguous:
+		demographics, known := p.reconcileInsurance(ctx, command.PatientID)
+		if !known {
+			return false, MutationIndeterminateWrite
+		}
+		if !insuranceMatches(demographics, command) {
+			return false, MutationReconciledFailure
+		}
+		return true, ""
+	default:
+		return false, failureOutcome(err)
+	}
+}
+
+func insuranceMatches(demographics domain.PatientDemographics, intended domain.PatientInsurance) bool {
+	return demographics.CarrierID == intended.CarrierID &&
+		demographics.RespPartyID == intended.RespPartyID &&
+		strings.EqualFold(strings.TrimSpace(demographics.SubscriberNum), strings.TrimSpace(intended.SubscriberNum))
+}
+
+func (p *patient) reconcileInsurance(ctx context.Context, patientID string) (domain.PatientDemographics, bool) {
+	demographics, err := retryRead(ctx, func() (domain.PatientDemographics, error) {
+		return p.advancedMD.GetPatientDemographics(ctx, patientID)
+	})
+	if err != nil || !demographics.InsuranceStateKnown {
+		return domain.PatientDemographics{}, false
+	}
+	return demographics, true
+}
+
+func (p *patient) reconcileCreatedPatient(ctx context.Context, command CreateCommand) (domain.CreatedPatient, MutationOutcome) {
+	search := domain.PatientSearch{Phone: domain.NormalizePhoneDigits(command.Phone)}
+	candidates, err := retryRead(ctx, func() ([]domain.Patient, error) {
+		return p.advancedMD.SearchPatients(ctx, search)
+	})
+	if err != nil {
+		return domain.CreatedPatient{}, MutationIndeterminateWrite
+	}
+
+	matches := make([]domain.Patient, 0, 1)
+	for _, candidate := range candidates {
+		if creationMatch(candidate, command) {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return domain.CreatedPatient{}, MutationReconciledFailure
+	}
+	if len(matches) != 1 {
+		return domain.CreatedPatient{}, MutationIndeterminateWrite
+	}
+
+	demographics, err := retryRead(ctx, func() (domain.PatientDemographics, error) {
+		return p.advancedMD.GetPatientDemographics(ctx, matches[0].ID)
+	})
+	if err != nil || demographics.RespPartyID == "" {
+		return domain.CreatedPatient{}, MutationIndeterminateWrite
+	}
+	return domain.CreatedPatient{
+		ID:          matches[0].ID,
+		RespPartyID: demographics.RespPartyID,
+		Name:        matches[0].FullName,
+	}, ""
+}
+
+func creationMatch(candidate domain.Patient, command CreateCommand) bool {
+	firstName := candidate.FirstName
+	if firstName == "" {
+		firstName = domain.ParseFirstName(candidate.FullName)
+	}
+	lastName := candidate.LastName
+	if lastName == "" {
+		lastName = strings.TrimSpace(strings.SplitN(candidate.FullName, ",", 2)[0])
+	}
+	return strings.EqualFold(domain.StripDiacritics(firstName), domain.StripDiacritics(command.FirstName)) &&
+		strings.EqualFold(domain.StripDiacritics(lastName), domain.StripDiacritics(command.LastName)) &&
+		domain.NormalizeDOB(candidate.DOB) == domain.NormalizeDOB(command.DOB) &&
+		(candidate.Phone == "" || domain.NormalizePhoneDigits(candidate.Phone) == domain.NormalizePhoneDigits(command.Phone))
+}
+
+func retryRead[T any](ctx context.Context, read func() (T, error)) (T, error) {
+	var zero T
+	for attempt := 1; attempt <= maxReadAttempts; attempt++ {
+		result, err := read()
+		if err == nil {
+			return result, nil
+		}
+		if attempt == maxReadAttempts || !isTransientReadError(err) {
+			return zero, err
+		}
+
+		timer := time.NewTimer(readRetryDelay * time.Duration(attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return zero, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return zero, errors.New("patient read retry exhausted")
+}
+
+func isTransientReadError(err error) bool {
+	switch advancedmd.CategoryOf(err) {
+	case safeerrors.CategoryTimeout, safeerrors.CategoryNetwork, safeerrors.CategoryUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+func failureOutcome(err error) MutationOutcome {
+	switch advancedmd.CategoryOf(err) {
+	case safeerrors.CategoryUnavailable, safeerrors.CategoryAuthentication:
+		return MutationUnavailable
+	default:
+		return MutationFailed
+	}
+}
+
+func createOutcome(result CreateResult) string {
+	if result.Outcome != "" {
+		return string(result.Outcome)
+	}
+	if result.Status == CreateStatusCreated {
+		return "success"
+	}
+	return "failed"
+}
+
+func updateInsuranceOutcome(result UpdateInsuranceResult) string {
+	if result.Outcome != "" {
+		return string(result.Outcome)
+	}
+	if result.Status == UpdateInsuranceStatusUpdated {
+		return "success"
+	}
+	return "failed"
+}
+
+func recordMutation(operation, outcome string) {
+	log.Printf("patient-mutation operation=%s category=%s", operation, outcome)
+
+	mutationMetrics.Lock()
+	defer mutationMetrics.Unlock()
+	mutationMetrics.counts[mutationMetricKey{operation: operation, outcome: outcome}]++
+}
+
+func MutationMetricSnapshot() []MutationMetric {
+	mutationMetrics.Lock()
+	defer mutationMetrics.Unlock()
+
+	snapshot := make([]MutationMetric, 0, len(mutationMetrics.counts))
+	for key, count := range mutationMetrics.counts {
+		snapshot = append(snapshot, MutationMetric{
+			Operation: key.operation,
+			Outcome:   key.outcome,
+			Count:     count,
+		})
+	}
+	sort.Slice(snapshot, func(i, j int) bool {
+		if snapshot[i].Operation == snapshot[j].Operation {
+			return snapshot[i].Outcome < snapshot[j].Outcome
+		}
+		return snapshot[i].Operation < snapshot[j].Operation
+	})
+	return snapshot
 }
 
 func (p *patient) Resolve(ctx context.Context, command ResolveCommand) (ResolveResult, error) {

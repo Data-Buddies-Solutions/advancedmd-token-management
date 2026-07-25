@@ -132,8 +132,9 @@ func TestAdapterDemographicsUsesControlledXMLRPCServer(t *testing.T) {
 							"insplanlist": {
 								"insplan": {
 									"@id": "ins789",
-									"@carrier": "car40906",
-									"@subscriber": "resp456",
+								"@carrier": "car40906",
+								"@subscriber": "resp456",
+								"@subscribernum": "H123",
 									"@enddate": "",
 									"@coverage": "1"
 								}
@@ -162,11 +163,13 @@ func TestAdapterDemographicsUsesControlledXMLRPCServer(t *testing.T) {
 		t.Fatalf("GetPatientDemographics() error = %v", err)
 	}
 	want := domain.PatientDemographics{
-		CarrierName: "HUMANA MEDICARE",
-		CarrierID:   "car40906",
-		InsPlanID:   "ins789",
-		RespPartyID: "resp456",
-		DOB:         "01/15/1980",
+		CarrierName:         "HUMANA MEDICARE",
+		CarrierID:           "car40906",
+		InsPlanID:           "ins789",
+		RespPartyID:         "resp456",
+		SubscriberNum:       "H123",
+		DOB:                 "01/15/1980",
+		InsuranceStateKnown: true,
 	}
 	if got != want {
 		t.Fatalf("GetPatientDemographics() = %+v, want %+v", got, want)
@@ -212,6 +215,140 @@ func TestAdapterReturnsStableRedactedErrors(t *testing.T) {
 			t.Fatalf("error exposed provider details: %v", err)
 		}
 	})
+}
+
+func TestAdapterClassifiesCreatePatientMutationOutcomes(t *testing.T) {
+	domain.InitRegistry("")
+	command := domain.PatientCreate{
+		FirstName: "JANE",
+		LastName:  "DOE",
+		DOB:       "01/15/1980",
+		Phone:     "(954)287-2010",
+		Street:    "123 Main St",
+		City:      "Spring Hill",
+		State:     "FL",
+		Zip:       "34609",
+		Sex:       "F",
+		OfficeID:  "spring_hill",
+	}
+
+	t.Run("explicit rejection", func(t *testing.T) {
+		requests := 0
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests++
+			w.Write([]byte(`{"PPMDResults":{"Error":"Duplicate name/DOB"}}`))
+		}))
+		defer server.Close()
+
+		adapter := NewAdapter(
+			staticSession{token: &domain.TokenData{
+				CookieToken: "token=test-cookie",
+				XmlrpcURL:   strings.TrimPrefix(server.URL, "https://"),
+			}},
+			clients.NewAdvancedMDClient(server.Client()),
+			nil,
+		)
+		_, err := adapter.CreatePatient(context.Background(), command)
+		if MutationFailureOf(err) != MutationRejected {
+			t.Fatalf("CreatePatient() category = %q, want rejected", MutationFailureOf(err))
+		}
+		if requests != 1 {
+			t.Fatalf("requests = %d, want one", requests)
+		}
+	})
+
+	t.Run("ambiguous response", func(t *testing.T) {
+		requests := 0
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests++
+			w.Write([]byte(`{"PPMDResults":{"Results":{}}}`))
+		}))
+		defer server.Close()
+
+		adapter := NewAdapter(
+			staticSession{token: &domain.TokenData{
+				CookieToken: "token=test-cookie",
+				XmlrpcURL:   strings.TrimPrefix(server.URL, "https://"),
+			}},
+			clients.NewAdvancedMDClient(server.Client()),
+			nil,
+		)
+		_, err := adapter.CreatePatient(context.Background(), command)
+		if MutationFailureOf(err) != MutationAmbiguous {
+			t.Fatalf("CreatePatient() category = %q, want ambiguous_write", MutationFailureOf(err))
+		}
+		if requests != 1 {
+			t.Fatalf("requests = %d, want one", requests)
+		}
+	})
+
+	t.Run("explicit HTTP rejection", func(t *testing.T) {
+		requests := 0
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests++
+			w.WriteHeader(http.StatusUnprocessableEntity)
+		}))
+		defer server.Close()
+
+		adapter := NewAdapter(
+			staticSession{token: &domain.TokenData{
+				CookieToken: "token=test-cookie",
+				XmlrpcURL:   strings.TrimPrefix(server.URL, "https://"),
+			}},
+			clients.NewAdvancedMDClient(server.Client()),
+			nil,
+		)
+		_, err := adapter.CreatePatient(context.Background(), command)
+		if MutationFailureOf(err) != MutationRejected {
+			t.Fatalf("CreatePatient() category = %q, want rejected", MutationFailureOf(err))
+		}
+		if requests != 1 {
+			t.Fatalf("requests = %d, want one", requests)
+		}
+	})
+}
+
+func TestAdapterInsuranceMutationUsesControlledXMLRPCServer(t *testing.T) {
+	domain.InitRegistry("")
+	requests := 0
+	var requestBody map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Write([]byte(`{"PPMDResults":{"Results":{}}}`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			CookieToken: "token=test-cookie",
+			XmlrpcURL:   strings.TrimPrefix(server.URL, "https://"),
+		}},
+		clients.NewAdvancedMDClient(server.Client()),
+		nil,
+	)
+	err := adapter.AddPatientInsurance(context.Background(), domain.PatientInsurance{
+		PatientID:     "123",
+		RespPartyID:   "resp456",
+		CarrierID:     "car308175",
+		SubscriberNum: "H123",
+	})
+	if err != nil {
+		t.Fatalf("AddPatientInsurance() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want one", requests)
+	}
+	message := requestBody["ppmdmsg"].(map[string]any)
+	if message["@action"] != "addinsurance" {
+		t.Fatalf("ppmdmsg = %#v", message)
+	}
+	patient := message["patient"].(map[string]any)
+	if patient["@id"] != "123" {
+		t.Fatalf("patient = %#v", patient)
+	}
 }
 
 func TestAdapterUpcomingAppointmentsUsesControlledRESTServer(t *testing.T) {

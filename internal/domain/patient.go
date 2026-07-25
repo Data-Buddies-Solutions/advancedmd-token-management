@@ -56,11 +56,13 @@ type PatientSearch struct {
 
 // PatientDemographics contains the patient fields used for insurance routing.
 type PatientDemographics struct {
-	CarrierName string
-	CarrierID   string
-	InsPlanID   string
-	RespPartyID string
-	DOB         string
+	CarrierName         string
+	CarrierID           string
+	InsPlanID           string
+	RespPartyID         string
+	SubscriberNum       string
+	DOB                 string
+	InsuranceStateKnown bool
 }
 
 // PatientAppointment is an upcoming appointment ready for Acuity workflows.
@@ -92,6 +94,44 @@ func ValidateOptionalDOB(dob string) error {
 		return fmt.Errorf("dob must be a valid date")
 	}
 	return nil
+}
+
+// PatientCreate contains normalized Acuity patient data for provider creation.
+type PatientCreate struct {
+	FirstName string
+	LastName  string
+	DOB       string
+	Phone     string
+	Email     string
+	Street    string
+	AptSuite  string
+	City      string
+	State     string
+	Zip       string
+	Sex       string
+	SSN       string
+	OfficeID  string
+}
+
+// CreatedPatient is the provider-confirmed identity of a newly created patient.
+type CreatedPatient struct {
+	ID          string
+	RespPartyID string
+	Name        string
+}
+
+// PatientInsurance contains the domain values needed to attach insurance.
+type PatientInsurance struct {
+	PatientID     string
+	RespPartyID   string
+	CarrierID     string
+	SubscriberNum string
+}
+
+// PatientInsuranceEnd identifies the active insurance plan to end-date.
+type PatientInsuranceEnd struct {
+	PatientID string
+	InsPlanID string
 }
 
 // StripPatientPrefix removes the "pat" prefix from patient IDs.

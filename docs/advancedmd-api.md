@@ -37,6 +37,7 @@ All `/api/*` routes require `Authorization: Bearer <API_SECRET>`.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `GET /metrics` | PHI-free patient mutation outcome counters |
 | `POST /api/patient/resolve` | Patient lookup/verification plus upcoming appointments |
 | `POST /api/add-patient` | Create patient and attach insurance |
 | `POST /api/patient/update-insurance` | End-date old plan and attach new plan |
@@ -88,6 +89,11 @@ Middleware normalizes:
 - Names by stripping diacritical marks before sending to AMD.
 
 The office's `DefaultProfileID` is used for the patient profile field.
+`internal/patient` owns validation, normalization, office resolution, insurance
+routing, mutation order, and reconciliation. `internal/advancedmd` owns the
+provider payload and classifies an explicit rejection separately from an
+ambiguous write. Ambiguous creation is reconciled through `lookuppatient`; no
+creation request is retried.
 
 ### `addinsurance`
 
@@ -107,6 +113,12 @@ and North Miami Beach Optical routine-vision flows. Hollywood and Sweetwater
 medical requests use the 5/4/2026 Abita Eye Group list's A.Bach medical column
 and route accepted medical plans to `bach_only`. North Miami Beach Optical is
 routine-vision only.
+
+An ambiguous `addinsurance` or `enddateinsurance` response is reconciled through
+`getdemographic`. The active carrier, responsible party, and subscriber number
+must match the intended replacement to prove it was applied; the old active
+plan proves it was not. When the read cannot prove either state, the Patient
+module returns `indeterminate_write` and performs no mutation retry.
 
 ### `getdemographic`
 
