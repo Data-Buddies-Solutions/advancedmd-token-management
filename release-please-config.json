@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/v17.6.0/schemas/config.json",
+  "bootstrap-sha": "5409c8708194d1a197586ce27b59abe6f5e0b3d6",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "package-name": "amd_middleware",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}
