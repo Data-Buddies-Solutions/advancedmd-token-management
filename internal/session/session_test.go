@@ -322,6 +322,47 @@ func TestSessionRetriesDegradedAuthenticationAfterDelay(t *testing.T) {
 	}
 }
 
+func TestSessionRequestFallbackRecoversAfterFailedMaintenance(t *testing.T) {
+	now := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	loginCalls := 0
+	var session Session = newSession(loginAdapterFunc(func(context.Context) (string, string, error) {
+		loginCalls++
+		switch loginCalls {
+		case 1:
+			return "known-good", "https://provider.test/processrequest/api-801/app", nil
+		case 2:
+			return "", "", errors.New("scheduled maintenance failed")
+		default:
+			return "request-recovered", "https://provider.test/processrequest/api-801/app", nil
+		}
+	}), clock.Now, sessionPolicy{
+		staleAfter:   time.Hour,
+		expiresAfter: 2 * time.Hour,
+		loginTimeout: time.Minute,
+		retryDelay:   time.Minute,
+	})
+
+	if _, err := session.Get(context.Background()); err != nil {
+		t.Fatalf("initial Get() error = %v", err)
+	}
+	if err := session.Maintain(context.Background()); err == nil {
+		t.Fatal("Maintain() error = nil, want scheduled failure")
+	}
+
+	clock.Advance(time.Minute)
+	token, err := session.Get(context.Background())
+	if err != nil {
+		t.Fatalf("request fallback Get() error = %v", err)
+	}
+	if token.Token != "Bearer request-recovered" {
+		t.Fatalf("request fallback token = %q", token.Token)
+	}
+	if loginCalls != 3 {
+		t.Fatalf("login calls = %d, want 3", loginCalls)
+	}
+}
+
 func TestSessionStatusReportsSafeTimingWithoutSessionData(t *testing.T) {
 	now := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: now}

@@ -8,7 +8,7 @@ import (
 )
 
 // NewRouter creates and configures the HTTP router.
-func NewRouter(handlers *Handlers, apiSecret string) http.Handler {
+func NewRouter(handlers *Handlers, apiSecret string, maintenanceAuthorizer MaintenanceAuthorizer) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -21,6 +21,10 @@ func NewRouter(handlers *Handlers, apiSecret string) http.Handler {
 	r.Get("/health", handlers.HandleLive)
 	r.Get("/live", handlers.HandleLive)
 	r.Get("/ready", handlers.HandleReady)
+
+	// Operational maintenance uses a dedicated Google-signed scheduler identity.
+	r.With(MaintenanceAuthMiddleware(maintenanceAuthorizer)).
+		Post("/ops/session/maintenance", handlers.HandleSessionMaintenance)
 
 	// API routes (auth required)
 	r.Route("/api", func(r chi.Router) {

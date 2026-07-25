@@ -148,6 +148,19 @@ func (h *Handlers) HandleReady(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte(`{"status":"ready"}`))
 }
 
+// HandleSessionMaintenance refreshes the process-local AdvancedMD session
+// without returning credentials, tokens, or provider endpoints.
+func (h *Handlers) HandleSessionMaintenance(w http.ResponseWriter, r *http.Request) {
+	if err := h.session.Maintain(r.Context()); err != nil {
+		log.Printf("session maintenance failed category=%s", safeerrors.Classify(err))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"status":"unavailable"}`))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // AddPatientRequest is the expected JSON body for patient creation.
 type AddPatientRequest struct {
 	FirstName      string `json:"firstName"`
