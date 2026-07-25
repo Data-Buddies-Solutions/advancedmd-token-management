@@ -84,6 +84,80 @@ func TestSessionReusesFreshSessionAndProtectsCachedState(t *testing.T) {
 	}
 }
 
+func TestSessionReusesDocumentedFreshTokenBefore20Hours(t *testing.T) {
+	now := time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	loginCalls := 0
+	var session Session = newSession(loginAdapterFunc(func(context.Context) (string, string, error) {
+		loginCalls++
+		if loginCalls == 1 {
+			return "known-good", "https://provider.test/processrequest/api-801/app", nil
+		}
+		return "refreshed-too-soon", "https://provider.test/processrequest/api-801/app", nil
+	}), clock.Now, sessionPolicy{
+		staleAfter:   DefaultSessionStaleAfter,
+		expiresAfter: DefaultSessionExpiresAfter,
+		loginTimeout: time.Minute,
+	})
+
+	if _, err := session.Get(context.Background()); err != nil {
+		t.Fatalf("initial Get() error = %v", err)
+	}
+	clock.Advance(20*time.Hour - time.Minute)
+
+	token, err := session.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get() before 20 hours error = %v", err)
+	}
+	if token.Token != "Bearer known-good" {
+		t.Fatalf("Get() before 20 hours token = %q, want current token", token.Token)
+	}
+
+	clock.Advance(time.Minute)
+	if got := session.Status().State; got != SessionStale {
+		t.Fatalf("state at 20 hours = %q, want %q", got, SessionStale)
+	}
+}
+
+func TestSessionUsesLastKnownGoodUntilDocumented24HourExpiration(t *testing.T) {
+	now := time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	loginCalls := 0
+	var session Session = newSession(loginAdapterFunc(func(context.Context) (string, string, error) {
+		loginCalls++
+		if loginCalls == 1 {
+			return "known-good", "https://provider.test/processrequest/api-801/app", nil
+		}
+		return "", "", errors.New("temporary login failure")
+	}), clock.Now, sessionPolicy{
+		staleAfter:   DefaultSessionStaleAfter,
+		expiresAfter: DefaultSessionExpiresAfter,
+		loginTimeout: time.Minute,
+	})
+
+	if _, err := session.Get(context.Background()); err != nil {
+		t.Fatalf("initial Get() error = %v", err)
+	}
+	clock.Advance(24*time.Hour - time.Minute)
+
+	token, err := session.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get() before documented expiration error = %v", err)
+	}
+	if token.Token != "Bearer known-good" {
+		t.Fatalf("Get() before documented expiration token = %q, want last-known-good token", token.Token)
+	}
+
+	clock.Advance(time.Minute)
+	token, err = session.Get(context.Background())
+	if token != nil {
+		t.Fatal("Get() returned token at documented expiration")
+	}
+	if !errors.Is(err, ErrSessionUnavailable) {
+		t.Fatalf("Get() at documented expiration error = %v, want unavailable", err)
+	}
+}
+
 func TestSessionConcurrentRequestsShareOneLogin(t *testing.T) {
 	now := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: now}
@@ -292,6 +366,37 @@ func TestSessionUsesControllableClockForCreationTime(t *testing.T) {
 	}
 	if token.CreatedAt != "2026-07-24T12:34:56Z" {
 		t.Fatalf("CreatedAt = %q, want controllable clock time", token.CreatedAt)
+	}
+}
+
+func TestSessionHardExpirationIncludesAuthenticationTime(t *testing.T) {
+	now := time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	loginCalls := 0
+	var session Session = newSession(loginAdapterFunc(func(context.Context) (string, string, error) {
+		loginCalls++
+		if loginCalls == 1 {
+			clock.Advance(2 * time.Minute)
+			return "known-good", "https://provider.test/processrequest/api-801/app", nil
+		}
+		return "", "", errors.New("temporary login failure")
+	}), clock.Now, sessionPolicy{
+		staleAfter:   DefaultSessionStaleAfter,
+		expiresAfter: DefaultSessionExpiresAfter,
+		loginTimeout: time.Minute,
+	})
+
+	if _, err := session.Get(context.Background()); err != nil {
+		t.Fatalf("initial Get() error = %v", err)
+	}
+	clock.Advance(24*time.Hour - 2*time.Minute)
+
+	token, err := session.Get(context.Background())
+	if token != nil {
+		t.Fatal("Get() returned token 24 hours after authentication started")
+	}
+	if !errors.Is(err, ErrSessionUnavailable) {
+		t.Fatalf("Get() error = %v, want unavailable", err)
 	}
 }
 

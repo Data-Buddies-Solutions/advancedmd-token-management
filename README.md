@@ -143,9 +143,9 @@ Use these service-level settings:
 One instance is intentional. The AdvancedMD session token and scheduler setup
 cache live in memory. The Session implementation is the only credential and
 token owner; it starts request-time authentication when needed and shares one
-in-flight login across concurrent callers. A session becomes stale after 19
-hours and is never treated as safe after the existing 20-hour production
-rotation boundary. The background refresh and always-allocated CPU remain
+in-flight login across concurrent callers. A session becomes stale after 20
+hours and is never treated as safe after AdvancedMD's documented 24-hour token
+lifetime. The 20-hour background refresh and always-allocated CPU remain
 temporarily unchanged for this release. Scaling to multiple instances would
 still create independent token/cache state and duplicate refresh loops.
 
