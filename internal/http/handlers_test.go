@@ -2162,7 +2162,7 @@ func TestRouter(t *testing.T) {
 	amdClient := clients.NewAdvancedMDClient(&http.Client{})
 	handlers := NewHandlers(nil, amdClient, nil) // nil session - can't test full flow
 
-	router := NewRouter(handlers, "test-secret")
+	router := NewRouter(handlers, "test-secret", nil)
 
 	t.Run("health endpoint no auth", func(t *testing.T) {
 		tests := []struct {

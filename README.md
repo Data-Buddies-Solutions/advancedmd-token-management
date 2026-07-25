@@ -13,8 +13,8 @@ experiment has been removed.
 - Owns AdvancedMD credentials and token state in one explicit Session lifecycle.
 - Reuses fresh sessions, performs single-flight request-time authentication,
   and keeps a usable last-known-good session when refresh temporarily fails.
-- Temporarily retains the existing background refresh while correctness moves
-  to request-time Session behavior.
+- Performs proactive maintenance only through a Google-authenticated
+  operational request; no required refresh depends on background CPU.
 - Exposes authenticated JSON endpoints for the voice agent.
 - Resolves offices by trunk phone number, office name, or display name.
 - Keeps AMD facility IDs, scheduler columns, profile IDs, and routing tiers in
@@ -38,9 +38,12 @@ LiveKit agent
   -> POST /api/appointment/cancel
 
 AdvancedMD middleware
-  -> in-memory Session owner with request-time fallback and background refresh
+  -> in-memory Session owner with authenticated maintenance and request fallback
   -> AdvancedMD XMLRPC APIs for patients, demographics, scheduler setup
   -> AdvancedMD REST APIs for appointments, block holds, booking, cancellation
+
+Cloud Scheduler
+  -> POST /ops/session/maintenance with a Google-signed OIDC identity
 ```
 
 ## Project Structure
@@ -67,7 +70,6 @@ advancedmd-token-management/
 |   |   `-- token.go
 |   |-- session/
 |   |   |-- authenticator.go
-|   |   |-- background.go
 |   |   `-- session.go
 |   `-- http/
 |       |-- handlers.go
@@ -89,6 +91,8 @@ advancedmd-token-management/
 | `ADVANCEDMD_APP_NAME` | Yes | Registered AdvancedMD app name |
 | `API_SECRET` | Yes | Bearer token required by `/api/*` endpoints |
 | `BOOKING_TOKEN_SECRET` | No | HMAC secret for signed availability slot tokens; defaults to `API_SECRET`, but should be distinct in production |
+| `MAINTENANCE_OIDC_AUDIENCE` | Yes | HTTPS Cloud Run service base URL accepted as the maintenance OIDC audience |
+| `MAINTENANCE_OIDC_SERVICE_ACCOUNT` | Yes | Dedicated Cloud Scheduler service-account email allowed to invoke maintenance |
 | `ALLOW_RAW_SLOT_BOOKING` | No | Temporary legacy escape hatch for booking without `bookingToken`; default `false` |
 | `PORT` | No | Server port, default `8080` |
 | `AMD_ENV` | No | `dev` uses dev office IDs; anything else uses prod |
@@ -136,7 +140,7 @@ Use these service-level settings:
 
 - Minimum instances: `1`
 - Maximum instances: `1`
-- CPU allocation: always allocated (CPU throttling disabled)
+- Billing: request-based (CPU throttling enabled)
 - Startup probe: HTTP `GET /live` on port `8080`
 - Readiness probe: HTTP `GET /ready` on port `8080`
 
@@ -145,47 +149,23 @@ cache live in memory. The Session implementation is the only credential and
 token owner; it starts request-time authentication when needed and shares one
 in-flight login across concurrent callers. A session becomes stale after 20
 hours and is never treated as safe after AdvancedMD's documented 24-hour token
-lifetime. The 20-hour background refresh and always-allocated CPU remain
-temporarily unchanged for this release. Scaling to multiple instances would
-still create independent token/cache state and duplicate refresh loops.
+lifetime. Cloud Scheduler requests maintenance every 12 hours by default, while
+patient requests retain bounded fallback authentication if a scheduled request
+is delayed or fails. Scaling to multiple instances would still create
+independent token and cache state.
 
-Example build and deployment (replace project, region, repository, service
-account, and Secret Manager names):
-
-```bash
-PROJECT_ID=your-project
-REGION=us-east1
-REPOSITORY=services
-IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/abita-middleware:latest"
-
-gcloud builds submit --project "$PROJECT_ID" --tag "$IMAGE" .
-
-gcloud run deploy abita-middleware \
-  --project "$PROJECT_ID" \
-  --region "$REGION" \
-  --image "$IMAGE" \
-  --service-account "abita-middleware@$PROJECT_ID.iam.gserviceaccount.com" \
-  --min 1 \
-  --max 1 \
-  --no-cpu-throttling \
-  --port 8080 \
-  --startup-probe httpGet.path=/live,httpGet.port=8080 \
-  --readiness-probe httpGet.path=/ready,httpGet.port=8080 \
-  --set-env-vars AMD_ENV=prod,ALLOW_RAW_SLOT_BOOKING=false \
-  --set-secrets ADVANCEDMD_USERNAME=advancedmd-username:latest,ADVANCEDMD_PASSWORD=advancedmd-password:latest,ADVANCEDMD_OFFICE_KEY=advancedmd-office-key:latest,ADVANCEDMD_APP_NAME=advancedmd-app-name:latest,API_SECRET=middleware-api-secret:latest,BOOKING_TOKEN_SECRET=booking-token-secret:latest \
-  --no-allow-unauthenticated
-```
-
-This example requires callers to have the Cloud Run Invoker role. If the
-external voice-agent caller cannot present Google IAM identity, explicitly use
-`--allow-unauthenticated`; application endpoints remain protected by
-`API_SECRET`, which must still come from Secret Manager.
+Production deployment is owned by `scripts/deploy-cloud-run.sh`, invoked by the
+automatic and manual Cloud Build configurations. Use that path instead of
+copying deployment flags into an ad hoc command; it validates the maintenance
+identity, deploys with zero traffic, and then performs one direct 100% cutover.
 
 The runtime service account needs Secret Manager access to those six secrets.
 `ADVANCEDMD_USERNAME`, `ADVANCEDMD_PASSWORD`, `ADVANCEDMD_OFFICE_KEY`,
 `ADVANCEDMD_APP_NAME`, and `API_SECRET` are required by the process.
 `BOOKING_TOKEN_SECRET` technically falls back to `API_SECRET`, but a separate
 production secret limits cross-use between API authentication and signed tokens.
+See `docs/cloud-run-deployment.md` for the production Scheduler identity,
+deployment, smoke, and rollback contract.
 
 ## Authentication
 
@@ -199,6 +179,10 @@ Content-Type: application/json
 
 The Session module performs AdvancedMD's two-step login internally and caches
 the token. Callers do not send AMD credentials or raw AMD session tokens.
+
+`POST /ops/session/maintenance` does not accept `API_SECRET`. It requires a
+Google-signed OIDC bearer token with the configured audience and exact dedicated
+service-account email. It returns no token or provider data.
 
 ## Office Registry
 
@@ -330,6 +314,13 @@ AdvancedMD outages do not make this probe fail:
 ```json
 {"status":"ready"}
 ```
+
+### POST /ops/session/maintenance
+
+Invokes proactive Session maintenance. Cloud Scheduler calls this route with
+its dedicated Google-signed OIDC identity. A successful request returns
+`204 No Content`; unauthorized requests return `401`, and a provider
+maintenance failure returns a redacted `503`.
 
 ### POST /api/patient/resolve
 

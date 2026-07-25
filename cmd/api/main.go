@@ -51,12 +51,6 @@ func main() {
 		AppName:   cfg.AdvancedMDAppName,
 	}, httpClient)
 
-	// Preserve the production background refresh temporarily. Provider requests
-	// no longer depend on it because Session performs request-time recovery.
-	backgroundMaintenance := session.StartBackgroundMaintenance(amdSession)
-	defer backgroundMaintenance.Stop()
-	log.Println("Session background maintenance started")
-
 	// Initialize AdvancedMD XMLRPC client
 	amdClient := clients.NewAdvancedMDClient(httpClient)
 
@@ -68,14 +62,18 @@ func main() {
 	handlers.SetAllowRawSlotBooking(cfg.AllowRawSlotBooking)
 
 	// Create router
-	router := apphttp.NewRouter(handlers, cfg.APISecret)
+	maintenanceAuthorizer := apphttp.NewMaintenanceAuthorizer(
+		cfg.MaintenanceOIDCAudience,
+		cfg.MaintenanceOIDCServiceAccount,
+	)
+	router := apphttp.NewRouter(handlers, cfg.APISecret, maintenanceAuthorizer)
 
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: session.DefaultSessionLoginTimeout + 5*time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

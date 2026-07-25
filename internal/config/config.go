@@ -3,7 +3,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 )
 
 // Config holds all configuration values for the application.
@@ -15,8 +17,10 @@ type Config struct {
 	AdvancedMDAppName   string
 
 	// API authentication
-	APISecret          string
-	BookingTokenSecret string
+	APISecret                     string
+	BookingTokenSecret            string
+	MaintenanceOIDCAudience       string
+	MaintenanceOIDCServiceAccount string
 
 	// Server settings
 	Port                string
@@ -26,14 +30,16 @@ type Config struct {
 // Load reads configuration from environment variables and validates required fields.
 func Load() (*Config, error) {
 	cfg := &Config{
-		AdvancedMDUsername:  os.Getenv("ADVANCEDMD_USERNAME"),
-		AdvancedMDPassword:  os.Getenv("ADVANCEDMD_PASSWORD"),
-		AdvancedMDOfficeKey: os.Getenv("ADVANCEDMD_OFFICE_KEY"),
-		AdvancedMDAppName:   os.Getenv("ADVANCEDMD_APP_NAME"),
-		APISecret:           os.Getenv("API_SECRET"),
-		BookingTokenSecret:  os.Getenv("BOOKING_TOKEN_SECRET"),
-		Port:                os.Getenv("PORT"),
-		AllowRawSlotBooking: parseBoolEnv(os.Getenv("ALLOW_RAW_SLOT_BOOKING")),
+		AdvancedMDUsername:            os.Getenv("ADVANCEDMD_USERNAME"),
+		AdvancedMDPassword:            os.Getenv("ADVANCEDMD_PASSWORD"),
+		AdvancedMDOfficeKey:           os.Getenv("ADVANCEDMD_OFFICE_KEY"),
+		AdvancedMDAppName:             os.Getenv("ADVANCEDMD_APP_NAME"),
+		APISecret:                     os.Getenv("API_SECRET"),
+		BookingTokenSecret:            os.Getenv("BOOKING_TOKEN_SECRET"),
+		MaintenanceOIDCAudience:       os.Getenv("MAINTENANCE_OIDC_AUDIENCE"),
+		MaintenanceOIDCServiceAccount: os.Getenv("MAINTENANCE_OIDC_SERVICE_ACCOUNT"),
+		Port:                          os.Getenv("PORT"),
+		AllowRawSlotBooking:           parseBoolEnv(os.Getenv("ALLOW_RAW_SLOT_BOOKING")),
 	}
 
 	// Default port
@@ -57,11 +63,37 @@ func Load() (*Config, error) {
 	if cfg.APISecret == "" {
 		return nil, fmt.Errorf("API_SECRET is required")
 	}
+	if err := validateMaintenanceAudience(cfg.MaintenanceOIDCAudience); err != nil {
+		return nil, err
+	}
+	if !isServiceAccountEmail(cfg.MaintenanceOIDCServiceAccount) {
+		return nil, fmt.Errorf("MAINTENANCE_OIDC_SERVICE_ACCOUNT must be a service account email")
+	}
 	if cfg.BookingTokenSecret == "" {
 		cfg.BookingTokenSecret = cfg.APISecret
 	}
 
 	return cfg, nil
+}
+
+func validateMaintenanceAudience(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil ||
+		parsed.Scheme != "https" ||
+		parsed.Host == "" ||
+		parsed.User != nil ||
+		parsed.Path != "" ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
+		return fmt.Errorf("MAINTENANCE_OIDC_AUDIENCE must be an HTTPS service base URL")
+	}
+	return nil
+}
+
+func isServiceAccountEmail(value string) bool {
+	return strings.Count(value, "@") == 1 &&
+		!strings.ContainsAny(value, " \t\r\n") &&
+		strings.HasSuffix(value, ".iam.gserviceaccount.com")
 }
 
 func parseBoolEnv(value string) bool {

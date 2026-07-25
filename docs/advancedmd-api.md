@@ -20,8 +20,9 @@ without exposing credentials, tokens, or provider URLs.
 
 AdvancedMD documents that the token expires 24 hours after issuance. The
 Session starts proactive recovery at 20 hours and treats 24 hours as the hard
-expiration boundary. The existing 20-hour background maintenance loop remains
-temporarily, but request-time correctness does not depend on it.
+expiration boundary. Cloud Scheduler requests maintenance before the stale
+threshold, and request-time fallback preserves correctness when scheduling is
+delayed or fails.
 
 Headers used downstream:
 

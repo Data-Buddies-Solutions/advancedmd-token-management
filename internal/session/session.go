@@ -38,8 +38,9 @@ const (
 	// DefaultSessionStaleAfter starts request-time recovery four hours before
 	// AdvancedMD's documented expiration boundary.
 	DefaultSessionStaleAfter = 20 * time.Hour
-	// DefaultSessionLoginTimeout bounds the complete two-step login flow.
-	DefaultSessionLoginTimeout = 60 * time.Second
+	// DefaultSessionLoginTimeout bounds the complete two-step login flow while
+	// leaving time for the HTTP adapter to report an outcome before its deadline.
+	DefaultSessionLoginTimeout = 50 * time.Second
 	// DefaultSessionRetryDelay prevents a degraded session from making every
 	// request wait on the same unavailable authentication dependency.
 	DefaultSessionRetryDelay = time.Minute
