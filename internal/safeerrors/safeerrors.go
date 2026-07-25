@@ -52,7 +52,8 @@ func Classify(err error) Category {
 		return CategoryUnavailable
 	case containsAny(message, "401", "403", "unauthorized", "forbidden", "credential", "login failed", "no token"):
 		return CategoryAuthentication
-	case strings.Contains(message, "unexpected status"):
+	case strings.Contains(message, "unexpected status"),
+		strings.Contains(message, "unexpected xmlrpc status"):
 		return CategoryUpstreamStatus
 	case containsAny(message, "parse", "malformed", "unexpected response", "read response"):
 		return CategoryInvalidResponse

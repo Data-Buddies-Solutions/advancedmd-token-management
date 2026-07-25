@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"advancedmd-token-management/internal/advancedmd"
+	"advancedmd-token-management/internal/advancedmd/advancedmdtest"
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
+	patientmodule "advancedmd-token-management/internal/patient"
 	"advancedmd-token-management/internal/session"
 )
 
@@ -40,7 +42,8 @@ func TestHandleLive(t *testing.T) {
 }
 
 func TestPatientResolveKeepsStableResponseWhenSessionUnavailable(t *testing.T) {
-	handlers := NewHandlers(unavailableSession{}, nil, nil)
+	records := advancedmd.NewAdapter(unavailableSession{}, nil, nil)
+	handlers := NewHandlers(unavailableSession{}, nil, nil, patientmodule.New(records))
 	req := httptest.NewRequest(http.MethodPost, "/api/patient/resolve", strings.NewReader(`{"patientId":"123"}`))
 	w := httptest.NewRecorder()
 
@@ -61,6 +64,41 @@ func TestPatientResolveKeepsStableResponseWhenSessionUnavailable(t *testing.T) {
 	}
 }
 
+func TestHandlePatientResolveMapsPatientModuleResult(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.PatientSearches[domain.PatientSearch{Phone: "9542872010"}] = []domain.Patient{{
+		ID: "123", FullName: "DOE,JANE", DOB: "01/15/1980", Phone: "850-373-3869",
+	}}
+	amd.Demographics["123"] = domain.PatientDemographics{
+		CarrierName: "HUMANA MEDICARE",
+		CarrierID:   "car40906",
+	}
+	handlers := NewHandlers(nil, nil, nil, patientmodule.New(amd))
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/patient/resolve",
+		strings.NewReader(`{"phone":"(954) 287-2010","office":"Spring Hill"}`),
+	)
+	w := httptest.NewRecorder()
+	handlers.HandlePatientResolve(w, req)
+
+	var body PatientResolveResponse
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Status != "verified" || body.PatientID != "123" || body.Phone != "850-373-3869" {
+		t.Fatalf("response = %+v", body)
+	}
+	if body.Routing != "bach_only" || len(body.AllowedProviders) != 1 {
+		t.Fatalf("routing response = %+v", body)
+	}
+	if body.AppointmentsStatus != "none" || body.Appointments == nil {
+		t.Fatalf("appointments response = %+v", body)
+	}
+}
+
 type unavailableSession struct{}
 
 func (unavailableSession) Get(context.Context) (*domain.TokenData, error) {
@@ -73,23 +111,6 @@ func (unavailableSession) Maintain(context.Context) error {
 
 func (unavailableSession) Status() session.SessionStatus {
 	return session.SessionStatus{State: session.SessionUnavailable}
-}
-
-func TestApplyDemographicsToResolveResponsePreservesPreauthorization(t *testing.T) {
-	resp := PatientResolveResponse{}
-	applyDemographicsToResolveResponse(
-		&resp,
-		&clients.DemographicResult{
-			CarrierName: "Aetna HMO",
-			CarrierID:   "car40907",
-		},
-		domain.DefaultOffice(),
-		"01/01/1980",
-	)
-
-	if !resp.PreauthRequired {
-		t.Fatal("expected resolved Aetna HMO patient to require preauthorization")
-	}
 }
 
 func TestHandleBookAppointment_RoutingGuard(t *testing.T) {
@@ -409,8 +430,8 @@ func TestHandlePatientResolve_PhoneOnlyLoadsAppointments(t *testing.T) {
 	if body.Phone != "850-373-3869" {
 		t.Fatalf("phone = %q, want cell phone", body.Phone)
 	}
-	if body.AppointmentsStatus != appointmentsStatusFound {
-		t.Fatalf("appointmentsStatus = %q, want %q", body.AppointmentsStatus, appointmentsStatusFound)
+	if body.AppointmentsStatus != string(patientmodule.AppointmentsFound) {
+		t.Fatalf("appointmentsStatus = %q, want %q", body.AppointmentsStatus, patientmodule.AppointmentsFound)
 	}
 	if len(body.Appointments) != 1 {
 		t.Fatalf("appointments = %+v, want one appointment", body.Appointments)
@@ -442,7 +463,7 @@ func TestHandlePatientResolve_PhoneOnlyMultipleMatchesReturnsFullDetails(t *test
 	if body.Matches[0].Status != "verified" || body.Matches[0].PatientID != "123" {
 		t.Fatalf("first match = %+v, want verified patient 123", body.Matches[0])
 	}
-	if body.Matches[0].AppointmentsStatus != appointmentsStatusFound || len(body.Matches[0].Appointments) != 1 {
+	if body.Matches[0].AppointmentsStatus != string(patientmodule.AppointmentsFound) || len(body.Matches[0].Appointments) != 1 {
 		t.Fatalf("first match appointments = %q/%+v, want found appointment", body.Matches[0].AppointmentsStatus, body.Matches[0].Appointments)
 	}
 	if body.Matches[0].Appointments[0].ID != 9570263 {
@@ -457,7 +478,7 @@ func TestHandlePatientResolve_PhoneOnlyMultipleMatchesReturnsFullDetails(t *test
 	if body.Matches[1].Status != "verified" || body.Matches[1].PatientID != "456" {
 		t.Fatalf("second match = %+v, want verified patient 456", body.Matches[1])
 	}
-	if body.Matches[1].AppointmentsStatus != appointmentsStatusNone || len(body.Matches[1].Appointments) != 0 {
+	if body.Matches[1].AppointmentsStatus != string(patientmodule.AppointmentsNone) || len(body.Matches[1].Appointments) != 0 {
 		t.Fatalf("second match appointments = %q/%+v, want none", body.Matches[1].AppointmentsStatus, body.Matches[1].Appointments)
 	}
 }
@@ -481,8 +502,8 @@ func TestHandlePatientResolve_PatientIDRefreshUsesSameRoute(t *testing.T) {
 	if body.PatientID != "123" {
 		t.Fatalf("patientId = %q, want 123", body.PatientID)
 	}
-	if body.AppointmentsStatus != appointmentsStatusFound {
-		t.Fatalf("appointmentsStatus = %q, want %q", body.AppointmentsStatus, appointmentsStatusFound)
+	if body.AppointmentsStatus != string(patientmodule.AppointmentsFound) {
+		t.Fatalf("appointmentsStatus = %q, want %q", body.AppointmentsStatus, patientmodule.AppointmentsFound)
 	}
 	if len(body.Appointments) != 1 {
 		t.Fatalf("appointments = %+v, want one appointment", body.Appointments)
@@ -505,8 +526,8 @@ func TestHandlePatientResolve_AppointmentFailureStillVerifies(t *testing.T) {
 	if body.Status != "verified" {
 		t.Fatalf("status = %q, want verified; body = %+v", body.Status, body)
 	}
-	if body.AppointmentsStatus != appointmentsStatusError {
-		t.Fatalf("appointmentsStatus = %q, want %q", body.AppointmentsStatus, appointmentsStatusError)
+	if body.AppointmentsStatus != string(patientmodule.AppointmentsError) {
+		t.Fatalf("appointmentsStatus = %q, want %q", body.AppointmentsStatus, patientmodule.AppointmentsError)
 	}
 	if body.AppointmentsMessage == "" {
 		t.Fatal("appointmentsMessage should explain the appointment lookup failure")
@@ -1305,6 +1326,7 @@ func TestHandleBookAppointment_UsesSignedSlotForceDecision(t *testing.T) {
 		amdSession,
 		nil,
 		clients.NewAdvancedMDRestClient(httpClient),
+		nil,
 		"test-booking-secret",
 	)
 
@@ -1388,6 +1410,7 @@ func TestHandleBookAppointment_SendsAppointmentCommentsInBookingPayload(t *testi
 		amdSession,
 		nil,
 		clients.NewAdvancedMDRestClient(httpClient),
+		nil,
 		"test-booking-secret",
 	)
 
@@ -1826,209 +1849,6 @@ func TestEnforcePreauthMinDate(t *testing.T) {
 	}
 }
 
-func TestFetchUpcomingAppointmentsFiltersPastAppointments(t *testing.T) {
-	now := time.Now().In(eastern)
-	pastToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, eastern)
-	future := now.Add(2 * time.Hour)
-	monthKey := func(t time.Time) string {
-		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, eastern).Format("2006-01-02")
-	}
-
-	appointmentsByMonth := map[string][]clients.AMDAppointmentResponse{}
-	appointmentsByMonth[monthKey(pastToday)] = append(appointmentsByMonth[monthKey(pastToday)], clients.AMDAppointmentResponse{
-		ID:               11111,
-		StartDateTime:    pastToday.Format("2006-01-02T15:04:05"),
-		PatientID:        12345,
-		Provider:         "BACH, AUSTIN",
-		Facility:         "ABITA EYE GROUP SPRING HILL",
-		AppointmentTypes: []int{1007},
-	})
-	appointmentsByMonth[monthKey(future)] = append(appointmentsByMonth[monthKey(future)], clients.AMDAppointmentResponse{
-		ID:               22222,
-		StartDateTime:    future.Format("2006-01-02T15:04:05"),
-		PatientID:        12345,
-		Provider:         "BACH, AUSTIN",
-		Facility:         "ABITA EYE GROUP SPRING HILL",
-		AppointmentTypes: []int{1007},
-	})
-	appointmentsByMonth[monthKey(future)] = append(appointmentsByMonth[monthKey(future)], clients.AMDAppointmentResponse{
-		ID:            33333,
-		StartDateTime: future.Format("2006-01-02T15:04:05"),
-		PatientID:     99999,
-	})
-
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/scheduler/appointments" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if !strings.Contains(r.URL.Query().Get("columnId"), "1513") {
-			json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{})
-			return
-		}
-		json.NewEncoder(w).Encode(appointmentsByMonth[r.URL.Query().Get("startDate")])
-	}))
-	defer server.Close()
-
-	handlers := NewHandlers(nil, nil, clients.NewAdvancedMDRestClient(server.Client()), "test-booking-secret")
-	tokenData := &domain.TokenData{
-		Token:       "Bearer test-token",
-		RestApiBase: strings.TrimPrefix(server.URL, "https://"),
-	}
-
-	details, err := handlers.fetchUpcomingAppointments(context.Background(), tokenData, "12345", domain.DefaultOffice())
-	if err != nil {
-		t.Fatalf("fetchUpcomingAppointments error = %v", err)
-	}
-	if len(details) != 1 {
-		t.Fatalf("appointments = %+v, want exactly one future appointment", details)
-	}
-	if details[0].ID != 22222 {
-		t.Fatalf("appointment ID = %d, want 22222", details[0].ID)
-	}
-}
-
-func TestFetchUpcomingAppointmentsReturnsCanonicalTypeIDInDev(t *testing.T) {
-	domain.InitRegistry("dev")
-	defer domain.InitRegistry("prod")
-
-	future := time.Now().In(eastern).Add(48 * time.Hour)
-	futureMonth := time.Date(future.Year(), future.Month(), 1, 0, 0, 0, 0, eastern).Format("2006-01-02")
-
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/scheduler/appointments" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("startDate") != futureMonth || !strings.Contains(r.URL.Query().Get("columnId"), "1716") {
-			json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{})
-			return
-		}
-		json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{{
-			ID:               22222,
-			StartDateTime:    future.Format("2006-01-02T15:04:05"),
-			PatientID:        12345,
-			Provider:         "BACH, AUSTIN",
-			Facility:         "ABITA EYE GROUP SPRING HILL",
-			AppointmentTypes: []int{18},
-		}})
-	}))
-	defer server.Close()
-
-	handlers := NewHandlers(nil, nil, clients.NewAdvancedMDRestClient(server.Client()), "test-booking-secret")
-	tokenData := &domain.TokenData{
-		Token:       "Bearer test-token",
-		RestApiBase: strings.TrimPrefix(server.URL, "https://"),
-	}
-
-	details, err := handlers.fetchUpcomingAppointments(context.Background(), tokenData, "12345", domain.DefaultOffice())
-	if err != nil {
-		t.Fatalf("fetchUpcomingAppointments error = %v", err)
-	}
-	if len(details) != 1 {
-		t.Fatalf("appointments = %+v, want exactly one future appointment", details)
-	}
-	if details[0].AppointmentTypeID != 1007 {
-		t.Fatalf("appointmentTypeId = %d, want canonical 1007", details[0].AppointmentTypeID)
-	}
-	if details[0].Type != "Established Adult Medical (Follow Up)" {
-		t.Fatalf("appointment type name = %q, want Established Adult Medical (Follow Up)", details[0].Type)
-	}
-}
-
-func TestFetchUpcomingAppointmentsLoadsNearbyOfficeGroup(t *testing.T) {
-	domain.InitRegistry("")
-	future := time.Now().In(eastern).Add(48 * time.Hour)
-	futureMonth := time.Date(future.Year(), future.Month(), 1, 0, 0, 0, 0, eastern).Format("2006-01-02")
-	requestedColumns := make(map[string]int)
-	var requestedMu sync.Mutex
-
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/scheduler/appointments" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		columnID := r.URL.Query().Get("columnId")
-		requestedMu.Lock()
-		requestedColumns[columnID]++
-		requestedMu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("startDate") != futureMonth {
-			json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{})
-			return
-		}
-		switch {
-		case strings.Contains(columnID, "1513"):
-			json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{{
-				ID:               22222,
-				StartDateTime:    future.Format("2006-01-02T15:04:05"),
-				PatientID:        12345,
-				ColumnID:         1513,
-				Provider:         "BACH, AUSTIN",
-				Facility:         "ABITA EYE GROUP SPRING HILL",
-				AppointmentTypes: []int{1007},
-			}})
-		case strings.Contains(columnID, "1593"):
-			json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{{
-				ID:               33333,
-				StartDateTime:    future.Add(30 * time.Minute).Format("2006-01-02T15:04:05"),
-				PatientID:        12345,
-				ColumnID:         1593,
-				Provider:         "LICHT, J",
-				Facility:         "EYE RADIANCE CRYSTAL RIVER",
-				AppointmentTypes: []int{6169},
-			}})
-		default:
-			json.NewEncoder(w).Encode([]clients.AMDAppointmentResponse{})
-		}
-	}))
-	defer server.Close()
-
-	handlers := NewHandlers(nil, nil, clients.NewAdvancedMDRestClient(server.Client()), "test-booking-secret")
-	tokenData := &domain.TokenData{
-		Token:       "Bearer test-token",
-		RestApiBase: strings.TrimPrefix(server.URL, "https://"),
-	}
-
-	details, err := handlers.fetchUpcomingAppointments(context.Background(), tokenData, "12345", domain.DefaultOffice())
-	if err != nil {
-		t.Fatalf("fetchUpcomingAppointments error = %v", err)
-	}
-	if len(details) != 2 {
-		t.Fatalf("appointments = %+v, want Spring Hill and Crystal River appointments", details)
-	}
-	byID := make(map[int]PatientApptDetail)
-	for _, detail := range details {
-		byID[detail.ID] = detail
-	}
-
-	spring := byID[22222]
-	if spring.OfficeID != "spring_hill" || spring.Office != "Spring Hill" {
-		t.Fatalf("spring appointment office = %q/%q, want spring_hill/Spring Hill", spring.OfficeID, spring.Office)
-	}
-	if spring.Provider != "Dr. Austin Bach" {
-		t.Fatalf("spring provider = %q, want Dr. Austin Bach", spring.Provider)
-	}
-	crystal := byID[33333]
-	if crystal.OfficeID != "crystal_river" || crystal.Office != "Crystal River" {
-		t.Fatalf("crystal appointment office = %q/%q, want crystal_river/Crystal River", crystal.OfficeID, crystal.Office)
-	}
-	if crystal.Provider != "Dr. Joseph Licht" {
-		t.Fatalf("crystal provider = %q, want Dr. Joseph Licht", crystal.Provider)
-	}
-
-	sawSpring := false
-	sawCrystal := false
-	requestedMu.Lock()
-	for columnID := range requestedColumns {
-		sawSpring = sawSpring || strings.Contains(columnID, "1513")
-		sawCrystal = sawCrystal || strings.Contains(columnID, "1593")
-	}
-	requestedMu.Unlock()
-	if !sawSpring || !sawCrystal {
-		t.Fatalf("requested columns = %v, want Spring Hill and Crystal River groups", requestedColumns)
-	}
-}
-
 func TestHandleCancelAppointment_ValidatesPatientAppointmentBeforeCancel(t *testing.T) {
 	handlers, cancelRequests := newCancelAppointmentTestHandlers(t, 12345, 33333, http.StatusOK)
 
@@ -2102,25 +1922,6 @@ func TestFriendlyProviderName(t *testing.T) {
 	}
 }
 
-func TestFriendlyFacilityName(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"ABITA EYE GROUP SPRING HILL", "Abita Eye Group Spring Hill"},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := friendlyFacilityName(tt.input)
-			if got != tt.expected {
-				t.Errorf("friendlyFacilityName(%q) = %q, want %q", tt.input, got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestAppointmentTypeNames(t *testing.T) {
 	office := domain.DefaultOffice()
 
@@ -2160,7 +1961,7 @@ func TestAppointmentTypeNames(t *testing.T) {
 func TestRouter(t *testing.T) {
 	// Create minimal handlers for testing
 	amdClient := clients.NewAdvancedMDClient(&http.Client{})
-	handlers := NewHandlers(nil, amdClient, nil) // nil session - can't test full flow
+	handlers := NewHandlers(nil, amdClient, nil, nil) // nil session - can't test full flow
 
 	router := NewRouter(handlers, "test-secret", nil)
 
@@ -2567,6 +2368,7 @@ func newCancelAppointmentTestHandlers(t *testing.T, patientID int, appointmentID
 		amdSession,
 		nil,
 		clients.NewAdvancedMDRestClient(httpClient),
+		nil,
 		"test-booking-secret",
 	), &cancelRequests
 }
@@ -2613,6 +2415,7 @@ func newProviderFailureTestHandlers(t *testing.T, fail func(*http.Request, []byt
 		amdSession,
 		clients.NewAdvancedMDClient(httpClient),
 		clients.NewAdvancedMDRestClient(httpClient),
+		nil,
 		"test-booking-secret",
 	)
 }
@@ -2656,6 +2459,7 @@ func newUpdateInsuranceTestHandlers(t *testing.T) (*Handlers, *[]string) {
 		amdSession,
 		clients.NewAdvancedMDClient(httpClient),
 		clients.NewAdvancedMDRestClient(httpClient),
+		nil,
 	), &writes
 }
 
@@ -2783,11 +2587,15 @@ func newPatientResolveTestHandlers(t *testing.T, appointmentStatus int) *Handler
 		OfficeKey: "office",
 		AppName:   "app",
 	}, httpClient)
+	amdClient := clients.NewAdvancedMDClient(httpClient)
+	amdRestClient := clients.NewAdvancedMDRestClient(httpClient)
+	records := advancedmd.NewAdapter(amdSession, amdClient, amdRestClient)
 
 	return NewHandlers(
 		amdSession,
-		clients.NewAdvancedMDClient(httpClient),
-		clients.NewAdvancedMDRestClient(httpClient),
+		amdClient,
+		amdRestClient,
+		patientmodule.New(records),
 		"test-booking-secret",
 	)
 }
