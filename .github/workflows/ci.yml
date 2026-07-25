@@ -41,3 +41,6 @@ jobs:
 
       - name: Race test
         run: go test -race ./...
+
+      - name: Deployment script test
+        run: scripts/deploy-cloud-run_test.sh
