@@ -4,6 +4,13 @@ Release Please owns new versioned sections at the top of this file. The dated
 `[Unreleased]` sections below predate the automation and remain as historical
 records.
 
+## [2.1.0](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.0.0...v2.1.0) (2026-07-25)
+
+
+### Features
+
+* **patient:** resolve through deep Patient and AdvancedMD modules ([#140](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/140)) ([1128bac](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/1128bac028edc3255cc765f8ef255f22a6d562ee)), closes [#125](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/125) [#129](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/129)
+
 ## [Unreleased] - 2026-07-01
 
 ### Routine Vision Same-Start Windows
