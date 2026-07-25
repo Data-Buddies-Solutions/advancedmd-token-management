@@ -3,112 +3,108 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"slices"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
+	schedulingmodule "advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
 )
 
-func TestSchedulingWorkflow_SignedAvailableSlotBooksWithSamePolicyAndReceipt(t *testing.T) {
-	now := time.Now().UTC()
-	searchDate := now.In(eastern).AddDate(0, 0, 2).Format("2006-01-02")
-	workflow, bookingStatus, bookingPayload, _ := newSchedulingWorkflowTestHarness(t, now, searchDate, http.StatusOK)
+func TestSchedulingWorkflowBooksSignedSlotWithItsPolicyAndReceipt(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
+		OfficeID:           "spring_hill",
+		Routing:            string(domain.RoutingBachOnly),
+		ColumnID:           1513,
+		ProfileID:          620,
+		StartDatetime:      "2026-06-03T09:00",
+		Duration:           15,
+		DOB:                "01/15/1980",
+		AppointmentTypeIDs: []int{1007},
+		SameStartBooked:    1,
+		SameStartCapacity:  2,
+		RequiresForce:      true,
+		Provider:           "Dr. Austin Bach",
+		IssuedAt:           now.Unix(),
+		ExpiresAt:          now.Add(15 * time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("SignSlotToken error = %v", err)
+	}
 
-	availability, workflowErr := workflow.Search(context.Background(), AvailabilityRequest{
-		Date:    searchDate,
-		Office:  "Spring Hill",
-		Routing: string(domain.RoutingBachOnly),
-		DOB:     "01/15/1980",
-	}, now)
-	if workflowErr != nil {
-		t.Fatalf("Search error = %#v", workflowErr)
-	}
-	if availability.Outcome != domain.AvailabilityOutcomeFound || len(availability.Slots) != 1 {
-		t.Fatalf("availability = %#v, want one returned slot", availability)
-	}
-	slot := availability.Slots[0]
-	if slot.BookingToken == "" || !slot.RequiresForce || slot.SameStartBooked != 1 || slot.SameStartCapacity != 2 {
-		t.Fatalf("signed slot = %#v, want same-start force metadata", slot)
-	}
-	payload, err := verifyBookingToken("test-booking-secret", slot.BookingToken, now.Add(time.Minute))
-	if err != nil ||
-		payload.DOB != "01/15/1980" ||
-		payload.Routing != string(domain.RoutingBachOnly) ||
-		!slices.Contains(payload.AppointmentTypeIDs, 1007) ||
-		slices.Contains(payload.AppointmentTypeIDs, 1004) ||
-		slices.Contains(payload.AppointmentTypeIDs, 1005) ||
-		payload.SameStartBooked != 1 ||
-		payload.SameStartCapacity != 2 {
-		t.Fatalf("signed slot policy = %#v, err = %v", payload, err)
-	}
-	_, workflowErr = workflow.Book(context.Background(), BookAppointmentRequest{
+	status := http.StatusOK
+	var payload map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/scheduler/Appointments" {
+			http.NotFound(w, r)
+			return
+		}
+		if status == http.StatusConflict {
+			http.Error(w, "conflict", status)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode booking payload: %v", err)
+		}
+		w.Write([]byte(`{"id":98765}`))
+	}))
+	defer server.Close()
+
+	workflow := newSchedulingWorkflow(
+		bookingStaticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		clients.NewAdvancedMDRestClient(server.Client()),
+		"test-booking-secret",
+	)
+
+	_, workflowErr := workflow.Book(context.Background(), BookAppointmentRequest{
 		PatientID:         "123",
-		BookingToken:      slot.BookingToken,
+		BookingToken:      token,
 		AppointmentTypeID: 1004,
 	}, now.Add(time.Minute))
 	if workflowErr == nil {
-		t.Fatal("adult signed slot booked with pediatric appointment type")
-	}
-	_, workflowErr = workflow.Book(context.Background(), BookAppointmentRequest{
-		PatientID:         "123",
-		DOB:               "not-a-date",
-		BookingToken:      slot.BookingToken,
-		AppointmentTypeID: 1007,
-	}, now.Add(time.Minute))
-	if workflowErr == nil || workflowErr.message != "dob must be a valid date" {
-		t.Fatalf("invalid DOB error = %#v", workflowErr)
+		t.Fatalf("changed appointment-type policy error = %#v", workflowErr)
 	}
 	_, workflowErr = workflow.Book(context.Background(), BookAppointmentRequest{
 		PatientID:         "123",
 		DOB:               "01/15/2010",
-		BookingToken:      slot.BookingToken,
+		BookingToken:      token,
 		AppointmentTypeID: 1007,
 	}, now.Add(time.Minute))
 	if workflowErr == nil || workflowErr.outcome != "invalid_booking_token" {
-		t.Fatalf("changed DOB error = %#v, want invalid_booking_token", workflowErr)
-	}
-	restrictedPolicy := payload
-	restrictedPolicy.AppointmentTypeIDs = []int{1010}
-	restrictedToken, err := signBookingToken("test-booking-secret", restrictedPolicy)
-	if err != nil {
-		t.Fatalf("sign restricted policy token: %v", err)
-	}
-	_, workflowErr = workflow.Book(context.Background(), BookAppointmentRequest{
-		PatientID:         "123",
-		BookingToken:      restrictedToken,
-		AppointmentTypeID: 1007,
-	}, now.Add(time.Minute))
-	if workflowErr == nil || workflowErr.outcome != "invalid_booking_token" {
-		t.Fatalf("changed appointment-type policy error = %#v", workflowErr)
+		t.Fatalf("changed DOB error = %#v", workflowErr)
 	}
 
 	receipt, workflowErr := workflow.Book(context.Background(), BookAppointmentRequest{
 		PatientID:         "123",
 		PatientName:       "SMITH,JANE",
-		BookingToken:      slot.BookingToken,
+		BookingToken:      token,
 		AppointmentTypeID: 1007,
 	}, now.Add(time.Minute))
 	if workflowErr != nil {
 		t.Fatalf("Book error = %#v", workflowErr)
 	}
-	if receipt.Status != "booked" || receipt.AppointmentID != 98765 || receipt.PatientName != "Jane Smith" || receipt.ProviderName != "Dr. Austin Bach" {
+	if receipt.Status != "booked" ||
+		receipt.AppointmentID != 98765 ||
+		receipt.PatientName != "Jane Smith" ||
+		receipt.ProviderName != "Dr. Austin Bach" {
 		t.Fatalf("receipt = %#v", receipt)
 	}
-	if (*bookingPayload)["force"] != float64(1) {
-		t.Fatalf("booking force = %#v, payload = %#v", (*bookingPayload)["force"], *bookingPayload)
+	if payload["force"] != float64(1) {
+		t.Fatalf("booking force = %#v, payload = %#v", payload["force"], payload)
 	}
 
-	*bookingStatus = http.StatusConflict
+	status = http.StatusConflict
 	_, workflowErr = workflow.Book(context.Background(), BookAppointmentRequest{
 		PatientID:         "123",
-		BookingToken:      slot.BookingToken,
+		BookingToken:      token,
 		AppointmentTypeID: 1007,
 	}, now.Add(2*time.Minute))
 	if workflowErr == nil || workflowErr.outcome != "slot_unavailable" {
@@ -116,141 +112,18 @@ func TestSchedulingWorkflow_SignedAvailableSlotBooksWithSamePolicyAndReceipt(t *
 	}
 }
 
-func TestSchedulingWorkflow_SearchReportsPartialAppointmentFailure(t *testing.T) {
-	now := time.Now().UTC()
-	searchDate := now.In(eastern).AddDate(0, 0, 2).Format("2006-01-02")
-	workflow, _, _, partialFailure := newSchedulingWorkflowTestHarness(t, now, searchDate, http.StatusOK)
-	*partialFailure = true
-	workflow.schedulerSetup.Columns = append(workflow.schedulerSetup.Columns, domain.SchedulerColumn{
-		ID:         "1598",
-		Name:       "DR. BACH - SH 2",
-		ProfileID:  "620",
-		FacilityID: "1568",
-		StartTime:  "09:00",
-		EndTime:    "09:15",
-		Interval:   15,
-		Workweek:   127,
-	})
-
-	availability, workflowErr := workflow.Search(context.Background(), AvailabilityRequest{
-		Date:    searchDate,
-		Office:  "Spring Hill",
-		Routing: string(domain.RoutingBachOnly),
-		DOB:     "01/15/1980",
-	}, now)
-	if workflowErr != nil {
-		t.Fatalf("Search error = %#v", workflowErr)
-	}
-	if availability.Status != domain.AvailabilityStatusError ||
-		availability.Outcome != domain.AvailabilityOutcomeSearchIncomplete ||
-		!availability.ShouldRetrySameSearch ||
-		len(availability.Slots) != 0 {
-		t.Fatalf("availability = %#v, want explicit incomplete-search outcome", availability)
-	}
+type bookingStaticSession struct {
+	token *domain.TokenData
 }
 
-func TestSchedulingWorkflow_SearchRejectsIneligibleProvider(t *testing.T) {
-	now := time.Now().UTC()
-	searchDate := now.In(eastern).AddDate(0, 0, 2).Format("2006-01-02")
-	workflow, _, _, _ := newSchedulingWorkflowTestHarness(t, now, searchDate, http.StatusOK)
-
-	_, workflowErr := workflow.Search(context.Background(), AvailabilityRequest{
-		Date:     searchDate,
-		Office:   "Spring Hill",
-		Routing:  string(domain.RoutingBachOnly),
-		DOB:      "01/15/1980",
-		Provider: "Dr. Licht",
-	}, now)
-	if workflowErr == nil || !strings.Contains(workflowErr.message, `No provider found matching "Dr. Licht"`) {
-		t.Fatalf("provider error = %#v", workflowErr)
-	}
+func (s bookingStaticSession) Get(context.Context) (*domain.TokenData, error) {
+	return s.token, nil
 }
 
-func newSchedulingWorkflowTestHarness(t *testing.T, now time.Time, searchDate string, appointmentStatus int) (*schedulingWorkflow, *int, *map[string]any, *bool) {
-	t.Helper()
-	bookingStatus := http.StatusOK
-	bookingPayload := map[string]any{}
-	partialFailure := false
+func (bookingStaticSession) Maintain(context.Context) error {
+	return nil
+}
 
-	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		status := http.StatusOK
-		response := `[]`
-		contentType := request.Header.Get("Content-Type")
-
-		switch {
-		case strings.Contains(contentType, "application/xml") && strings.Contains(request.URL.Host, "partnerlogin"):
-			response = `<PPMDResults><Results><usercontext webserver="https://mock.advancedmd.test/processrequest/api-801/APP"></usercontext></Results></PPMDResults>`
-		case strings.Contains(contentType, "application/xml"):
-			response = `<PPMDResults><Results success="1"><usercontext>test-token</usercontext></Results></PPMDResults>`
-		case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/scheduler/appointments"):
-			columnID := request.URL.Query().Get("columnId")
-			requestedDate := request.URL.Query().Get("startDate")
-			status = appointmentStatus
-			if partialFailure && columnID == "1513" {
-				status = http.StatusInternalServerError
-				response = `{"error":"appointments unavailable"}`
-			} else if partialFailure {
-				response = fmt.Sprintf(`[
-					{"id":1,"startdatetime":%q,"duration":15,"columnid":1598,"profileid":620,"patientid":998},
-					{"id":2,"startdatetime":%q,"duration":15,"columnid":1598,"profileid":620,"patientid":999}
-				]`, requestedDate+"T09:00", requestedDate+"T09:00")
-			} else if status == http.StatusOK {
-				response = fmt.Sprintf(`[{"id":1,"startdatetime":%q,"duration":15,"columnid":1513,"profileid":620,"patientid":999}]`, searchDate+"T09:00")
-			} else {
-				response = `{"error":"appointments unavailable"}`
-			}
-		case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/scheduler/blockholds"):
-			response = `[]`
-		case request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/scheduler/Appointments"):
-			status = bookingStatus
-			if status == http.StatusConflict {
-				response = `{"error":"conflict"}`
-				break
-			}
-			body, _ := io.ReadAll(request.Body)
-			if err := json.Unmarshal(body, &bookingPayload); err != nil {
-				t.Fatalf("decode booking payload: %v", err)
-			}
-			response = `{"id":98765}`
-		default:
-			status = http.StatusInternalServerError
-			response = `{"error":"unexpected request"}`
-		}
-
-		return &http.Response{
-			StatusCode: status,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(response)),
-			Request:    request,
-		}, nil
-	})}
-
-	amdSession := session.NewSession(session.Credentials{
-		Username:  "user",
-		Password:  "pass",
-		OfficeKey: "office",
-		AppName:   "app",
-	}, httpClient)
-	workflow := newSchedulingWorkflow(
-		amdSession,
-		nil,
-		clients.NewAdvancedMDRestClient(httpClient),
-		"test-booking-secret",
-	)
-	workflow.schedulerSetup = &domain.SchedulerSetup{
-		Columns: []domain.SchedulerColumn{{
-			ID:         "1513",
-			Name:       "DR. BACH - SH",
-			ProfileID:  "620",
-			FacilityID: "1568",
-			StartTime:  "09:00",
-			EndTime:    "09:15",
-			Interval:   15,
-			Workweek:   127,
-		}},
-		Profiles:   []domain.SchedulerProfile{{ID: "620", Name: "BACH, AUSTIN"}},
-		Facilities: []domain.SchedulerFacility{{ID: "1568", Name: "ABITA EYE GROUP SPRING HILL"}},
-	}
-	workflow.schedulerSetupExpiresAt = now.Add(time.Hour)
-	return workflow, &bookingStatus, &bookingPayload, &partialFailure
+func (bookingStaticSession) Status() session.SessionStatus {
+	return session.SessionStatus{}
 }

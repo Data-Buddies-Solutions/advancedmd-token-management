@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"advancedmd-token-management/internal/clients"
@@ -15,9 +16,9 @@ import (
 	"golang.org/x/text/language"
 )
 
-var eastern = loadEastern()
+var eastern = domain.EasternLocation()
 
-// Adapter is the production adapter for AdvancedMD patient records.
+// Adapter is the production adapter for AdvancedMD domain records.
 type Adapter struct {
 	session    session.Session
 	xmlClient  *clients.AdvancedMDClient
@@ -192,6 +193,64 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 	return appointments, nil
 }
 
+func (a *Adapter) GetSchedulerSetup(ctx context.Context) (domain.SchedulerSetup, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return domain.SchedulerSetup{}, err
+	}
+	if a.xmlClient == nil {
+		return domain.SchedulerSetup{}, NewError(safeerrors.CategoryInternal)
+	}
+
+	setup, err := a.xmlClient.GetSchedulerSetup(ctx, token)
+	if err != nil {
+		return domain.SchedulerSetup{}, classify(err)
+	}
+	if setup == nil {
+		return domain.SchedulerSetup{}, NewError(safeerrors.CategoryInvalidResponse)
+	}
+	return *setup, nil
+}
+
+func (a *Adapter) ReadSchedule(ctx context.Context, query domain.ScheduleReadQuery) (domain.ScheduleReadResult, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return domain.ScheduleReadResult{}, err
+	}
+	if a.restClient == nil {
+		return domain.ScheduleReadResult{}, NewError(safeerrors.CategoryInternal)
+	}
+
+	var appointments map[string][]domain.Appointment
+	var blockHolds map[string][]domain.BlockHold
+	var reads sync.WaitGroup
+	reads.Add(2)
+	go func() {
+		defer reads.Done()
+		appointments = a.restClient.GetAppointmentsForColumns(ctx, token, query.ColumnIDs, query.Date)
+	}()
+	go func() {
+		defer reads.Done()
+		blockHolds = a.restClient.GetBlockHoldsForColumns(ctx, token, query.ColumnIDs, query.Date)
+	}()
+	reads.Wait()
+
+	result := domain.ScheduleReadResult{
+		Columns: make(map[string]domain.ColumnSchedule, len(query.ColumnIDs)),
+	}
+	for _, columnID := range query.ColumnIDs {
+		columnAppointments, appointmentsComplete := appointments[columnID]
+		columnBlockHolds, blockHoldsComplete := blockHolds[columnID]
+		result.Columns[columnID] = domain.ColumnSchedule{
+			Appointments:         columnAppointments,
+			BlockHolds:           columnBlockHolds,
+			AppointmentsComplete: appointmentsComplete,
+			BlockHoldsComplete:   blockHoldsComplete,
+		}
+	}
+	return result, nil
+}
+
 func (a *Adapter) token(ctx context.Context) (*domain.TokenData, error) {
 	if a.session == nil {
 		return nil, NewError(safeerrors.CategoryUnavailable)
@@ -220,12 +279,5 @@ func friendlyFacilityName(name string) string {
 	return cases.Title(language.English).String(strings.ToLower(name))
 }
 
-func loadEastern() *time.Location {
-	location, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		return time.FixedZone("EST", -5*60*60)
-	}
-	return location
-}
-
 var _ PatientRecords = (*Adapter)(nil)
+var _ SchedulingRecords = (*Adapter)(nil)

@@ -82,6 +82,18 @@ type PatientAppointmentsQuery struct {
 	OfficeIDs []string
 }
 
+// ValidateOptionalDOB accepts an omitted DOB or a date understood by the
+// scheduling age policy.
+func ValidateOptionalDOB(dob string) error {
+	if dob == "" {
+		return nil
+	}
+	if _, ok := AgeYears(dob); !ok {
+		return fmt.Errorf("dob must be a valid date")
+	}
+	return nil
+}
+
 // StripPatientPrefix removes the "pat" prefix from patient IDs.
 // AMD returns IDs like "pat45" but the booking API expects just "45".
 func StripPatientPrefix(id string) string {

@@ -151,7 +151,10 @@ columns listed in `internal/domain/office.go`.
 Scheduler setup is cached in process for six hours because provider columns,
 profile IDs, facilities, work hours, and slot intervals are relatively static.
 Actual appointments and block holds are still fetched live for each availability
-search.
+search. `internal/scheduling` owns this cache, column and provider eligibility,
+search completeness, slot selection, and signed-slot creation.
+`internal/advancedmd` owns authentication and provider transport, returning only
+domain scheduler setup and per-column schedule reads to Scheduling.
 
 ## REST APIs Used
 
@@ -168,13 +171,16 @@ Availability responses include machine-readable outcome fields
 (`outcome`, `availabilityFound`, `shouldRetrySameSearch`, and `nextAction`) so
 the agent does not infer scheduling state from free-form message text. Each
 returned slot includes a signed `bookingToken` that binds office, routing,
-column ID, profile ID, start datetime, and duration for the later booking call.
+normalized DOB, provider column and profile, allowed appointment types, start
+datetime, duration, same-start capacity, and force behavior for the later
+booking call.
 A fully exhausted search window returns `outcome: "no_availability"` with
-`slots: []` and `shouldRetrySameSearch: false`. If appointment data is
-unavailable during the search and no slots are found from the remaining data,
-the middleware returns `outcome: "availability_search_incomplete"` with
-`shouldRetrySameSearch: true` instead of calling it no availability; after one
-retry, the agent should ask for different preferences.
+`slots: []` and `shouldRetrySameSearch: false`. If appointment or block-hold
+data is unavailable during the search and no slots are found from complete
+provider reads, the middleware returns
+`outcome: "availability_search_incomplete"` with `shouldRetrySameSearch: true`
+instead of calling it no availability; after one retry, the agent should ask
+for different preferences.
 
 For patient resolve, the middleware queries six months of columns for the
 resolved office's nearby appointment group, then filters by patient ID. Spring

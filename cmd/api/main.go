@@ -15,6 +15,7 @@ import (
 	"advancedmd-token-management/internal/domain"
 	apphttp "advancedmd-token-management/internal/http"
 	"advancedmd-token-management/internal/patient"
+	"advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
 )
 
@@ -62,6 +63,7 @@ func main() {
 	// Compose the patient workflow over the domain-oriented AdvancedMD seam.
 	patientRecords := advancedmd.NewAdapter(amdSession, amdClient, amdRestClient)
 	patients := patient.New(patientRecords)
+	scheduler := scheduling.New(patientRecords, cfg.BookingTokenSecret, time.Now)
 
 	// Initialize handlers
 	handlers := apphttp.NewHandlers(
@@ -69,6 +71,7 @@ func main() {
 		amdClient,
 		amdRestClient,
 		patients,
+		scheduler,
 		cfg.BookingTokenSecret,
 	)
 	handlers.SetAllowRawSlotBooking(cfg.AllowRawSlotBooking)

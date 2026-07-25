@@ -375,6 +375,124 @@ func TestAdapterCanonicalizesDevelopmentAppointmentTypeIDs(t *testing.T) {
 	}
 }
 
+func TestAdapterReadsCompleteScheduleThroughDomainSeam(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/xmlrpc":
+			if r.Header.Get("Cookie") != "token=test-cookie" {
+				t.Fatalf("Cookie = %q", r.Header.Get("Cookie"))
+			}
+			w.Write([]byte(`{
+				"PPMDResults": {
+					"Results": {
+						"columnlist": {"column": [{
+							"@id": "col1513",
+							"@name": "DR. BACH - SH",
+							"@profile": "prof620",
+							"@facility": "fac1568",
+							"columnsetting": {
+								"@start": "0900",
+								"@end": "0915",
+								"@interval": "15",
+								"@maxapptsperslot": "0",
+								"@workweek": "1111111"
+							}
+						}]},
+						"profilelist": {"profile": [{"@id": "prof620", "@name": "BACH, AUSTIN"}]},
+						"facilitylist": {"facility": [{"@id": "fac1568", "@name": "ABITA EYE GROUP SPRING HILL"}]}
+					}
+				}
+			}`))
+		case "/scheduler/appointments":
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+			}
+			w.Write([]byte(`[{
+				"id": 11,
+				"startdatetime": "2026-06-03T09:00:00",
+				"duration": 15,
+				"columnid": 1513,
+				"profileid": 620,
+				"patientid": 42
+			}]`))
+		case "/scheduler/blockholds":
+			w.Write([]byte(`[{
+				"id": 12,
+				"startdatetime": "2026-06-03T10:00:00",
+				"enddatetime": "2026-06-03T10:15:00",
+				"duration": 15,
+				"columnid": 1513
+			}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			CookieToken: "token=test-cookie",
+			Token:       "Bearer test-token",
+			XmlrpcURL:   strings.TrimPrefix(server.URL, "https://") + "/xmlrpc",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		clients.NewAdvancedMDClient(server.Client()),
+		clients.NewAdvancedMDRestClient(server.Client()),
+	)
+
+	setup, err := adapter.GetSchedulerSetup(context.Background())
+	if err != nil {
+		t.Fatalf("GetSchedulerSetup error = %v", err)
+	}
+	if len(setup.Columns) != 1 || setup.Columns[0].ID != "1513" {
+		t.Fatalf("setup = %#v", setup)
+	}
+
+	read, err := adapter.ReadSchedule(context.Background(), domain.ScheduleReadQuery{
+		ColumnIDs: []string{"1513"},
+		Date:      "2026-06-03",
+	})
+	if err != nil {
+		t.Fatalf("ReadSchedule error = %v", err)
+	}
+	column := read.Columns["1513"]
+	if !column.Complete() || len(column.Appointments) != 1 || len(column.BlockHolds) != 1 {
+		t.Fatalf("column schedule = %#v", column)
+	}
+}
+
+func TestAdapterPreservesPartialScheduleReads(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/scheduler/appointments" && r.URL.Query().Get("columnId") == "1513" {
+			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+	)
+	read, err := adapter.ReadSchedule(context.Background(), domain.ScheduleReadQuery{
+		ColumnIDs: []string{"1513", "1598"},
+		Date:      "2026-06-03",
+	})
+	if err != nil {
+		t.Fatalf("ReadSchedule error = %v", err)
+	}
+	if read.Columns["1513"].AppointmentsComplete ||
+		!read.Columns["1513"].BlockHoldsComplete ||
+		!read.Columns["1598"].Complete() {
+		t.Fatalf("read = %#v, want one explicit partial column", read)
+	}
+}
+
 type staticSession struct {
 	token *domain.TokenData
 	err   error

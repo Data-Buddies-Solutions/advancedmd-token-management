@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,7 @@ import (
 	"advancedmd-token-management/internal/clients"
 	"advancedmd-token-management/internal/domain"
 	patientmodule "advancedmd-token-management/internal/patient"
+	schedulingmodule "advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
 )
 
@@ -43,7 +45,7 @@ func TestHandleLive(t *testing.T) {
 
 func TestPatientResolveKeepsStableResponseWhenSessionUnavailable(t *testing.T) {
 	records := advancedmd.NewAdapter(unavailableSession{}, nil, nil)
-	handlers := NewHandlers(unavailableSession{}, nil, nil, patientmodule.New(records))
+	handlers := NewHandlers(unavailableSession{}, nil, nil, patientmodule.New(records), nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/patient/resolve", strings.NewReader(`{"patientId":"123"}`))
 	w := httptest.NewRecorder()
 
@@ -74,7 +76,7 @@ func TestHandlePatientResolveMapsPatientModuleResult(t *testing.T) {
 		CarrierName: "HUMANA MEDICARE",
 		CarrierID:   "car40906",
 	}
-	handlers := NewHandlers(nil, nil, nil, patientmodule.New(amd))
+	handlers := NewHandlers(nil, nil, nil, patientmodule.New(amd), nil)
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -322,7 +324,7 @@ func sameStrings(got, want []string) bool {
 }
 
 func TestHandleGetAvailability_InvalidDOB(t *testing.T) {
-	handlers := &Handlers{}
+	handlers := &Handlers{scheduling: schedulingStub{err: errors.New("dob must be a valid date")}}
 	date := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
 	body := fmt.Sprintf(`{"date":%q,"office":"Hollywood","routing":"optical_only","dob":"not-a-date"}`, date)
 	req := httptest.NewRequest("POST", "/api/scheduler/availability", bytes.NewBufferString(body))
@@ -339,6 +341,99 @@ func TestHandleGetAvailability_InvalidDOB(t *testing.T) {
 	if resp.Message != "dob must be a valid date" {
 		t.Fatalf("expected invalid DOB message, got %q", resp.Message)
 	}
+}
+
+func TestHandleGetAvailabilityMapsSchedulingResult(t *testing.T) {
+	scheduler := schedulingStub{
+		result: domain.AvailabilityResponse{
+			Status:                domain.AvailabilityStatusSuccess,
+			Outcome:               domain.AvailabilityOutcomeFound,
+			AvailabilityFound:     true,
+			RequestedDate:         "2026-06-03",
+			ActualDate:            "2026-06-03",
+			SearchedFrom:          "2026-06-03",
+			SearchedThrough:       "2026-06-03",
+			ShouldRetrySameSearch: false,
+			NextAction:            domain.AvailabilityNextActionOfferSlots,
+			Slots: []domain.AvailabilitySlotOption{{
+				Provider:     "Dr. Austin Bach",
+				Time:         "9:00 AM",
+				DateTime:     "2026-06-03T09:00",
+				BookingToken: "signed-slot",
+				ColumnID:     1513,
+				ProfileID:    620,
+				Duration:     15,
+			}},
+		},
+	}
+	handlers := &Handlers{scheduling: scheduler}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/scheduler/availability",
+		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only","dob":"01/15/1980"}`),
+	)
+	w := httptest.NewRecorder()
+
+	handlers.HandleGetAvailability(w, req)
+
+	var response domain.AvailabilityResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Outcome != domain.AvailabilityOutcomeFound ||
+		len(response.Slots) != 1 ||
+		response.Slots[0].BookingToken != "signed-slot" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestAvailabilityRouteRetainsAuthenticationAndResponseContract(t *testing.T) {
+	handlers := &Handlers{scheduling: schedulingStub{
+		result: domain.AvailabilityResponse{
+			Status:                domain.AvailabilityStatusSuccess,
+			Outcome:               domain.AvailabilityOutcomeNoAvailability,
+			AvailabilityFound:     false,
+			RequestedDate:         "2026-06-03",
+			SearchedFrom:          "2026-06-03",
+			SearchedThrough:       "2026-06-17",
+			ShouldRetrySameSearch: false,
+			NextAction:            domain.AvailabilityNextActionAskDifferentPreferences,
+			Slots:                 []domain.AvailabilitySlotOption{},
+		},
+	}}
+	router := NewRouter(handlers, "agent-secret", nil)
+	body := `{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only"}`
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/scheduler/availability", strings.NewReader(body))
+	unauthenticatedResponse := httptest.NewRecorder()
+	router.ServeHTTP(unauthenticatedResponse, unauthenticated)
+	if unauthenticatedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", unauthenticatedResponse.Code)
+	}
+
+	authenticated := httptest.NewRequest(http.MethodPost, "/api/scheduler/availability", strings.NewReader(body))
+	authenticated.Header.Set("Authorization", "Bearer agent-secret")
+	authenticatedResponse := httptest.NewRecorder()
+	router.ServeHTTP(authenticatedResponse, authenticated)
+	var response domain.AvailabilityResponse
+	if err := json.NewDecoder(authenticatedResponse.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if authenticatedResponse.Code != http.StatusOK ||
+		response.Outcome != domain.AvailabilityOutcomeNoAvailability ||
+		response.ShouldRetrySameSearch ||
+		response.Slots == nil {
+		t.Fatalf("authenticated response = %d %#v", authenticatedResponse.Code, response)
+	}
+}
+
+type schedulingStub struct {
+	result domain.AvailabilityResponse
+	err    error
+}
+
+func (s schedulingStub) Search(context.Context, schedulingmodule.SearchCommand) (domain.AvailabilityResponse, error) {
+	return s.result, s.err
 }
 
 func TestHandlePatientResolve_ValidationErrors(t *testing.T) {
@@ -594,9 +689,9 @@ func TestProviderFailuresAreRedactedFromResponsesAndLogs(t *testing.T) {
 			return &providerFailure{status: http.StatusInternalServerError, body: sensitive}
 		})
 		now := time.Now().UTC()
-		token, err := signBookingToken("test-booking-secret", bookingTokenPayload{
+		token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
 			OfficeID: "spring_hill", Routing: string(domain.RoutingAll), ColumnID: 1513, ProfileID: 620,
-			StartDatetime: "2026-08-01T09:00", Duration: 15, IssuedAt: now.Unix(), ExpiresAt: now.Add(bookingTokenTTL).Unix(),
+			StartDatetime: "2026-08-01T09:00", Duration: 15, IssuedAt: now.Unix(), ExpiresAt: now.Add(15 * time.Minute).Unix(),
 		})
 		if err != nil {
 			t.Fatalf("sign booking token: %v", err)
@@ -851,426 +946,9 @@ func TestRequestIDMiddleware(t *testing.T) {
 	})
 }
 
-func TestCalculateAvailableSlots_AllBlocked(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	// Use a future Monday so it's not "today"
-	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern)
-	nowEastern := time.Date(2026, 3, 3, 10, 0, 0, 0, eastern)
-
-	col := domain.SchedulerColumn{
-		ID:              "1513",
-		Name:            "DR. BACH - BP",
-		StartTime:       "08:00",
-		EndTime:         "17:00",
-		Interval:        15,
-		MaxApptsPerSlot: 0,
-		Workweek:        62, // Mon-Fri
-	}
-
-	// Block hold covering the entire work day
-	blockHolds := []domain.BlockHold{
-		{
-			StartDateTime: time.Date(2026, 6, 1, 8, 0, 0, 0, eastern),
-			EndDateTime:   time.Date(2026, 6, 1, 17, 0, 0, 0, eastern),
-			Note:          "OUT OF THE OFFICE",
-		},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(domain.DefaultOffice()), col, nil, blockHolds, date, nowEastern)
-
-	if len(slots) != 0 {
-		t.Errorf("Expected 0 slots when entire day is blocked, got %d", len(slots))
-	}
-}
-
-func TestCalculateAvailableSlots_AllBookedAtMax(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	nowEastern := time.Date(2026, 3, 3, 10, 0, 0, 0, eastern)
-
-	col := domain.SchedulerColumn{
-		ID:              "1551",
-		Name:            "DR. LICHT",
-		StartTime:       "09:00",
-		EndTime:         "10:00",
-		Interval:        15,
-		MaxApptsPerSlot: 2,  // Max 2 per slot
-		Workweek:        24, // Wed-Thu
-	}
-
-	// June 3 2026 is a Wednesday
-	date := time.Date(2026, 6, 3, 0, 0, 0, 0, eastern)
-
-	// Fill every slot with 2 appointments
-	var appointments []domain.Appointment
-	for h := 9; h < 10; h++ {
-		for m := 0; m < 60; m += 15 {
-			for i := 0; i < 2; i++ {
-				appointments = append(appointments, domain.Appointment{
-					StartDateTime: time.Date(2026, 6, 3, h, m, 0, 0, eastern),
-					Duration:      15,
-				})
-			}
-		}
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(domain.DefaultOffice()), col, appointments, nil, date, nowEastern)
-
-	if len(slots) != 0 {
-		t.Errorf("Expected 0 slots when all slots at max capacity, got %d", len(slots))
-	}
-}
-
-func TestNoAvailabilityResponse_HasExplicitNoRetryContract(t *testing.T) {
-	resp := domain.AvailabilityResponse{
-		Status:                domain.AvailabilityStatusSuccess,
-		Outcome:               domain.AvailabilityOutcomeNoAvailability,
-		AvailabilityFound:     false,
-		RequestedDate:         "2026-05-15",
-		ShouldRetrySameSearch: false,
-		NextAction:            domain.AvailabilityNextActionAskDifferentPreferences,
-		SearchedFrom:          "2026-05-15",
-		SearchedThrough:       "2026-05-29",
-		Message:               noAvailabilityMessage("2026-05-15", "2026-05-29"),
-		Slots:                 []domain.AvailabilitySlotOption{},
-	}
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("Failed to marshal response: %v", err)
-	}
-
-	var decoded map[string]interface{}
-	json.Unmarshal(data, &decoded)
-
-	if decoded["status"] != domain.AvailabilityStatusSuccess {
-		t.Errorf("Expected success status, got %q", decoded["status"])
-	}
-	if decoded["outcome"] != domain.AvailabilityOutcomeNoAvailability {
-		t.Errorf("Expected no-availability outcome, got %q", decoded["outcome"])
-	}
-	if decoded["availabilityFound"] != false {
-		t.Errorf("Expected availabilityFound false, got %v", decoded["availabilityFound"])
-	}
-	if decoded["shouldRetrySameSearch"] != false {
-		t.Errorf("Expected shouldRetrySameSearch false, got %v", decoded["shouldRetrySameSearch"])
-	}
-	if decoded["nextAction"] != domain.AvailabilityNextActionAskDifferentPreferences {
-		t.Errorf("Expected ask-preferences next action, got %q", decoded["nextAction"])
-	}
-	if decoded["searchedFrom"] != "2026-05-15" {
-		t.Errorf("Expected searchedFrom 2026-05-15, got %q", decoded["searchedFrom"])
-	}
-	if decoded["searchedThrough"] != "2026-05-29" {
-		t.Errorf("Expected searchedThrough 2026-05-29, got %q", decoded["searchedThrough"])
-	}
-	if !strings.Contains(decoded["message"].(string), "2026-05-15 through 2026-05-29") {
-		t.Errorf("Expected no-availability message, got %q", decoded["message"])
-	}
-	slots := decoded["slots"].([]interface{})
-	if len(slots) != 0 {
-		t.Errorf("Expected empty slots array, got %d", len(slots))
-	}
-}
-
-func TestAvailabilityResponse_HasFoundContractAndOmitsMessageWhenEmpty(t *testing.T) {
-	resp := domain.AvailabilityResponse{
-		Status:                domain.AvailabilityStatusSuccess,
-		Outcome:               domain.AvailabilityOutcomeFound,
-		AvailabilityFound:     true,
-		RequestedDate:         "2026-05-18",
-		SearchedFrom:          "2026-05-18",
-		SearchedThrough:       "2026-06-01",
-		ShouldRetrySameSearch: false,
-		NextAction:            domain.AvailabilityNextActionOfferSlots,
-		ActualDate:            "2026-06-01",
-		DateShifted:           true,
-		Slots: []domain.AvailabilitySlotOption{
-			{
-				Provider:  "Dr. Kyler Farnan",
-				Time:      "8:30 AM",
-				DateTime:  "2026-06-01T08:30",
-				ColumnID:  1555,
-				ProfileID: 2075,
-				Duration:  15,
-			},
-		},
-	}
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("Failed to marshal response: %v", err)
-	}
-
-	var decoded map[string]interface{}
-	json.Unmarshal(data, &decoded)
-
-	if decoded["status"] != domain.AvailabilityStatusSuccess {
-		t.Errorf("Expected success status, got %q", decoded["status"])
-	}
-	if decoded["outcome"] != domain.AvailabilityOutcomeFound {
-		t.Errorf("Expected availability-found outcome, got %q", decoded["outcome"])
-	}
-	if decoded["availabilityFound"] != true {
-		t.Errorf("Expected availabilityFound true, got %v", decoded["availabilityFound"])
-	}
-	if decoded["nextAction"] != domain.AvailabilityNextActionOfferSlots {
-		t.Errorf("Expected offer-slots next action, got %q", decoded["nextAction"])
-	}
-	if decoded["actualDate"] != "2026-06-01" {
-		t.Errorf("Expected actualDate 2026-06-01, got %q", decoded["actualDate"])
-	}
-	if decoded["searchedFrom"] != "2026-05-18" {
-		t.Errorf("Expected searchedFrom 2026-05-18, got %q", decoded["searchedFrom"])
-	}
-	if decoded["searchedThrough"] != "2026-06-01" {
-		t.Errorf("Expected searchedThrough 2026-06-01, got %q", decoded["searchedThrough"])
-	}
-	if decoded["dateShifted"] != true {
-		t.Errorf("Expected dateShifted true, got %v", decoded["dateShifted"])
-	}
-	if decoded["shouldRetrySameSearch"] != false {
-		t.Errorf("Expected shouldRetrySameSearch false, got %v", decoded["shouldRetrySameSearch"])
-	}
-	slots := decoded["slots"].([]interface{})
-	if len(slots) != 1 {
-		t.Fatalf("Expected one slot, got %d", len(slots))
-	}
-	slot := slots[0].(map[string]interface{})
-	if slot["provider"] != "Dr. Kyler Farnan" || slot["datetime"] != "2026-06-01T08:30" {
-		t.Errorf("Unexpected slot payload: %v", slot)
-	}
-	if _, exists := decoded["message"]; exists {
-		t.Error("Expected message field to be omitted when empty")
-	}
-}
-
-func TestSelectBalancedDisplaySlots_ReturnsRepresentativeTimes(t *testing.T) {
-	allSlots := []domain.AvailableSlot{
-		{Time: "8:00 AM", DateTime: "2026-06-03T08:00"},
-		{Time: "8:30 AM", DateTime: "2026-06-03T08:30"},
-		{Time: "9:00 AM", DateTime: "2026-06-03T09:00"},
-		{Time: "9:30 AM", DateTime: "2026-06-03T09:30"},
-		{Time: "10:00 AM", DateTime: "2026-06-03T10:00"},
-		{Time: "10:30 AM", DateTime: "2026-06-03T10:30"},
-		{Time: "11:00 AM", DateTime: "2026-06-03T11:00"},
-		{Time: "1:00 PM", DateTime: "2026-06-03T13:00"},
-		{Time: "2:30 PM", DateTime: "2026-06-03T14:30"},
-		{Time: "4:00 PM", DateTime: "2026-06-03T16:00"},
-	}
-
-	selected := selectBalancedDisplaySlots(allSlots, 5)
-
-	got := make([]string, 0, len(selected))
-	for _, slot := range selected {
-		got = append(got, slot.Time)
-	}
-	want := []string{"8:00 AM", "9:00 AM", "10:30 AM", "1:00 PM", "4:00 PM"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("expected balanced slots %v, got %v", want, got)
-	}
-}
-
-func TestSelectBalancedDisplaySlots_ReturnsAllSlotsAtOrBelowLimit(t *testing.T) {
-	allSlots := []domain.AvailableSlot{
-		{Time: "8:00 AM", DateTime: "2026-06-03T08:00"},
-		{Time: "1:00 PM", DateTime: "2026-06-03T13:00"},
-		{Time: "4:00 PM", DateTime: "2026-06-03T16:00"},
-	}
-
-	selected := selectBalancedDisplaySlots(allSlots, 5)
-
-	if len(selected) != len(allSlots) {
-		t.Fatalf("expected all %d slots, got %d", len(allSlots), len(selected))
-	}
-	if selected[0].Time != "8:00 AM" || selected[2].Time != "4:00 PM" {
-		t.Fatalf("expected original chronological order, got %+v", selected)
-	}
-}
-
-func TestIncompleteAvailabilityResponse_AllowsRetry(t *testing.T) {
-	resp := domain.AvailabilityResponse{
-		Status:                domain.AvailabilityStatusError,
-		Outcome:               domain.AvailabilityOutcomeSearchIncomplete,
-		AvailabilityFound:     false,
-		RequestedDate:         "2026-05-15",
-		ShouldRetrySameSearch: true,
-		NextAction:            domain.AvailabilityNextActionRetryOnceThenAskPreferences,
-		SearchedFrom:          "2026-05-15",
-		SearchedThrough:       "2026-05-29",
-		Message:               incompleteAvailabilityMessage("2026-05-15", "2026-05-29", 3),
-		Slots:                 []domain.AvailabilitySlotOption{},
-	}
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("Failed to marshal response: %v", err)
-	}
-
-	var decoded map[string]interface{}
-	json.Unmarshal(data, &decoded)
-
-	if decoded["status"] != domain.AvailabilityStatusError {
-		t.Errorf("Expected error status, got %q", decoded["status"])
-	}
-	if decoded["outcome"] != domain.AvailabilityOutcomeSearchIncomplete {
-		t.Errorf("Expected search-incomplete outcome, got %q", decoded["outcome"])
-	}
-	if decoded["shouldRetrySameSearch"] != true {
-		t.Errorf("Expected shouldRetrySameSearch true, got %v", decoded["shouldRetrySameSearch"])
-	}
-	if decoded["nextAction"] != domain.AvailabilityNextActionRetryOnceThenAskPreferences {
-		t.Errorf("Expected retry-then-ask-preferences next action, got %q", decoded["nextAction"])
-	}
-	if !strings.Contains(decoded["message"].(string), "ask for different preferences") {
-		t.Errorf("Expected incomplete-search message, got %q", decoded["message"])
-	}
-}
-
-func TestBookingTokenRoundTrip(t *testing.T) {
-	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	payload := bookingTokenPayload{
-		OfficeID:      "spring_hill",
-		Routing:       string(domain.RoutingAll),
-		ColumnID:      1513,
-		ProfileID:     620,
-		StartDatetime: "2026-06-02T09:00",
-		Duration:      15,
-		RequiresForce: true,
-		Provider:      "Dr. Austin Bach",
-		IssuedAt:      now.Unix(),
-		ExpiresAt:     now.Add(bookingTokenTTL).Unix(),
-	}
-
-	token, err := signBookingToken("test-booking-secret", payload)
-	if err != nil {
-		t.Fatalf("signBookingToken error = %v", err)
-	}
-
-	got, err := verifyBookingToken("test-booking-secret", token, now.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("verifyBookingToken error = %v", err)
-	}
-	if got.OfficeID != payload.OfficeID ||
-		got.Routing != payload.Routing ||
-		got.ColumnID != payload.ColumnID ||
-		got.ProfileID != payload.ProfileID ||
-		got.StartDatetime != payload.StartDatetime ||
-		got.Duration != payload.Duration ||
-		got.RequiresForce != payload.RequiresForce {
-		t.Fatalf("decoded payload = %+v, want %+v", got, payload)
-	}
-}
-
-func TestBookingTokenRejectsTamperedExpiredAndWrongOffice(t *testing.T) {
-	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	payload := bookingTokenPayload{
-		OfficeID:      "spring_hill",
-		Routing:       string(domain.RoutingAll),
-		ColumnID:      1513,
-		ProfileID:     620,
-		StartDatetime: "2026-06-02T09:00",
-		Duration:      15,
-		IssuedAt:      now.Unix(),
-		ExpiresAt:     now.Add(bookingTokenTTL).Unix(),
-	}
-	token, err := signBookingToken("test-booking-secret", payload)
-	if err != nil {
-		t.Fatalf("signBookingToken error = %v", err)
-	}
-
-	if _, err := verifyBookingToken("wrong-secret", token, now); err == nil {
-		t.Fatal("wrong secret should reject token")
-	}
-	if _, err := verifyBookingToken("test-booking-secret", token+"x", now); err == nil {
-		t.Fatal("tampered token should be rejected")
-	}
-	if _, err := verifyBookingToken("test-booking-secret", token, now.Add(bookingTokenTTL)); err == nil {
-		t.Fatal("expired token should be rejected")
-	}
-
-	oversizedTTL := payload
-	oversizedTTL.ExpiresAt = now.Add(bookingTokenTTL + time.Second).Unix()
-	oversizedToken, err := signBookingToken("test-booking-secret", oversizedTTL)
-	if err != nil {
-		t.Fatalf("sign oversized TTL token: %v", err)
-	}
-	if _, err := verifyBookingToken("test-booking-secret", oversizedToken, now); err == nil {
-		t.Fatal("token with oversized TTL should be rejected")
-	}
-
-	futureIssued := payload
-	futureIssued.IssuedAt = now.Add(bookingTokenClockSkew + time.Second).Unix()
-	futureIssued.ExpiresAt = now.Add(bookingTokenClockSkew + time.Minute).Unix()
-	futureToken, err := signBookingToken("test-booking-secret", futureIssued)
-	if err != nil {
-		t.Fatalf("sign future issued token: %v", err)
-	}
-	if _, err := verifyBookingToken("test-booking-secret", futureToken, now); err == nil {
-		t.Fatal("future-issued token should be rejected")
-	}
-
-	req := BookAppointmentRequest{BookingToken: token}
-	workflow := newSchedulingWorkflow(nil, nil, nil, "test-booking-secret")
-	office, _ := domain.LookupOffice("Hollywood")
-	if _, err := workflow.applyBookingToken(&req, office, now); err == nil {
-		t.Fatal("token for a different office should be rejected")
-	}
-
-	req = BookAppointmentRequest{BookingToken: token}
-	office, err = workflow.applyBookingToken(&req, nil, now)
-	if err != nil {
-		t.Fatalf("token should resolve office when request omits office: %v", err)
-	}
-	if office.ID != "spring_hill" {
-		t.Fatalf("resolved office = %s, want spring_hill", office.ID)
-	}
-}
-
-func TestAddBookingTokensAndApplyBookingToken(t *testing.T) {
-	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	workflow := newSchedulingWorkflow(nil, nil, nil, "test-booking-secret")
-	office := domain.DefaultOffice()
-	slots := []domain.AvailabilitySlotOption{
-		{
-			Provider:      "Dr. Austin Bach",
-			Time:          "9:00 AM",
-			DateTime:      "2026-06-02T09:00",
-			ColumnID:      1513,
-			ProfileID:     620,
-			Duration:      15,
-			RequiresForce: true,
-		},
-	}
-
-	slots, err := workflow.addBookingTokens(slots, office, domain.RoutingBachOnly, "", now)
-	if err != nil {
-		t.Fatalf("addBookingTokens error = %v", err)
-	}
-	if slots[0].BookingToken == "" {
-		t.Fatal("expected booking token")
-	}
-
-	req := BookAppointmentRequest{BookingToken: slots[0].BookingToken}
-	tokenOffice, err := workflow.applyBookingToken(&req, office, now)
-	if err != nil {
-		t.Fatalf("applyBookingToken error = %v", err)
-	}
-	if tokenOffice.ID != office.ID {
-		t.Fatalf("token office = %s, want %s", tokenOffice.ID, office.ID)
-	}
-	if req.ColumnID != 1513 ||
-		req.ProfileID != 620 ||
-		req.StartDatetime != "2026-06-02T09:00" ||
-		req.Duration != 15 ||
-		req.Routing != string(domain.RoutingBachOnly) ||
-		!req.bookingRequiresForce {
-		t.Fatalf("request populated from token = %+v", req)
-	}
-}
-
 func TestHandleBookAppointment_UsesSignedSlotForceDecision(t *testing.T) {
 	now := time.Now().UTC().Add(-time.Minute)
-	token, err := signBookingToken("test-booking-secret", bookingTokenPayload{
+	token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
 		OfficeID:      "spring_hill",
 		Routing:       string(domain.RoutingBachOnly),
 		ColumnID:      1513,
@@ -1279,10 +957,10 @@ func TestHandleBookAppointment_UsesSignedSlotForceDecision(t *testing.T) {
 		Duration:      15,
 		RequiresForce: true,
 		IssuedAt:      now.Unix(),
-		ExpiresAt:     now.Add(bookingTokenTTL).Unix(),
+		ExpiresAt:     now.Add(15 * time.Minute).Unix(),
 	})
 	if err != nil {
-		t.Fatalf("signBookingToken error = %v", err)
+		t.Fatalf("SignSlotToken error = %v", err)
 	}
 
 	var restPaths []string
@@ -1333,6 +1011,7 @@ func TestHandleBookAppointment_UsesSignedSlotForceDecision(t *testing.T) {
 		nil,
 		clients.NewAdvancedMDRestClient(httpClient),
 		nil,
+		nil,
 		"test-booking-secret",
 	)
 
@@ -1359,7 +1038,7 @@ func TestHandleBookAppointment_UsesSignedSlotForceDecision(t *testing.T) {
 func TestHandleBookAppointment_SendsAppointmentCommentsInBookingPayload(t *testing.T) {
 	domain.InitRegistry("")
 	now := time.Now().UTC()
-	token, err := signBookingToken("test-booking-secret", bookingTokenPayload{
+	token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
 		OfficeID:      "spring_hill",
 		Routing:       string(domain.RoutingAll),
 		ColumnID:      1513,
@@ -1367,10 +1046,10 @@ func TestHandleBookAppointment_SendsAppointmentCommentsInBookingPayload(t *testi
 		StartDatetime: "2026-06-02T09:00",
 		Duration:      15,
 		IssuedAt:      now.Unix(),
-		ExpiresAt:     now.Add(bookingTokenTTL).Unix(),
+		ExpiresAt:     now.Add(15 * time.Minute).Unix(),
 	})
 	if err != nil {
-		t.Fatalf("signBookingToken error = %v", err)
+		t.Fatalf("SignSlotToken error = %v", err)
 	}
 
 	var bookingPayload map[string]any
@@ -1417,6 +1096,7 @@ func TestHandleBookAppointment_SendsAppointmentCommentsInBookingPayload(t *testi
 		nil,
 		clients.NewAdvancedMDRestClient(httpClient),
 		nil,
+		nil,
 		"test-booking-secret",
 	)
 
@@ -1438,420 +1118,6 @@ func TestHandleBookAppointment_SendsAppointmentCommentsInBookingPayload(t *testi
 	wantComment := "Appointment reason: blurry vision\nReferring doctor: Dr. Smith\n- AI"
 	if bookingPayload["comments"] != wantComment {
 		t.Fatalf("booking comments = %#v, want %q", bookingPayload["comments"], wantComment)
-	}
-}
-
-func TestGetSchedulerSetupUsesFreshCache(t *testing.T) {
-	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
-	setup := &domain.SchedulerSetup{
-		Columns: []domain.SchedulerColumn{{ID: "1513"}},
-	}
-	workflow := &schedulingWorkflow{
-		schedulerSetup:          setup,
-		schedulerSetupExpiresAt: now.Add(time.Hour),
-	}
-
-	got, err := workflow.getSchedulerSetup(context.Background(), &domain.TokenData{}, now)
-	if err != nil {
-		t.Fatalf("getSchedulerSetup error = %v", err)
-	}
-	if got != setup {
-		t.Fatal("expected cached scheduler setup pointer")
-	}
-}
-
-func TestGetSchedulerSetupFallsBackToStaleCacheOnRefreshError(t *testing.T) {
-	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
-	setup := &domain.SchedulerSetup{
-		Columns: []domain.SchedulerColumn{{ID: "1513"}},
-	}
-	workflow := &schedulingWorkflow{
-		schedulerSetup:          setup,
-		schedulerSetupExpiresAt: now.Add(-time.Second),
-	}
-
-	got, err := workflow.getSchedulerSetup(context.Background(), &domain.TokenData{}, now)
-	if err != nil {
-		t.Fatalf("getSchedulerSetup error = %v", err)
-	}
-	if got != setup {
-		t.Fatal("expected stale scheduler setup fallback")
-	}
-	if !workflow.schedulerSetupExpiresAt.After(now) {
-		t.Fatal("expected stale fallback to set a short retry window")
-	}
-}
-
-func TestCalculateAvailableSlots_MultiSlotAppointment(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	// Use a future Friday so it's not "today"
-	date := time.Date(2026, 3, 6, 0, 0, 0, 0, eastern)
-	nowEastern := time.Date(2026, 3, 5, 10, 0, 0, 0, eastern) // day before
-
-	// Spring Hill Dr. Noel: 30-min intervals. Spring Hill medical columns are
-	// second-bookable.
-	col := domain.SchedulerColumn{
-		ID:              "1550",
-		Name:            "DR. NOEL",
-		StartTime:       "08:30",
-		EndTime:         "10:30",
-		Interval:        30,
-		MaxApptsPerSlot: 2,
-		Workweek:        62, // Mon-Fri
-	}
-
-	// Simulate: 60-min appt at 9:00 (Vargas) + 30-min appt at 9:30 (Prater)
-	// 9:30 is hard-blocked by Vargas overlap (AMD 4101), regardless of maxAppts
-	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 3, 6, 9, 0, 0, 0, eastern), Duration: 60},  // Vargas 9:00-10:00
-		{StartDateTime: time.Date(2026, 3, 6, 9, 30, 0, 0, eastern), Duration: 30}, // Prater 9:30-10:00
-	}
-
-	// Block hold at 8:30 (OUT OF THE OFFICE)
-	blockHolds := []domain.BlockHold{
-		{
-			StartDateTime: time.Date(2026, 3, 6, 8, 30, 0, 0, eastern),
-			EndDateTime:   time.Date(2026, 3, 6, 9, 0, 0, 0, eastern),
-			Note:          "OUT OF THE OFFICE",
-		},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(domain.DefaultOffice()), col, appointments, blockHolds, date, nowEastern)
-
-	// 8:30 — blocked by hold
-	// 9:00 — one same-start appt on configured column -> available with force
-	// 9:30 — Vargas (9:00, 60min) overlaps into 9:30 → blocked
-	// 10:00 — 0 appts → available
-
-	if len(slots) != 2 {
-		t.Errorf("Expected 2 available slots, got %d: %v", len(slots), slots)
-		return
-	}
-
-	if slots[0].Time != "9:00 AM" ||
-		slots[0].SameStartBooked != 1 ||
-		slots[0].SameStartCapacity != 2 ||
-		!slots[0].RequiresForce {
-		t.Errorf("unexpected first slot metadata: %+v", slots[0])
-	}
-	if slots[1].Time != "10:00 AM" {
-		t.Errorf("Expected 10:00 AM second slot, got %s", slots[1].Time)
-	}
-}
-
-func TestCalculateAvailableSlots_ConfiguredSingleBookedSlotsAvailableWithForceMetadata(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern) // Monday
-	nowEastern := time.Date(2026, 5, 31, 10, 0, 0, 0, eastern)
-
-	// Spring Hill Bach preserves explicit middleware capacity even when AMD reports max=0.
-	col := domain.SchedulerColumn{
-		ID:              "1513",
-		Name:            "DR. BACH - BP",
-		StartTime:       "09:00",
-		EndTime:         "09:30",
-		Interval:        15,
-		MaxApptsPerSlot: 0,
-		Workweek:        62,
-	}
-
-	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-		{StartDateTime: time.Date(2026, 6, 1, 9, 15, 0, 0, eastern), Duration: 15},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(domain.DefaultOffice()), col, appointments, nil, date, nowEastern)
-
-	if len(slots) != 2 {
-		t.Fatalf("Expected 2 second-bookable Bach slots, got %d: %v", len(slots), slots)
-	}
-	for _, slot := range slots {
-		if slot.SameStartBooked != 1 {
-			t.Errorf("slot %s SameStartBooked = %d, want 1", slot.Time, slot.SameStartBooked)
-		}
-		if slot.SameStartCapacity != 2 {
-			t.Errorf("slot %s SameStartCapacity = %d, want 2", slot.Time, slot.SameStartCapacity)
-		}
-		if !slot.RequiresForce {
-			t.Errorf("slot %s should require force", slot.Time)
-		}
-	}
-}
-
-func TestCalculateAvailableSlots_ConfiguredTwoSameStartAppointmentsBlockSlot(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern) // Monday
-	nowEastern := time.Date(2026, 5, 31, 10, 0, 0, 0, eastern)
-
-	col := domain.SchedulerColumn{
-		ID:              "1513",
-		Name:            "DR. BACH - BP",
-		StartTime:       "09:00",
-		EndTime:         "09:15",
-		Interval:        15,
-		MaxApptsPerSlot: 0,
-		Workweek:        62,
-	}
-
-	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(domain.DefaultOffice()), col, appointments, nil, date, nowEastern)
-	if len(slots) != 0 {
-		t.Fatalf("Expected no slots when same-start capacity is full, got %d: %v", len(slots), slots)
-	}
-}
-
-func TestCalculateAvailableSlots_SpringHillOpticalBlocksSingleSameStart(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern) // Monday
-	nowEastern := time.Date(2026, 5, 31, 10, 0, 0, 0, eastern)
-
-	col := domain.SchedulerColumn{
-		ID:              "1600",
-		Name:            "ROUTINE VISION",
-		StartTime:       "09:00",
-		EndTime:         "09:15",
-		Interval:        15,
-		MaxApptsPerSlot: 2,
-		Workweek:        62,
-	}
-	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(domain.DefaultOffice()), col, appointments, nil, date, nowEastern)
-	if len(slots) != 0 {
-		t.Fatalf("Expected Spring Hill routine vision same-start slot to be blocked, got %d: %v", len(slots), slots)
-	}
-}
-
-func TestCalculateAvailableSlots_CrystalRiverMaxZeroBlocksSameStart(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern) // Monday
-	nowEastern := time.Date(2026, 5, 31, 10, 0, 0, 0, eastern)
-
-	domain.InitRegistry("prod")
-	defer domain.InitRegistry("prod")
-
-	office, ok := domain.LookupOffice("+13523202007")
-	if !ok {
-		t.Fatal("expected Crystal River office")
-	}
-	col := domain.SchedulerColumn{
-		ID:              "1593",
-		Name:            "DR. LICHT",
-		StartTime:       "09:00",
-		EndTime:         "09:15",
-		Interval:        15,
-		MaxApptsPerSlot: 0,
-		Workweek:        62,
-	}
-	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(office), col, appointments, nil, date, nowEastern)
-	if len(slots) != 0 {
-		t.Fatalf("Expected Crystal River max=0 same-start slot to be blocked, got %d: %v", len(slots), slots)
-	}
-}
-
-func TestCalculateAvailableSlots_CrystalRiverMaxTwoBlocksSingleSameStart(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	date := time.Date(2026, 6, 1, 0, 0, 0, 0, eastern) // Monday
-	nowEastern := time.Date(2026, 5, 31, 10, 0, 0, 0, eastern)
-
-	domain.InitRegistry("prod")
-	defer domain.InitRegistry("prod")
-
-	office, ok := domain.LookupOffice("+13523202007")
-	if !ok {
-		t.Fatal("expected Crystal River office")
-	}
-	col := domain.SchedulerColumn{
-		ID:              "1593",
-		Name:            "DR. LICHT",
-		StartTime:       "09:00",
-		EndTime:         "09:15",
-		Interval:        15,
-		MaxApptsPerSlot: 2,
-		Workweek:        62,
-	}
-	appointments := []domain.Appointment{
-		{StartDateTime: time.Date(2026, 6, 1, 9, 0, 0, 0, eastern), Duration: 15},
-	}
-
-	slots := calculateAvailableSlots(domain.NewSchedulingPolicy(office), col, appointments, nil, date, nowEastern)
-	if len(slots) != 0 {
-		t.Fatalf("Expected Crystal River max=2 same-start slot to be blocked, got %d: %v", len(slots), slots)
-	}
-}
-
-func TestCalculateAvailableSlots_HollywoodSweetwaterOpticalSameStartWindows(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	domain.InitRegistry("prod")
-	defer domain.InitRegistry("prod")
-
-	tests := []struct {
-		name     string
-		officeID string
-		columnID string
-		start    time.Time
-		wantSlot bool
-	}{
-		{
-			name:     "sweetwater monday morning start",
-			officeID: "+17864657475",
-			columnID: "1554",
-			start:    time.Date(2026, 6, 1, 8, 30, 0, 0, eastern),
-			wantSlot: true,
-		},
-		{
-			name:     "sweetwater monday morning end",
-			officeID: "+17864657475",
-			columnID: "1554",
-			start:    time.Date(2026, 6, 1, 10, 45, 0, 0, eastern),
-			wantSlot: true,
-		},
-		{
-			name:     "sweetwater monday midday blocked",
-			officeID: "+17864657475",
-			columnID: "1554",
-			start:    time.Date(2026, 6, 1, 11, 0, 0, 0, eastern),
-		},
-		{
-			name:     "sweetwater monday afternoon start",
-			officeID: "+17864657475",
-			columnID: "1554",
-			start:    time.Date(2026, 6, 1, 13, 30, 0, 0, eastern),
-			wantSlot: true,
-		},
-		{
-			name:     "sweetwater monday afternoon end",
-			officeID: "+17864657475",
-			columnID: "1554",
-			start:    time.Date(2026, 6, 1, 14, 30, 0, 0, eastern),
-			wantSlot: true,
-		},
-		{
-			name:     "sweetwater monday late afternoon blocked",
-			officeID: "+17864657475",
-			columnID: "1554",
-			start:    time.Date(2026, 6, 1, 14, 45, 0, 0, eastern),
-		},
-		{
-			name:     "hollywood friday morning end",
-			officeID: "+19542872010",
-			columnID: "1555",
-			start:    time.Date(2026, 6, 5, 11, 45, 0, 0, eastern),
-			wantSlot: true,
-		},
-		{
-			name:     "hollywood friday afternoon blocked",
-			officeID: "+19542872010",
-			columnID: "1555",
-			start:    time.Date(2026, 6, 5, 13, 30, 0, 0, eastern),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			office, ok := domain.LookupOffice(tt.officeID)
-			if !ok {
-				t.Fatalf("expected office %s", tt.officeID)
-			}
-			col := domain.SchedulerColumn{
-				ID:              tt.columnID,
-				Name:            "ROUTINE VISION",
-				StartTime:       tt.start.Format("15:04"),
-				EndTime:         tt.start.Add(15 * time.Minute).Format("15:04"),
-				Interval:        15,
-				MaxApptsPerSlot: 0,
-				Workweek:        62,
-			}
-			appointments := []domain.Appointment{
-				{StartDateTime: tt.start, Duration: 15},
-			}
-			date := time.Date(tt.start.Year(), tt.start.Month(), tt.start.Day(), 0, 0, 0, 0, eastern)
-			nowEastern := date.AddDate(0, 0, -1).Add(10 * time.Hour)
-
-			slots := calculateAvailableSlots(domain.NewSchedulingPolicy(office), col, appointments, nil, date, nowEastern)
-			if !tt.wantSlot {
-				if len(slots) != 0 {
-					t.Fatalf("expected same-start slot to be blocked, got %d: %v", len(slots), slots)
-				}
-				return
-			}
-			if len(slots) != 1 {
-				t.Fatalf("expected same-start slot to be second-bookable, got %d: %v", len(slots), slots)
-			}
-			if slots[0].SameStartBooked != 1 ||
-				slots[0].SameStartCapacity != 2 ||
-				!slots[0].RequiresForce {
-				t.Fatalf("unexpected same-start metadata: %+v", slots[0])
-			}
-		})
-	}
-}
-
-func TestEnforcePreauthMinDate(t *testing.T) {
-	eastern, _ := time.LoadLocation("America/New_York")
-	now := time.Date(2026, 3, 10, 14, 0, 0, 0, eastern) // March 10, 2026
-
-	tests := []struct {
-		name          string
-		requestDate   time.Time
-		expectedDate  string
-		shouldAdvance bool
-	}{
-		{
-			name:          "date tomorrow — advances to 14 days out",
-			requestDate:   time.Date(2026, 3, 11, 0, 0, 0, 0, eastern),
-			expectedDate:  "2026-03-24",
-			shouldAdvance: true,
-		},
-		{
-			name:          "date 7 days out — advances to 14 days out",
-			requestDate:   time.Date(2026, 3, 17, 0, 0, 0, 0, eastern),
-			expectedDate:  "2026-03-24",
-			shouldAdvance: true,
-		},
-		{
-			name:          "date 13 days out — still advances to 14 days out",
-			requestDate:   time.Date(2026, 3, 23, 0, 0, 0, 0, eastern),
-			expectedDate:  "2026-03-24",
-			shouldAdvance: true,
-		},
-		{
-			name:          "date exactly 14 days out — no change",
-			requestDate:   time.Date(2026, 3, 24, 0, 0, 0, 0, eastern),
-			expectedDate:  "2026-03-24",
-			shouldAdvance: false,
-		},
-		{
-			name:          "date 30 days out — no change",
-			requestDate:   time.Date(2026, 4, 9, 0, 0, 0, 0, eastern),
-			expectedDate:  "2026-04-09",
-			shouldAdvance: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resultDate, resultStr := enforcePreauthMinDate(tt.requestDate, now)
-			if resultStr != tt.expectedDate {
-				t.Errorf("Expected date %s, got %s", tt.expectedDate, resultStr)
-			}
-			if tt.shouldAdvance && resultDate.Equal(tt.requestDate) {
-				t.Error("Expected date to be advanced but it wasn't")
-			}
-			if !tt.shouldAdvance && !resultDate.Equal(tt.requestDate) {
-				t.Errorf("Expected date to stay the same but it changed to %s", resultStr)
-			}
-		})
 	}
 }
 
@@ -1967,7 +1233,7 @@ func TestAppointmentTypeNames(t *testing.T) {
 func TestRouter(t *testing.T) {
 	// Create minimal handlers for testing
 	amdClient := clients.NewAdvancedMDClient(&http.Client{})
-	handlers := NewHandlers(nil, amdClient, nil, nil) // nil session - can't test full flow
+	handlers := NewHandlers(nil, amdClient, nil, nil, nil) // nil session - can't test full flow
 
 	router := NewRouter(handlers, "test-secret", nil)
 
@@ -2375,6 +1641,7 @@ func newCancelAppointmentTestHandlers(t *testing.T, patientID int, appointmentID
 		nil,
 		clients.NewAdvancedMDRestClient(httpClient),
 		nil,
+		nil,
 		"test-booking-secret",
 	), &cancelRequests
 }
@@ -2422,6 +1689,7 @@ func newProviderFailureTestHandlers(t *testing.T, fail func(*http.Request, []byt
 		clients.NewAdvancedMDClient(httpClient),
 		clients.NewAdvancedMDRestClient(httpClient),
 		nil,
+		nil,
 		"test-booking-secret",
 	)
 }
@@ -2465,6 +1733,7 @@ func newUpdateInsuranceTestHandlers(t *testing.T) (*Handlers, *[]string) {
 		amdSession,
 		clients.NewAdvancedMDClient(httpClient),
 		clients.NewAdvancedMDRestClient(httpClient),
+		nil,
 		nil,
 	), &writes
 }
@@ -2602,6 +1871,7 @@ func newPatientResolveTestHandlers(t *testing.T, appointmentStatus int) *Handler
 		amdClient,
 		amdRestClient,
 		patientmodule.New(records),
+		nil,
 		"test-booking-secret",
 	)
 }

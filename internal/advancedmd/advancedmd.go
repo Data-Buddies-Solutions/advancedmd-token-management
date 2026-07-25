@@ -40,3 +40,11 @@ type PatientRecords interface {
 	GetPatientDemographics(ctx context.Context, patientID string) (domain.PatientDemographics, error)
 	GetUpcomingAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) ([]domain.PatientAppointment, error)
 }
+
+// SchedulingRecords is the AdvancedMD surface required by the Scheduling
+// module. Implementations keep authentication, endpoints, and provider payloads
+// behind domain scheduler setup and schedule-read results.
+type SchedulingRecords interface {
+	GetSchedulerSetup(ctx context.Context) (domain.SchedulerSetup, error)
+	ReadSchedule(ctx context.Context, query domain.ScheduleReadQuery) (domain.ScheduleReadResult, error)
+}

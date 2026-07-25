@@ -15,22 +15,14 @@ import (
 	"advancedmd-token-management/internal/domain"
 	patientmodule "advancedmd-token-management/internal/patient"
 	"advancedmd-token-management/internal/safeerrors"
+	schedulingmodule "advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
 
-// eastern is the America/New_York timezone, loaded once at startup.
-var eastern *time.Location
-
-func init() {
-	var err error
-	eastern, err = time.LoadLocation("America/New_York")
-	if err != nil {
-		eastern = time.FixedZone("EST", -5*3600)
-	}
-}
+var eastern = domain.EasternLocation()
 
 // ErrorResponse is the JSON response structure for error conditions.
 // Returns 200 OK with status:"error" so ElevenLabs passes the message to the LLM.
@@ -79,6 +71,7 @@ type Handlers struct {
 	amdClient          *clients.AdvancedMDClient
 	amdRestClient      *clients.AdvancedMDRestClient
 	patient            patientmodule.Patient
+	scheduling         schedulingmodule.Scheduling
 	schedulingWorkflow *schedulingWorkflow
 }
 
@@ -88,6 +81,7 @@ func NewHandlers(
 	amdClient *clients.AdvancedMDClient,
 	amdRestClient *clients.AdvancedMDRestClient,
 	patient patientmodule.Patient,
+	scheduling schedulingmodule.Scheduling,
 	bookingTokenSecret ...string,
 ) *Handlers {
 	secret := ""
@@ -99,8 +93,9 @@ func NewHandlers(
 		amdClient:     amdClient,
 		amdRestClient: amdRestClient,
 		patient:       patient,
+		scheduling:    scheduling,
 	}
-	handlers.schedulingWorkflow = newSchedulingWorkflow(amdSession, amdClient, amdRestClient, secret)
+	handlers.schedulingWorkflow = newSchedulingWorkflow(amdSession, amdRestClient, secret)
 	return handlers
 }
 
@@ -111,32 +106,9 @@ func (h *Handlers) SetAllowRawSlotBooking(allow bool) {
 
 func (h *Handlers) workflow() *schedulingWorkflow {
 	if h.schedulingWorkflow == nil {
-		h.schedulingWorkflow = newSchedulingWorkflow(h.session, h.amdClient, h.amdRestClient, "")
+		h.schedulingWorkflow = newSchedulingWorkflow(h.session, h.amdRestClient, "")
 	}
 	return h.schedulingWorkflow
-}
-
-// resolveOffice resolves an office name to its config.
-// Empty name defaults to Spring Hill for backward compatibility.
-func resolveOffice(officeName string) (*domain.OfficeConfig, error) {
-	if officeName == "" {
-		return domain.DefaultOffice(), nil
-	}
-	office, ok := domain.LookupOffice(officeName)
-	if !ok {
-		return nil, fmt.Errorf("unknown office: %q. Valid options: %s", officeName, strings.Join(domain.ValidOfficeNames(), ", "))
-	}
-	return office, nil
-}
-
-func validateOptionalDOB(dob string) error {
-	if dob == "" {
-		return nil
-	}
-	if _, ok := domain.AgeYears(dob); !ok {
-		return fmt.Errorf("dob must be a valid date")
-	}
-	return nil
 }
 
 // HandleLive reports process liveness without calling AdvancedMD.
@@ -212,7 +184,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	office, err := resolveOffice(req.Office)
+	office, err := domain.ResolveOffice(req.Office)
 	if err != nil {
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
@@ -428,7 +400,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	office, err := resolveOffice(req.Office)
+	office, err := domain.ResolveOffice(req.Office)
 	if err != nil {
 		json.NewEncoder(w).Encode(PatientResolveResponse{
 			Status:  "error",
@@ -711,7 +683,7 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
-	office, err := resolveOffice(req.Office)
+	office, err := domain.ResolveOffice(req.Office)
 	if err != nil {
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{
 			Status:  "error",
@@ -857,17 +829,11 @@ func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(response)
 }
 
-// AvailabilityRequest is the expected JSON body for availability lookup.
-type AvailabilityRequest struct {
-	Date            string `json:"date"`            // Required: YYYY-MM-DD format
-	Provider        string `json:"provider"`        // Optional: filter by provider name
-	Office          string `json:"office"`          // Optional: filter by office name (e.g., "Spring Hill", "Hollywood")
-	Routing         string `json:"routing"`         // Optional: routing rule from verify/add-patient (e.g., "bach_only")
-	DOB             string `json:"dob,omitempty"`   // Optional: patient DOB for provider age rules
-	PreauthRequired bool   `json:"preauthRequired"` // Optional: if true, enforces 14-day minimum lead time
-}
+// AvailabilityRequest preserves the authenticated HTTP request shape while the
+// Scheduling module owns its behavior.
+type AvailabilityRequest = schedulingmodule.SearchCommand
 
-// HandleGetAvailability searches through the Scheduling Workflow.
+// HandleGetAvailability searches through the Scheduling module.
 func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -877,9 +843,17 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	response, workflowErr := h.workflow().Search(r.Context(), req, time.Now())
-	if workflowErr != nil {
-		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: workflowErr.message})
+	if h.scheduling == nil {
+		log.Printf("availability: module unavailable category=%s", safeerrors.CategoryInternal)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Status:  "error",
+			Message: "Appointment scheduling is temporarily unavailable. Please try again.",
+		})
+		return
+	}
+	response, err := h.scheduling.Search(r.Context(), req)
+	if err != nil {
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: err.Error()})
 		return
 	}
 	json.NewEncoder(w).Encode(response)
@@ -936,12 +910,12 @@ func (h *Handlers) HandleUpdateInsurance(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	if err := validateOptionalDOB(req.DOB); err != nil {
+	if err := domain.ValidateOptionalDOB(req.DOB); err != nil {
 		json.NewEncoder(w).Encode(UpdateInsuranceResponse{Status: "error", Message: err.Error()})
 		return
 	}
 
-	office, err := resolveOffice(req.Office)
+	office, err := domain.ResolveOffice(req.Office)
 	if err != nil {
 		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
 			Status:  "error",
