@@ -380,6 +380,12 @@ func TestHandlePatientResolve_ValidationErrors(t *testing.T) {
 			body:        `{"patientId":"123","phone":"9542872010"}`,
 			expectedMsg: "Provide either patientId or lookup fields, not both",
 		},
+		{
+			name:        "phone without digits",
+			method:      "POST",
+			body:        `{"phone":"+"}`,
+			expectedMsg: "phone must contain at least one digit",
+		},
 	}
 
 	for _, tt := range tests {

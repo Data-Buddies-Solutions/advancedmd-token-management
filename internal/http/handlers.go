@@ -533,6 +533,9 @@ func validatePatientResolveRequest(req PatientResolveRequest) string {
 		return ""
 	}
 	if req.Phone != "" {
+		if domain.NormalizePhoneDigits(req.Phone) == "" {
+			return "phone must contain at least one digit"
+		}
 		return ""
 	}
 	if req.LastName != "" && req.DOB != "" {
