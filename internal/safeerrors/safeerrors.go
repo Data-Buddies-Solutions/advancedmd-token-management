@@ -17,6 +17,7 @@ const (
 	CategoryTimeout         Category = "timeout"
 	CategoryNetwork         Category = "network"
 	CategoryConflict        Category = "conflict"
+	CategoryRejected        Category = "rejected"
 	CategoryAuthentication  Category = "authentication"
 	CategoryUnavailable     Category = "unavailable"
 	CategoryUpstreamStatus  Category = "upstream_status"

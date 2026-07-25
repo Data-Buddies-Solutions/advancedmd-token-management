@@ -214,9 +214,8 @@ slot fields directly only when `ALLOW_RAW_SLOT_BOOKING=true`.
 - `type` wrapped as `[{ "id": <appointmentTypeId> }]`.
 - appointment color from `DefaultAppointmentTypeColors`.
 - `force: 1` for slots whose signed `bookingToken` carries `requiresForce` from
-  the preceding availability search. Booking does not re-fetch appointments or
-  block holds for those force-required slots; AMD conflicts return the normal
-  slot-unavailable response.
+  the preceding availability search and whose live capacity check still proves
+  the same force decision.
 
 Validation before sending to AMD:
 
@@ -228,8 +227,18 @@ Validation before sending to AMD:
 - appointment type is valid for the office and routing lane.
 - DOB is valid and satisfies provider minimum age for age-restricted columns.
 - DOB applies medical pediatric routing when the patient is under 18.
+- the patient demographics still match the signed DOB context.
+- current scheduler setup still proves the column, profile, facility, and
+  provider are eligible.
+- current appointments and block holds still prove the signed capacity and
+  force decision.
 
 AMD 409 conflicts are returned as a clear slot-conflict message.
+Explicit provider rejections return a stable `provider_rejected` outcome.
+Ambiguous writes are never repeated automatically. Scheduling reconciles
+against the patient's appointments using the intended date, time, office,
+provider, and appointment type, returning a normal receipt, `write_failed`, or
+`indeterminate_write`.
 
 When the app-facing booking request includes `appointmentReason` or
 `referringDoctor`, the middleware adds `comments` directly to the AMD booking
@@ -244,7 +253,10 @@ Used by `POST /api/appointment/cancel`.
 The app-facing cancellation request should include `appointmentId`, `patientId`,
 and `office`. Middleware reloads the patient's upcoming appointments for the
 relevant nearby-office group and cancels only when the appointment belongs to
-that patient.
+that patient. An ambiguous provider result is never repeated automatically.
+Scheduling reloads current appointment state and returns a normal cancellation
+receipt only when the appointment is absent, `write_failed` when it remains, or
+`indeterminate_write` when the read cannot prove either outcome.
 
 ## Office Scheduler State
 

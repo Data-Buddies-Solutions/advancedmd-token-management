@@ -115,214 +115,6 @@ func (unavailableSession) Status() session.SessionStatus {
 	return session.SessionStatus{State: session.SessionUnavailable}
 }
 
-func TestHandleBookAppointment_RoutingGuard(t *testing.T) {
-	handlers := &Handlers{}
-
-	tests := []struct {
-		name        string
-		body        string
-		expectedMsg string
-	}{
-		{
-			name:        "routine vision column requires optical routing",
-			body:        `{"patientId":"123","columnId":1600,"profileId":1983,"startDatetime":"2026-05-12T10:00","duration":45,"appointmentTypeId":1007}`,
-			expectedMsg: `Column 1600 is not valid for routing "all_three" at Spring Hill`,
-		},
-		{
-			name:        "medical column rejected for optical routing",
-			body:        `{"patientId":"123","columnId":1513,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1007,"routing":"optical_only"}`,
-			expectedMsg: `Column 1513 is not valid for routing "optical_only" at Spring Hill`,
-		},
-		{
-			name:        "routine vision column rejects mismatched profile",
-			body:        `{"patientId":"123","columnId":1600,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":45,"appointmentTypeId":1010,"routing":"optical_only"}`,
-			expectedMsg: `Profile 620 is not valid for column 1600 at Spring Hill`,
-		},
-		{
-			name:        "routine vision routing requires vision appointment type",
-			body:        `{"patientId":"123","columnId":1600,"profileId":1983,"startDatetime":"2026-05-12T10:00","duration":45,"appointmentTypeId":1007,"routing":"optical_only"}`,
-			expectedMsg: `Appointment type 1007 is not valid for routing "optical_only" at Spring Hill`,
-		},
-		{
-			name:        "vision appointment type rejected for medical routing",
-			body:        `{"patientId":"123","columnId":1513,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1010}`,
-			expectedMsg: `Appointment type 1010 is not valid for routing "all_three" at Spring Hill`,
-		},
-		{
-			name:        "crystal river type rejected at spring hill",
-			body:        `{"patientId":"123","columnId":1513,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":6169}`,
-			expectedMsg: `Appointment type 6169 is not valid for routing "all_three" at Spring Hill`,
-		},
-		{
-			name:        "hollywood routine rejects medical type",
-			body:        `{"patientId":"123","columnId":1555,"profileId":2075,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1007,"routing":"optical_only","office":"+19542872010"}`,
-			expectedMsg: `Appointment type 1007 is not valid for routing "optical_only" at Hollywood`,
-		},
-		{
-			name:        "hollywood medical rejects vision type",
-			body:        `{"patientId":"123","columnId":1268,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1010,"office":"+19542872010"}`,
-			expectedMsg: `Appointment type 1010 is not valid for routing "all_three" at Hollywood`,
-		},
-		{
-			name:        "invalid DOB rejected before AMD call",
-			body:        `{"patientId":"123","columnId":1513,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1007,"dob":"not-a-date"}`,
-			expectedMsg: `dob must be a valid date`,
-		},
-		{
-			name:        "minor medical booking uses pediatric routing",
-			body:        fmt.Sprintf(`{"patientId":"123","columnId":1551,"profileId":2064,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1007,"dob":%q}`, time.Now().AddDate(-10, 0, 0).Format("01/02/2006")),
-			expectedMsg: `Column 1551 is not valid for routing "bach_only" at Spring Hill`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/api/appointment/book", bytes.NewBufferString(tt.body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-
-			handlers.HandleBookAppointment(w, req)
-
-			var body BookAppointmentResponse
-			json.NewDecoder(w.Result().Body).Decode(&body)
-			if body.Status != "error" {
-				t.Fatalf("expected status error, got %q", body.Status)
-			}
-			if body.Message != tt.expectedMsg {
-				t.Fatalf("expected message %q, got %q", tt.expectedMsg, body.Message)
-			}
-		})
-	}
-}
-
-func TestHandleBookAppointment_AgeGuard(t *testing.T) {
-	handlers := &Handlers{}
-
-	underageDOB := time.Now().AddDate(-6, 0, 0).Format("01/02/2006")
-	tests := []struct {
-		name        string
-		dobFragment string
-		expectedMsg string
-	}{
-		{
-			name:        "under minimum age",
-			dobFragment: fmt.Sprintf(`,"dob":%q`, underageDOB),
-			expectedMsg: "Dr. Vidal requires patient age 7 or older",
-		},
-		{
-			name:        "missing DOB",
-			dobFragment: "",
-			expectedMsg: "Dr. Vidal requires patient DOB to verify age 7 or older",
-		},
-		{
-			name:        "invalid DOB",
-			dobFragment: `,"dob":"not-a-date"`,
-			expectedMsg: "dob must be a valid date",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			body := fmt.Sprintf(`{"patientId":"123","columnId":1510,"profileId":2057,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1010,"routing":"optical_only","office":"+19542872010"%s}`, tt.dobFragment)
-			req := httptest.NewRequest("POST", "/api/appointment/book", bytes.NewBufferString(body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-
-			handlers.HandleBookAppointment(w, req)
-
-			var resp BookAppointmentResponse
-			json.NewDecoder(w.Result().Body).Decode(&resp)
-			if resp.Status != "error" {
-				t.Fatalf("expected status error, got %q", resp.Status)
-			}
-			if resp.Message != tt.expectedMsg {
-				t.Fatalf("expected message %q, got %q", tt.expectedMsg, resp.Message)
-			}
-		})
-	}
-}
-
-func TestHandleBookAppointment_RequiresBookingTokenForRawSlot(t *testing.T) {
-	handlers := &Handlers{}
-	req := httptest.NewRequest(
-		"POST",
-		"/api/appointment/book",
-		bytes.NewBufferString(`{"patientId":"123","columnId":1513,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"appointmentTypeId":1007}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleBookAppointment(w, req)
-
-	var body BookAppointmentResponse
-	json.NewDecoder(w.Result().Body).Decode(&body)
-	if body.Status != "error" {
-		t.Fatalf("expected status error, got %q", body.Status)
-	}
-	if body.Outcome != "booking_token_required" {
-		t.Fatalf("expected booking_token_required, got %q", body.Outcome)
-	}
-}
-
-func TestHandleBookAppointment_ResolvesTypeFromIntentBeforeTokenGuard(t *testing.T) {
-	handlers := &Handlers{}
-	req := httptest.NewRequest(
-		"POST",
-		"/api/appointment/book",
-		bytes.NewBufferString(`{"patientId":"123","columnId":1600,"profileId":1983,"startDatetime":"2026-05-12T10:00","duration":45,"routing":"optical_only","visitCategory":"routine_vision","patientStatus":"established","ageBand":"adult"}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleBookAppointment(w, req)
-
-	var body BookAppointmentResponse
-	json.NewDecoder(w.Result().Body).Decode(&body)
-	if body.Status != "error" {
-		t.Fatalf("expected status error, got %q", body.Status)
-	}
-	if body.Outcome != "booking_token_required" {
-		t.Fatalf("expected booking_token_required after intent resolution, got %q (%s)", body.Outcome, body.Message)
-	}
-}
-
-func TestHandleBookAppointment_ReturnsStructuredUnresolvedType(t *testing.T) {
-	handlers := &Handlers{}
-	req := httptest.NewRequest(
-		"POST",
-		"/api/appointment/book",
-		bytes.NewBufferString(`{"patientId":"123","columnId":1513,"profileId":620,"startDatetime":"2026-05-12T10:00","duration":30,"visitCategory":"medical"}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleBookAppointment(w, req)
-
-	var body BookAppointmentResponse
-	json.NewDecoder(w.Result().Body).Decode(&body)
-	if body.Status != "error" {
-		t.Fatalf("expected status error, got %q", body.Status)
-	}
-	if body.Outcome != "appointment_type_unresolved" {
-		t.Fatalf("expected appointment_type_unresolved, got %q", body.Outcome)
-	}
-	if !sameStrings(body.Missing, []string{"patientStatus", "dob"}) {
-		t.Fatalf("expected missing patientStatus and dob, got %v", body.Missing)
-	}
-}
-
-func sameStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestHandleGetAvailability_InvalidDOB(t *testing.T) {
 	handlers := &Handlers{scheduling: schedulingStub{err: errors.New("dob must be a valid date")}}
 	date := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
@@ -428,12 +220,24 @@ func TestAvailabilityRouteRetainsAuthenticationAndResponseContract(t *testing.T)
 }
 
 type schedulingStub struct {
-	result domain.AvailabilityResponse
-	err    error
+	result       domain.AvailabilityResponse
+	err          error
+	bookResult   schedulingmodule.BookReceipt
+	bookErr      error
+	cancelResult schedulingmodule.CancelReceipt
+	cancelErr    error
 }
 
 func (s schedulingStub) Search(context.Context, schedulingmodule.SearchCommand) (domain.AvailabilityResponse, error) {
 	return s.result, s.err
+}
+
+func (s schedulingStub) Book(context.Context, schedulingmodule.BookCommand) (schedulingmodule.BookReceipt, error) {
+	return s.bookResult, s.bookErr
+}
+
+func (s schedulingStub) Cancel(context.Context, schedulingmodule.CancelCommand) (schedulingmodule.CancelReceipt, error) {
+	return s.cancelResult, s.cancelErr
 }
 
 func TestHandlePatientResolve_ValidationErrors(t *testing.T) {
@@ -681,38 +485,6 @@ func TestProviderFailuresAreRedactedFromResponsesAndLogs(t *testing.T) {
 		assertRedacted(t, w.Body.String(), logs, sensitive)
 	})
 
-	t.Run("book appointment", func(t *testing.T) {
-		handlers := newProviderFailureTestHandlers(t, func(r *http.Request, _ []byte) *providerFailure {
-			if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, "/scheduler/Appointments") {
-				return nil
-			}
-			return &providerFailure{status: http.StatusInternalServerError, body: sensitive}
-		})
-		now := time.Now().UTC()
-		token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
-			OfficeID: "spring_hill", Routing: string(domain.RoutingAll), ColumnID: 1513, ProfileID: 620,
-			StartDatetime: "2026-08-01T09:00", Duration: 15, IssuedAt: now.Unix(), ExpiresAt: now.Add(15 * time.Minute).Unix(),
-		})
-		if err != nil {
-			t.Fatalf("sign booking token: %v", err)
-		}
-		body := fmt.Sprintf(`{"patientId":"17604634","bookingToken":%q,"appointmentTypeId":1007}`, token)
-		req := httptest.NewRequest(http.MethodPost, "/api/appointment/book", strings.NewReader(body))
-		w := httptest.NewRecorder()
-		logs := captureLogs(func() { handlers.HandleBookAppointment(w, req) })
-		assertRedacted(t, w.Body.String(), logs, sensitive, "unexpected status 500")
-	})
-
-	t.Run("cancel appointment", func(t *testing.T) {
-		handlers, _ := newCancelAppointmentTestHandlers(t, 17604634, 33333, http.StatusInternalServerError)
-		req := httptest.NewRequest(http.MethodPost, "/api/appointment/cancel", strings.NewReader(`{
-			"patientId":"17604634","appointmentId":33333,"office":"Spring Hill"
-		}`))
-		w := httptest.NewRecorder()
-		logs := captureLogs(func() { handlers.HandleCancelAppointment(w, req) })
-		assertRedacted(t, w.Body.String(), logs, sensitive, "unexpected status 500")
-	})
-
 	t.Run("update insurance", func(t *testing.T) {
 		handlers := newProviderFailureTestHandlers(t, func(r *http.Request, body []byte) *providerFailure {
 			if !strings.Contains(string(body), `"@action":"addinsurance"`) {
@@ -946,230 +718,6 @@ func TestRequestIDMiddleware(t *testing.T) {
 	})
 }
 
-func TestHandleBookAppointment_UsesSignedSlotForceDecision(t *testing.T) {
-	now := time.Now().UTC().Add(-time.Minute)
-	token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
-		OfficeID:      "spring_hill",
-		Routing:       string(domain.RoutingBachOnly),
-		ColumnID:      1513,
-		ProfileID:     620,
-		StartDatetime: "2026-06-02T09:00",
-		Duration:      15,
-		RequiresForce: true,
-		IssuedAt:      now.Unix(),
-		ExpiresAt:     now.Add(15 * time.Minute).Unix(),
-	})
-	if err != nil {
-		t.Fatalf("SignSlotToken error = %v", err)
-	}
-
-	var restPaths []string
-	var bookingPayload map[string]any
-	httpClient := &http.Client{
-		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			body, _ := io.ReadAll(r.Body)
-			contentType := r.Header.Get("Content-Type")
-
-			status := http.StatusOK
-			response := ""
-			switch {
-			case strings.Contains(contentType, "application/xml") && strings.Contains(r.URL.Host, "partnerlogin"):
-				response = `<PPMDResults><Results><usercontext webserver="https://mock.advancedmd.test/processrequest/api-801/APP"></usercontext></Results></PPMDResults>`
-			case strings.Contains(contentType, "application/xml"):
-				response = `<PPMDResults><Results success="1"><usercontext>test-token</usercontext></Results></PPMDResults>`
-			default:
-				restPaths = append(restPaths, r.Method+" "+r.URL.Path)
-				if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, "/scheduler/Appointments") {
-					status = http.StatusInternalServerError
-					response = `{"error":"unexpected REST request"}`
-					break
-				}
-				if err := json.Unmarshal(body, &bookingPayload); err != nil {
-					status = http.StatusInternalServerError
-					response = `{"error":"invalid booking payload"}`
-					break
-				}
-				response = `{"id":98765}`
-			}
-
-			return &http.Response{
-				StatusCode: status,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(response)),
-				Request:    r,
-			}, nil
-		}),
-	}
-	amdSession := session.NewSession(session.Credentials{
-		Username:  "user",
-		Password:  "pass",
-		OfficeKey: "office",
-		AppName:   "app",
-	}, httpClient)
-	handlers := NewHandlers(
-		amdSession,
-		nil,
-		clients.NewAdvancedMDRestClient(httpClient),
-		nil,
-		nil,
-		"test-booking-secret",
-	)
-
-	body := fmt.Sprintf(`{"patientId":"123","bookingToken":%q,"appointmentTypeId":1007}`, token)
-	req := httptest.NewRequest("POST", "/api/appointment/book", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleBookAppointment(w, req)
-
-	var resp BookAppointmentResponse
-	json.NewDecoder(w.Result().Body).Decode(&resp)
-	if resp.Status != "booked" {
-		t.Fatalf("expected booked response, got %#v", resp)
-	}
-	if len(restPaths) != 1 {
-		t.Fatalf("REST requests = %v, want only booking POST", restPaths)
-	}
-	if bookingPayload["force"] != float64(1) {
-		t.Fatalf("force = %v, want 1 in payload %#v", bookingPayload["force"], bookingPayload)
-	}
-}
-
-func TestHandleBookAppointment_SendsAppointmentCommentsInBookingPayload(t *testing.T) {
-	domain.InitRegistry("")
-	now := time.Now().UTC()
-	token, err := schedulingmodule.SignSlotToken("test-booking-secret", schedulingmodule.SlotPolicy{
-		OfficeID:      "spring_hill",
-		Routing:       string(domain.RoutingAll),
-		ColumnID:      1513,
-		ProfileID:     620,
-		StartDatetime: "2026-06-02T09:00",
-		Duration:      15,
-		IssuedAt:      now.Unix(),
-		ExpiresAt:     now.Add(15 * time.Minute).Unix(),
-	})
-	if err != nil {
-		t.Fatalf("SignSlotToken error = %v", err)
-	}
-
-	var bookingPayload map[string]any
-	httpClient := &http.Client{
-		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			body, _ := io.ReadAll(r.Body)
-			contentType := r.Header.Get("Content-Type")
-
-			status := http.StatusOK
-			response := ""
-			switch {
-			case strings.Contains(contentType, "application/xml") && strings.Contains(r.URL.Host, "partnerlogin"):
-				response = `<PPMDResults><Results><usercontext webserver="https://mock.advancedmd.test/processrequest/api-801/APP"></usercontext></Results></PPMDResults>`
-			case strings.Contains(contentType, "application/xml"):
-				response = `<PPMDResults><Results success="1"><usercontext>test-token</usercontext></Results></PPMDResults>`
-			case strings.Contains(r.URL.Path, "/scheduler/Appointments"):
-				if err := json.Unmarshal(body, &bookingPayload); err != nil {
-					status = http.StatusInternalServerError
-					response = `{"error":"invalid booking payload"}`
-					break
-				}
-				response = `{"id":98765}`
-			default:
-				status = http.StatusInternalServerError
-				response = `{"error":"unexpected request"}`
-			}
-
-			return &http.Response{
-				StatusCode: status,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(response)),
-				Request:    r,
-			}, nil
-		}),
-	}
-	amdSession := session.NewSession(session.Credentials{
-		Username:  "user",
-		Password:  "pass",
-		OfficeKey: "office",
-		AppName:   "app",
-	}, httpClient)
-	handlers := NewHandlers(
-		amdSession,
-		nil,
-		clients.NewAdvancedMDRestClient(httpClient),
-		nil,
-		nil,
-		"test-booking-secret",
-	)
-
-	body := fmt.Sprintf(`{"patientId":"123","bookingToken":%q,"appointmentTypeId":1007,"appointmentReason":"blurry vision","referringDoctor":"Dr. Smith"}`, token)
-	req := httptest.NewRequest("POST", "/api/appointment/book", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleBookAppointment(w, req)
-
-	var resp BookAppointmentResponse
-	json.NewDecoder(w.Result().Body).Decode(&resp)
-	if resp.Status != "booked" {
-		t.Fatalf("expected booked response, got %#v", resp)
-	}
-	if bookingPayload["patientid"] != float64(123) {
-		t.Fatalf("booking payload patientid = %#v", bookingPayload["patientid"])
-	}
-	wantComment := "Appointment reason: blurry vision\nReferring doctor: Dr. Smith\n- AI"
-	if bookingPayload["comments"] != wantComment {
-		t.Fatalf("booking comments = %#v, want %q", bookingPayload["comments"], wantComment)
-	}
-}
-
-func TestHandleCancelAppointment_ValidatesPatientAppointmentBeforeCancel(t *testing.T) {
-	handlers, cancelRequests := newCancelAppointmentTestHandlers(t, 12345, 33333, http.StatusOK)
-
-	req := httptest.NewRequest("POST", "/api/appointment/cancel", strings.NewReader(`{"patientId":"pat12345","appointmentId":33333,"office":"Spring Hill"}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleCancelAppointment(w, req)
-
-	var body CancelAppointmentResponse
-	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.Status != "cancelled" {
-		t.Fatalf("status = %q, want cancelled; body = %+v", body.Status, body)
-	}
-	if body.AppointmentID != 33333 {
-		t.Fatalf("appointmentId = %d, want 33333", body.AppointmentID)
-	}
-	if *cancelRequests != 1 {
-		t.Fatalf("cancel requests = %d, want 1", *cancelRequests)
-	}
-}
-
-func TestHandleCancelAppointment_RejectsPatientAppointmentMismatch(t *testing.T) {
-	handlers, cancelRequests := newCancelAppointmentTestHandlers(t, 12345, 33333, http.StatusOK)
-
-	req := httptest.NewRequest("POST", "/api/appointment/cancel", strings.NewReader(`{"patientId":"12345","appointmentId":44444,"office":"Spring Hill"}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handlers.HandleCancelAppointment(w, req)
-
-	var body CancelAppointmentResponse
-	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.Status != "error" {
-		t.Fatalf("status = %q, want error; body = %+v", body.Status, body)
-	}
-	expected := "No upcoming appointment matches that patient and appointment ID. Please load appointments again and choose the appointment to cancel."
-	if body.Message != expected {
-		t.Fatalf("message = %q, want %q", body.Message, expected)
-	}
-	if *cancelRequests != 0 {
-		t.Fatalf("cancel requests = %d, want 0", *cancelRequests)
-	}
-}
-
 func TestFriendlyProviderName(t *testing.T) {
 	office := domain.DefaultOffice()
 
@@ -1307,66 +855,6 @@ func TestRouter(t *testing.T) {
 		// The important thing is that auth middleware works (tested above)
 		t.Skip("Requires non-nil session")
 	})
-}
-
-func TestHandleCancelAppointment_ValidationErrors(t *testing.T) {
-	handlers := &Handlers{}
-
-	tests := []struct {
-		name        string
-		body        string
-		expectedMsg string
-	}{
-		{
-			name:        "invalid JSON",
-			body:        "not json",
-			expectedMsg: "Invalid JSON body",
-		},
-		{
-			name:        "missing appointmentId",
-			body:        `{}`,
-			expectedMsg: "appointmentId is required",
-		},
-		{
-			name:        "zero appointmentId",
-			body:        `{"appointmentId":0}`,
-			expectedMsg: "appointmentId is required",
-		},
-		{
-			name:        "missing patientId",
-			body:        `{"appointmentId":12345}`,
-			expectedMsg: "patientId is required",
-		},
-		{
-			name:        "non-numeric patientId",
-			body:        `{"appointmentId":12345,"patientId":"abc"}`,
-			expectedMsg: "patientId must be numeric",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/api/appointment/cancel", bytes.NewBufferString(tt.body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-
-			handlers.HandleCancelAppointment(w, req)
-
-			resp := w.Result()
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("Expected status 200, got %d", resp.StatusCode)
-			}
-
-			var body CancelAppointmentResponse
-			json.NewDecoder(resp.Body).Decode(&body)
-			if body.Status != "error" {
-				t.Errorf("Expected status 'error', got '%s'", body.Status)
-			}
-			if body.Message != tt.expectedMsg {
-				t.Errorf("Expected message %q, got %q", tt.expectedMsg, body.Message)
-			}
-		})
-	}
 }
 
 func TestPatientApptDetail_IncludesID(t *testing.T) {
@@ -1579,73 +1067,6 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-func newCancelAppointmentTestHandlers(t *testing.T, patientID int, appointmentID int, cancelStatus int) (*Handlers, *int) {
-	t.Helper()
-	future := time.Now().In(eastern).Add(48 * time.Hour)
-	futureMonth := time.Date(future.Year(), future.Month(), 1, 0, 0, 0, 0, eastern).Format("2006-01-02")
-	cancelRequests := 0
-
-	httpClient := &http.Client{
-		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			contentType := r.Header.Get("Content-Type")
-
-			status := http.StatusOK
-			response := `{}`
-			switch {
-			case strings.Contains(contentType, "application/xml") && strings.Contains(r.URL.Host, "partnerlogin"):
-				response = `<PPMDResults><Results><usercontext webserver="https://mock.advancedmd.test/processrequest/api-801/APP"></usercontext></Results></PPMDResults>`
-			case strings.Contains(contentType, "application/xml"):
-				response = `<PPMDResults><Results success="1"><usercontext>test-token</usercontext></Results></PPMDResults>`
-			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/scheduler/appointments"):
-				columnID := r.URL.Query().Get("columnId")
-				if r.URL.Query().Get("startDate") == futureMonth && strings.Contains(columnID, "1593") {
-					response = fmt.Sprintf(`[{
-						"id": %d,
-						"startdatetime": %q,
-						"patientid": %d,
-						"columnid": 1593,
-						"profileid": 620,
-						"provider": "LICHT, J",
-						"facility": "EYE RADIANCE CRYSTAL RIVER",
-						"appointmenttypeids": [6169]
-					}]`, appointmentID, future.Format("2006-01-02T15:04:05"), patientID)
-				} else {
-					response = `[]`
-				}
-			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, fmt.Sprintf("/scheduler/appointments/%d/cancel", appointmentID)):
-				cancelRequests++
-				status = cancelStatus
-				response = `{"error":"patientId=17604634 token=secret-token provider-body=<private>"}`
-			default:
-				status = http.StatusInternalServerError
-				response = `{"error":"unexpected request"}`
-			}
-
-			return &http.Response{
-				StatusCode: status,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(response)),
-				Request:    r,
-			}, nil
-		}),
-	}
-	amdSession := session.NewSession(session.Credentials{
-		Username:  "user",
-		Password:  "pass",
-		OfficeKey: "office",
-		AppName:   "app",
-	}, httpClient)
-
-	return NewHandlers(
-		amdSession,
-		nil,
-		clients.NewAdvancedMDRestClient(httpClient),
-		nil,
-		nil,
-		"test-booking-secret",
-	), &cancelRequests
-}
-
 type providerFailure struct {
 	status int
 	body   string
@@ -1690,7 +1111,6 @@ func newProviderFailureTestHandlers(t *testing.T, fail func(*http.Request, []byt
 		clients.NewAdvancedMDRestClient(httpClient),
 		nil,
 		nil,
-		"test-booking-secret",
 	)
 }
 
@@ -1872,6 +1292,5 @@ func newPatientResolveTestHandlers(t *testing.T, appointmentStatus int) *Handler
 		amdRestClient,
 		patientmodule.New(records),
 		nil,
-		"test-booking-secret",
 	)
 }

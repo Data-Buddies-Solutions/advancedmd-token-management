@@ -375,6 +375,92 @@ func TestAdapterCanonicalizesDevelopmentAppointmentTypeIDs(t *testing.T) {
 	}
 }
 
+func TestAdapterMarksPatientAppointmentReadIncompleteWhenRowsCannotBeReconciled(t *testing.T) {
+	domain.InitRegistry("")
+	fixedNow := time.Date(2026, time.July, 25, 10, 30, 0, 0, time.FixedZone("EDT", -4*60*60))
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("startDate") != "2026-08-01" {
+			w.Write([]byte(`[]`))
+			return
+		}
+		w.Write([]byte(`[
+			{
+				"id": 30001,
+				"startdatetime": "not-a-date",
+				"patientid": 12345,
+				"provider": "BACH, AUSTIN",
+				"appointmenttypeids": [1007]
+			},
+			{
+				"id": 30002,
+				"startdatetime": "2026-08-14T12:00:00",
+				"patientid": 12345
+			}
+		]`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+		func() time.Time { return fixedNow },
+	)
+	read, err := adapter.ReadPatientAppointments(context.Background(), domain.PatientAppointmentsQuery{
+		PatientID: "12345",
+		OfficeIDs: []string{"spring_hill"},
+	})
+	if err != nil {
+		t.Fatalf("ReadPatientAppointments() error = %v", err)
+	}
+	if read.Complete || len(read.Appointments) != 1 || read.Appointments[0].ID != 30002 {
+		t.Fatalf("ReadPatientAppointments() = %#v, want one partial appointment and incomplete proof", read)
+	}
+}
+
+func TestAdapterReadsCurrentAppointmentStateAfterStartTime(t *testing.T) {
+	domain.InitRegistry("")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("startDate") != "2026-08-01" {
+			t.Fatalf("startDate = %q, want appointment month", r.URL.Query().Get("startDate"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{
+			"id": 30003,
+			"startdatetime": "2026-08-14T12:00:00",
+			"patientid": 12345
+		}]`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+		func() time.Time {
+			return time.Date(2026, time.August, 15, 9, 0, 0, 0, time.UTC)
+		},
+	)
+	state, err := adapter.ReadAppointmentState(context.Background(), AppointmentStateQuery{
+		AppointmentID: 30003,
+		OfficeID:      "spring_hill",
+		Start:         time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ReadAppointmentState() error = %v", err)
+	}
+	if !state.Exists || !state.Complete {
+		t.Fatalf("ReadAppointmentState() = %#v, want existing complete state", state)
+	}
+}
+
 func TestAdapterReadsCompleteScheduleThroughDomainSeam(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -490,6 +576,112 @@ func TestAdapterPreservesPartialScheduleReads(t *testing.T) {
 		!read.Columns["1513"].BlockHoldsComplete ||
 		!read.Columns["1598"].Complete() {
 		t.Fatalf("read = %#v, want one explicit partial column", read)
+	}
+}
+
+func TestAdapterBooksAndCancelsThroughControlledRESTServer(t *testing.T) {
+	domain.InitRegistry("")
+	var bookingPayload map[string]any
+	var cancellationPayload map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/scheduler/Appointments":
+			if err := json.NewDecoder(r.Body).Decode(&bookingPayload); err != nil {
+				t.Fatalf("decode booking: %v", err)
+			}
+			w.Write([]byte(`{"id":98765}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/scheduler/appointments/98765/cancel":
+			if err := json.NewDecoder(r.Body).Decode(&cancellationPayload); err != nil {
+				t.Fatalf("decode cancellation: %v", err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+	)
+	appointmentID, err := adapter.BookAppointment(context.Background(), Booking{
+		PatientID:         12345,
+		OfficeID:          "spring_hill",
+		ColumnID:          1513,
+		ProfileID:         620,
+		Start:             time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+		Duration:          15,
+		AppointmentTypeID: 1007,
+		Force:             true,
+		Comments:          "Appointment reason: follow up\nReferring doctor: none\n- AI",
+	})
+	if err != nil || appointmentID != 98765 {
+		t.Fatalf("BookAppointment ID = %d, error = %v", appointmentID, err)
+	}
+	if bookingPayload["patientid"] != float64(12345) ||
+		bookingPayload["facilityid"] != float64(1568) ||
+		bookingPayload["startdatetime"] != "2026-06-03T09:00" ||
+		bookingPayload["force"] != float64(1) {
+		t.Fatalf("booking payload = %#v", bookingPayload)
+	}
+
+	if err := adapter.CancelAppointment(context.Background(), appointmentID); err != nil {
+		t.Fatalf("CancelAppointment error = %v", err)
+	}
+	if cancellationPayload["id"] != float64(98765) {
+		t.Fatalf("cancellation payload = %#v", cancellationPayload)
+	}
+}
+
+func TestAdapterClassifiesProviderMutationOutcomes(t *testing.T) {
+	domain.InitRegistry("")
+	tests := []struct {
+		name      string
+		status    int
+		category  safeerrors.Category
+		ambiguous bool
+	}{
+		{name: "conflict", status: http.StatusConflict, category: safeerrors.CategoryConflict},
+		{name: "rejection", status: http.StatusUnprocessableEntity, category: safeerrors.CategoryRejected},
+		{name: "ambiguous server failure", status: http.StatusInternalServerError, category: safeerrors.CategoryUpstreamStatus, ambiguous: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer server.Close()
+
+			adapter := NewAdapter(
+				staticSession{token: &domain.TokenData{
+					Token:       "Bearer test-token",
+					RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+				}},
+				nil,
+				clients.NewAdvancedMDRestClient(server.Client()),
+			)
+			_, err := adapter.BookAppointment(context.Background(), Booking{
+				PatientID:         12345,
+				OfficeID:          "spring_hill",
+				ColumnID:          1513,
+				ProfileID:         620,
+				Start:             time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+				Duration:          15,
+				AppointmentTypeID: 1007,
+			})
+			if CategoryOf(err) != tt.category || IsAmbiguousWrite(err) != tt.ambiguous {
+				t.Fatalf("error = %v, category = %q, ambiguous = %t", err, CategoryOf(err), IsAmbiguousWrite(err))
+			}
+		})
 	}
 }
 

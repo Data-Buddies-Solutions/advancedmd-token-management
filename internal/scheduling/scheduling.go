@@ -2,6 +2,7 @@ package scheduling
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -31,23 +32,64 @@ type SearchCommand struct {
 	PreauthRequired bool   `json:"preauthRequired"`
 }
 
-// Scheduling is the complete availability-search boundary.
+// Scheduling is the complete scheduling boundary used by HTTP.
 type Scheduling interface {
 	Search(ctx context.Context, command SearchCommand) (domain.AvailabilityResponse, error)
+	Book(ctx context.Context, command BookCommand) (BookReceipt, error)
+	Cancel(ctx context.Context, command CancelCommand) (CancelReceipt, error)
 }
 
-// Error contains only caller-safe scheduling failure text.
+// Category is a stable, provider-independent scheduling outcome.
+type Category string
+
+const (
+	CategoryValidation             Category = "validation"
+	CategoryInvalidBookingToken    Category = "invalid_booking_token"
+	CategoryBookingTokenRequired   Category = "booking_token_required"
+	CategoryAppointmentTypeMissing Category = "appointment_type_unresolved"
+	CategoryPatientContextMismatch Category = "patient_context_mismatch"
+	CategorySlotUnavailable        Category = "slot_unavailable"
+	CategoryProviderConflict       Category = "provider_conflict"
+	CategoryProviderRejected       Category = "provider_rejected"
+	CategoryOwnershipMismatch      Category = "ownership_mismatch"
+	CategoryWriteFailed            Category = "write_failed"
+	CategoryIndeterminateWrite     Category = "indeterminate_write"
+)
+
+// Error contains only caller-safe scheduling failure details.
 type Error struct {
-	message string
+	category Category
+	message  string
+	missing  []string
 }
 
 func (e *Error) Error() string {
 	return e.message
 }
 
+// CategoryOf returns the stable domain category for a Scheduling error.
+func CategoryOf(err error) Category {
+	var schedulingErr *Error
+	if errors.As(err, &schedulingErr) {
+		return schedulingErr.category
+	}
+	return CategoryValidation
+}
+
+// MissingOf returns caller-safe fields required to complete a Scheduling
+// command.
+func MissingOf(err error) []string {
+	var schedulingErr *Error
+	if errors.As(err, &schedulingErr) {
+		return append([]string(nil), schedulingErr.missing...)
+	}
+	return nil
+}
+
 type service struct {
 	records            advancedmd.SchedulingRecords
 	bookingTokenSecret string
+	allowRawBooking    bool
 	now                func() time.Time
 
 	setupMu        sync.Mutex
@@ -55,14 +97,30 @@ type service struct {
 	setupExpiresAt time.Time
 }
 
-// New constructs the single owner for availability search behavior.
+// Config makes compatibility behavior explicit at composition time.
+type Config struct {
+	AllowRawBooking bool
+}
+
+// New constructs Scheduling with compatibility behavior disabled.
 func New(records advancedmd.SchedulingRecords, bookingTokenSecret string, now func() time.Time) Scheduling {
+	return NewWithConfig(records, bookingTokenSecret, now, Config{})
+}
+
+// NewWithConfig constructs the single owner for scheduling behavior.
+func NewWithConfig(
+	records advancedmd.SchedulingRecords,
+	bookingTokenSecret string,
+	now func() time.Time,
+	config Config,
+) Scheduling {
 	if now == nil {
 		now = time.Now
 	}
 	return &service{
 		records:            records,
 		bookingTokenSecret: bookingTokenSecret,
+		allowRawBooking:    config.AllowRawBooking,
 		now:                now,
 	}
 }
@@ -246,7 +304,11 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 }
 
 func schedulingError(message string) error {
-	return &Error{message: message}
+	return categorizedError(CategoryValidation, message)
+}
+
+func categorizedError(category Category, message string) error {
+	return &Error{category: category, message: message}
 }
 
 func providerFailureMessage(err error, fallback string) string {
