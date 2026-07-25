@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+var easternLocation = loadEasternLocation()
+
+// EasternLocation returns the business timezone shared by scheduling and
+// patient workflows.
+func EasternLocation() *time.Location {
+	return easternLocation
+}
+
+func loadEasternLocation() *time.Location {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return time.FixedZone("EST", -5*60*60)
+	}
+	return location
+}
+
 // SchedulerColumn represents a provider's scheduling column from getschedulersetup.
 // A column is a provider + location combination with specific work hours.
 type SchedulerColumn struct {
@@ -38,6 +54,32 @@ type SchedulerSetup struct {
 	Columns    []SchedulerColumn
 	Profiles   []SchedulerProfile
 	Facilities []SchedulerFacility
+}
+
+// ScheduleReadQuery identifies the provider columns and day needed for one
+// availability decision.
+type ScheduleReadQuery struct {
+	ColumnIDs []string
+	Date      string
+}
+
+// ColumnSchedule is the complete scheduling state read for one provider
+// column. Completeness is explicit because missing appointment or hold data
+// cannot safely prove that a slot is available.
+type ColumnSchedule struct {
+	Appointments         []Appointment
+	BlockHolds           []BlockHold
+	AppointmentsComplete bool
+	BlockHoldsComplete   bool
+}
+
+func (s ColumnSchedule) Complete() bool {
+	return s.AppointmentsComplete && s.BlockHoldsComplete
+}
+
+// ScheduleReadResult groups domain scheduling state by provider column.
+type ScheduleReadResult struct {
+	Columns map[string]ColumnSchedule
 }
 
 // Appointment represents a booked appointment from the REST API.
@@ -81,19 +123,6 @@ const (
 	AvailabilityNextActionAskDifferentPreferences     = "ask_for_different_preferences"
 	AvailabilityNextActionRetryOnceThenAskPreferences = "retry_once_then_ask_preferences"
 )
-
-// ProviderAvailability represents an internal provider-level availability result.
-type ProviderAvailability struct {
-	Name           string          `json:"name"`
-	ColumnID       int             `json:"columnId"`
-	ProfileID      int             `json:"profileId"`
-	Facility       string          `json:"facility"`
-	SlotDuration   int             `json:"slotDuration"`
-	TotalAvailable int             `json:"totalAvailable"`
-	FirstAvailable string          `json:"firstAvailable,omitempty"`
-	LastAvailable  string          `json:"lastAvailable,omitempty"`
-	Slots          []AvailableSlot `json:"slots"`
-}
 
 // AvailabilitySlotOption is a single bookable slot returned to the agent.
 type AvailabilitySlotOption struct {

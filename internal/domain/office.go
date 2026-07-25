@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -34,6 +35,19 @@ type SameStartWindow struct {
 	Weekday     time.Weekday
 	StartMinute int
 	EndMinute   int
+}
+
+// ResolveOffice returns the requested office or the backward-compatible
+// default when the caller omits it.
+func ResolveOffice(name string) (*OfficeConfig, error) {
+	if name == "" {
+		return DefaultOffice(), nil
+	}
+	office, ok := LookupOffice(name)
+	if !ok {
+		return nil, fmt.Errorf("unknown office: %q. Valid options: %s", name, strings.Join(ValidOfficeNames(), ", "))
+	}
+	return office, nil
 }
 
 // SameStartCapacityAt returns the column's configured same-start capacity at a slot start time.
