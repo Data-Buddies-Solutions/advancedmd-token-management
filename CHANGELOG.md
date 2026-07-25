@@ -1,5 +1,9 @@
 # Changelog
 
+Release Please owns new versioned sections at the top of this file. The dated
+`[Unreleased]` sections below predate the automation and remain as historical
+records.
+
 ## [Unreleased] - 2026-07-01
 
 ### Routine Vision Same-Start Windows
