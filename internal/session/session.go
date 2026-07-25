@@ -32,13 +32,12 @@ const (
 )
 
 const (
-	// DefaultSessionExpiresAfter preserves the deployed 20-hour rotation
-	// boundary as the local safety limit. It does not claim a longer,
-	// undocumented provider token lifetime.
-	DefaultSessionExpiresAfter = 20 * time.Hour
-	// DefaultSessionStaleAfter starts request-time recovery one hour before the
-	// existing rotation boundary.
-	DefaultSessionStaleAfter = DefaultSessionExpiresAfter - time.Hour
+	// DefaultSessionExpiresAfter matches AdvancedMD's documented 24-hour token
+	// lifetime.
+	DefaultSessionExpiresAfter = 24 * time.Hour
+	// DefaultSessionStaleAfter starts request-time recovery four hours before
+	// AdvancedMD's documented expiration boundary.
+	DefaultSessionStaleAfter = 20 * time.Hour
 	// DefaultSessionLoginTimeout bounds the complete two-step login flow.
 	DefaultSessionLoginTimeout = 60 * time.Second
 	// DefaultSessionRetryDelay prevents a degraded session from making every
@@ -152,6 +151,7 @@ func (s *sessionImpl) refresh(ctx context.Context, force bool) error {
 	}
 	active := &refreshFlight{done: make(chan struct{})}
 	s.flight = active
+	loginStartedAt := s.now()
 	s.mu.Unlock()
 
 	loginCtx, cancel := context.WithTimeout(ctx, s.policy.loginTimeout)
@@ -176,7 +176,7 @@ func (s *sessionImpl) refresh(ctx context.Context, force bool) error {
 		}
 		return err
 	}
-	s.createdAt = s.now()
+	s.createdAt = loginStartedAt
 	s.tokenData = domain.BuildTokenDataAt(token, webserverURL, s.createdAt)
 	s.retryAt = time.Time{}
 	s.state = SessionFresh
