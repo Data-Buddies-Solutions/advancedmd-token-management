@@ -6,6 +6,11 @@ steps:
       - -c
       - go test ./...
 
+  - id: deployment-script-test
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: /bin/bash
+    args: [scripts/deploy-cloud-run_test.sh]
+
   - id: build
     name: gcr.io/cloud-builders/docker
     args:

@@ -11,6 +11,34 @@ require_value() {
   fi
 }
 
+resume_scheduler_job() {
+  local attempt
+  local output
+
+  for ((attempt = 1; attempt <= 6; attempt++)); do
+    if output="$(
+      gcloud scheduler jobs resume "$MAINTENANCE_JOB" \
+        "--project=$PROJECT_ID" \
+        "--location=$REGION" \
+        --quiet 2>&1
+    )"; then
+      if [[ -n "$output" ]]; then
+        printf '%s\n' "$output"
+      fi
+      return 0
+    fi
+
+    printf '%s\n' "$output" >&2
+    if [[ "$output" != *"ABORTED: parent resource not in ready state"* ]] ||
+      ((attempt == 6)); then
+      return 1
+    fi
+
+    echo "Scheduler backend is not ready; retrying resume in 5 seconds."
+    sleep 5
+  done
+}
+
 for name in \
   PROJECT_ID \
   REGION \
@@ -208,8 +236,5 @@ gcloud run services update-traffic "$SERVICE" \
   --quiet
 
 if [[ "$DEPLOY_MODE" == "request" ]]; then
-  gcloud scheduler jobs resume "$MAINTENANCE_JOB" \
-    "--project=$PROJECT_ID" \
-    "--location=$REGION" \
-    --quiet
+  resume_scheduler_job
 fi

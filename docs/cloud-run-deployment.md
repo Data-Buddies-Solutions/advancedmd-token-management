@@ -55,7 +55,10 @@ The `abita-middleware-main-build` trigger runs for every push to `main`:
 6. Create or update the authenticated Scheduler job in a paused state.
 7. Move traffic directly to that one revision at 100%; no gradual split is
    used.
-8. Resume the Scheduler job.
+8. Resume the Scheduler job. A newly created job can briefly report that its
+   backend parent is not ready, so the deploy script retries only that transient
+   response for up to 25 seconds. Permission and configuration failures still
+   stop immediately.
 
 Schedule the merge or manual production trigger during a lower-traffic window
 when practical. The direct cutover is intentional, but in-flight requests may
