@@ -358,6 +358,9 @@ func TestHandlePatientResolve_PhoneOnlyLoadsAppointments(t *testing.T) {
 	if body.PatientID != "123" {
 		t.Fatalf("patientId = %q, want 123", body.PatientID)
 	}
+	if body.Name != "DOE,JANE" {
+		t.Fatalf("name = %q, want DOE,JANE", body.Name)
+	}
 	if body.Phone != "850-373-3869" {
 		t.Fatalf("phone = %q, want cell phone", body.Phone)
 	}
@@ -1372,9 +1375,10 @@ func newPatientResolveTestHandlers(
 					"PPMDResults": {
 						"Results": {
 							"patientlist": {
-								"patient": {
-									"@id": "pat123",
-									"@respparty": "resp456",
+									"patient": {
+										"@id": "pat123",
+										"@name": "DOE,JANE",
+										"@respparty": "resp456",
 									"@dob": "01/15/1980",
 									"insplanlist": {
 										"insplan": {

@@ -127,6 +127,7 @@ func TestAdapterDemographicsUsesControlledXMLRPCServer(t *testing.T) {
 					"patientlist": {
 						"patient": {
 							"@id": "pat123",
+							"@name": "DOE,JANE",
 							"@respparty": "resp456",
 							"@dob": "01/15/1980",
 							"insplanlist": {
@@ -163,6 +164,7 @@ func TestAdapterDemographicsUsesControlledXMLRPCServer(t *testing.T) {
 		t.Fatalf("GetPatientDemographics() error = %v", err)
 	}
 	want := domain.PatientDemographics{
+		FullName:            "DOE,JANE",
 		CarrierName:         "HUMANA MEDICARE",
 		CarrierID:           "car40906",
 		InsPlanID:           "ins789",

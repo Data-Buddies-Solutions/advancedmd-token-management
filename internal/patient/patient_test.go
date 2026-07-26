@@ -882,6 +882,7 @@ func TestResolveRefreshesKnownPatientByID(t *testing.T) {
 	office, _ := domain.LookupOffice("Spring Hill")
 	amd := advancedmdtest.NewAdapter()
 	amd.Demographics["123"] = domain.PatientDemographics{
+		FullName:    "DOE,JANE",
 		CarrierName: "HUMANA MEDICARE",
 		CarrierID:   "car40906",
 		DOB:         "01/15/1980",
@@ -907,6 +908,9 @@ func TestResolveRefreshesKnownPatientByID(t *testing.T) {
 	}
 	if got.Status != patient.StatusVerified || got.PatientID != "123" {
 		t.Fatalf("Resolve() = %+v, want verified patient 123", got)
+	}
+	if got.Name != "DOE,JANE" {
+		t.Fatalf("Name = %q, want DOE,JANE", got.Name)
 	}
 	if got.DOB != "01/15/1980" || got.Routing != domain.RoutingBachOnly {
 		t.Fatalf("demographics = DOB %q routing %q", got.DOB, got.Routing)

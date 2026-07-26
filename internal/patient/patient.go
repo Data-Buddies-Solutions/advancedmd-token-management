@@ -949,6 +949,9 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 		if result.DOB == "" {
 			result.DOB = demographicsRead.demographics.DOB
 		}
+		if result.Name == "" {
+			result.Name = demographicsRead.demographics.FullName
+		}
 		applyDemographics(&result, demographicsRead.demographics, office, result.DOB)
 	}
 

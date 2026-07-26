@@ -85,6 +85,7 @@ func (a *Adapter) GetPatientDemographics(ctx context.Context, patientID string) 
 		return domain.PatientDemographics{}, nil
 	}
 	return domain.PatientDemographics{
+		FullName:            result.Name,
 		CarrierName:         result.CarrierName,
 		CarrierID:           result.CarrierID,
 		InsPlanID:           result.InsPlanID,

@@ -54,8 +54,10 @@ type PatientSearch struct {
 	LastName  string
 }
 
-// PatientDemographics contains the patient fields used for insurance routing.
+// PatientDemographics contains the patient fields returned by the authoritative
+// demographic read.
 type PatientDemographics struct {
+	FullName            string
 	CarrierName         string
 	CarrierID           string
 	InsPlanID           string

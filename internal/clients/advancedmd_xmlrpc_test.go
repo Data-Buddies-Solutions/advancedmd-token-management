@@ -356,10 +356,11 @@ func TestAdvancedMDClient_GetDemographic(t *testing.T) {
 			"PPMDResults": {
 				"Results": {
 					"patientlist": {
-						"patient": {
-							"@id": "pat123",
-							"@respparty": "resp456",
-							"@dob": "08/18/2000",
+							"patient": {
+								"@id": "pat123",
+								"@name": "DOE,JANE",
+								"@respparty": "resp456",
+								"@dob": "08/18/2000",
 							"insplanlist": {
 								"insplan": {
 									"@id": "ins789",
@@ -393,6 +394,9 @@ func TestAdvancedMDClient_GetDemographic(t *testing.T) {
 
 	if result.CarrierName != "HUMANA MEDICARE" {
 		t.Errorf("Expected carrier name 'HUMANA MEDICARE', got %q", result.CarrierName)
+	}
+	if result.Name != "DOE,JANE" {
+		t.Errorf("Expected patient name 'DOE,JANE', got %q", result.Name)
 	}
 	if result.CarrierID != "car40906" {
 		t.Errorf("Expected carrier ID 'car40906', got %q", result.CarrierID)
