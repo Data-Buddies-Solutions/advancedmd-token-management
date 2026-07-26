@@ -19,11 +19,16 @@ type AppointmentStateResult struct {
 	Err   error
 }
 
+type PatientSearchStep struct {
+	Patients []domain.Patient
+	Err      error
+}
+
 // Adapter returns caller-controlled domain results without provider I/O.
 type Adapter struct {
 	PatientSearches          map[domain.PatientSearch][]domain.Patient
 	PatientErrors            map[domain.PatientSearch]error
-	PatientErrorSequence     map[domain.PatientSearch][]error
+	PatientSearchSequence    map[domain.PatientSearch][]PatientSearchStep
 	Demographics             map[string]domain.PatientDemographics
 	DemographicErrors        map[string]error
 	DemographicErrorSequence map[string][]error
@@ -57,7 +62,7 @@ func NewAdapter() *Adapter {
 	return &Adapter{
 		PatientSearches:          make(map[domain.PatientSearch][]domain.Patient),
 		PatientErrors:            make(map[domain.PatientSearch]error),
-		PatientErrorSequence:     make(map[domain.PatientSearch][]error),
+		PatientSearchSequence:    make(map[domain.PatientSearch][]PatientSearchStep),
 		Demographics:             make(map[string]domain.PatientDemographics),
 		DemographicErrors:        make(map[string]error),
 		DemographicErrorSequence: make(map[string][]error),
@@ -70,12 +75,10 @@ func NewAdapter() *Adapter {
 
 func (a *Adapter) SearchPatients(_ context.Context, search domain.PatientSearch) ([]domain.Patient, error) {
 	a.SearchPatientCalls++
-	if sequence := a.PatientErrorSequence[search]; len(sequence) > 0 {
-		err := sequence[0]
-		a.PatientErrorSequence[search] = sequence[1:]
-		if err != nil {
-			return nil, err
-		}
+	if sequence := a.PatientSearchSequence[search]; len(sequence) > 0 {
+		step := sequence[0]
+		a.PatientSearchSequence[search] = sequence[1:]
+		return append([]domain.Patient(nil), step.Patients...), step.Err
 	}
 	if err := a.PatientErrors[search]; err != nil {
 		return nil, err

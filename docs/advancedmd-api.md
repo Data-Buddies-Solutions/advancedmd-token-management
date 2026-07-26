@@ -92,7 +92,10 @@ The office's `DefaultProfileID` is used for the patient profile field.
 `internal/patient` owns validation, normalization, office resolution, insurance
 routing, mutation order, and reconciliation. `internal/advancedmd` owns the
 provider payload and classifies an explicit rejection separately from an
-ambiguous write. Ambiguous creation is reconciled through `lookuppatient`; no
+ambiguous write. Patient captures every stable ID returned by `lookuppatient`
+before creation and does not write without a complete baseline. After an
+ambiguous response, only one newly appearing exact match proves success; empty,
+unidentifiable, or pre-existing-only results remain `indeterminate_write`. No
 creation request is retried.
 
 ### `addinsurance`

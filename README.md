@@ -390,7 +390,11 @@ The Patient module validates and normalizes the request, resolves the office and
 insurance route, creates the patient with XMLRPC `addpatient`, and then attaches
 insurance with `addinsurance`. A timeout, connection reset, or unreadable
 provider response is never retried as a mutation. Patient creation is reconciled
-through patient lookup before insurance can be attached.
+through patient lookup before insurance can be attached. Patient identifiers are
+captured before the write, and creation does not proceed without a complete
+baseline. After an ambiguous response, only a newly appearing exact match proves
+success. Empty, unidentifiable, or pre-existing-only results remain
+`indeterminate_write`.
 
 Request:
 

@@ -344,6 +344,11 @@ func createMissingFields(command CreateCommand) []string {
 }
 
 func (p *patient) createPatient(ctx context.Context, command CreateCommand, office *domain.OfficeConfig) (domain.CreatedPatient, bool, MutationOutcome) {
+	baseline, err := p.creationBaseline(ctx, command)
+	if err != nil {
+		return domain.CreatedPatient{}, false, failureOutcome(err)
+	}
+
 	created, err := p.advancedMD.CreatePatient(ctx, domain.PatientCreate{
 		FirstName: domain.StripDiacritics(command.FirstName),
 		LastName:  domain.StripDiacritics(command.LastName),
@@ -366,7 +371,7 @@ func (p *patient) createPatient(ctx context.Context, command CreateCommand, offi
 	case advancedmd.MutationRejected:
 		return domain.CreatedPatient{}, false, MutationRejected
 	case advancedmd.MutationAmbiguous:
-		created, outcome := p.reconcileCreatedPatient(ctx, command)
+		created, outcome := p.reconcileCreatedPatient(ctx, command, baseline)
 		return created, outcome == "", outcome
 	default:
 		return domain.CreatedPatient{}, false, failureOutcome(err)
@@ -524,38 +529,97 @@ func (p *patient) reconcileInsurance(ctx context.Context, patientID string) (dom
 	return demographics, true
 }
 
-func (p *patient) reconcileCreatedPatient(ctx context.Context, command CreateCommand) (domain.CreatedPatient, MutationOutcome) {
+func (p *patient) creationBaseline(ctx context.Context, command CreateCommand) (map[string]struct{}, error) {
 	search := domain.PatientSearch{Phone: domain.NormalizePhoneDigits(command.Phone)}
 	candidates, err := retryRead(ctx, func() ([]domain.Patient, error) {
 		return p.advancedMD.SearchPatients(ctx, search)
 	})
 	if err != nil {
-		return domain.CreatedPatient{}, MutationIndeterminateWrite
+		return nil, err
 	}
 
-	matches := make([]domain.Patient, 0, 1)
+	baseline := make(map[string]struct{})
 	for _, candidate := range candidates {
-		if creationMatch(candidate, command) {
-			matches = append(matches, candidate)
+		id := domain.StripPatientPrefix(candidate.ID)
+		if id == "" {
+			return nil, errors.New("patient reconciliation baseline contains a record without an ID")
+		}
+		baseline[id] = struct{}{}
+	}
+	return baseline, nil
+}
+
+func (p *patient) reconcileCreatedPatient(
+	ctx context.Context,
+	command CreateCommand,
+	baseline map[string]struct{},
+) (domain.CreatedPatient, MutationOutcome) {
+	search := domain.PatientSearch{Phone: domain.NormalizePhoneDigits(command.Phone)}
+	for attempt := 1; attempt <= maxReadAttempts; attempt++ {
+		candidates, err := p.advancedMD.SearchPatients(ctx, search)
+		if err == nil {
+			matches, identifiable := newCreationMatches(candidates, command, baseline)
+			if !identifiable {
+				return domain.CreatedPatient{}, MutationIndeterminateWrite
+			}
+			if len(matches) == 1 {
+				return p.loadCreatedPatient(ctx, matches[0])
+			}
+			if len(matches) > 1 {
+				return domain.CreatedPatient{}, MutationIndeterminateWrite
+			}
+		} else if !isTransientReadError(err) {
+			return domain.CreatedPatient{}, MutationIndeterminateWrite
+		}
+
+		if attempt == maxReadAttempts {
+			return domain.CreatedPatient{}, MutationIndeterminateWrite
+		}
+		if err := waitReadRetry(ctx, attempt); err != nil {
+			return domain.CreatedPatient{}, MutationIndeterminateWrite
 		}
 	}
-	if len(matches) == 0 {
-		return domain.CreatedPatient{}, MutationReconciledFailure
-	}
-	if len(matches) != 1 {
-		return domain.CreatedPatient{}, MutationIndeterminateWrite
-	}
+	return domain.CreatedPatient{}, MutationIndeterminateWrite
+}
 
+func newCreationMatches(
+	candidates []domain.Patient,
+	command CreateCommand,
+	baseline map[string]struct{},
+) ([]domain.Patient, bool) {
+	matches := make([]domain.Patient, 0, 1)
+	seen := make(map[string]struct{})
+	for _, candidate := range candidates {
+		id := domain.StripPatientPrefix(candidate.ID)
+		if id == "" {
+			return nil, false
+		}
+		if !creationMatch(candidate, command) {
+			continue
+		}
+		if _, existed := baseline[id]; existed {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		matches = append(matches, candidate)
+	}
+	return matches, true
+}
+
+func (p *patient) loadCreatedPatient(ctx context.Context, match domain.Patient) (domain.CreatedPatient, MutationOutcome) {
 	demographics, err := retryRead(ctx, func() (domain.PatientDemographics, error) {
-		return p.advancedMD.GetPatientDemographics(ctx, matches[0].ID)
+		return p.advancedMD.GetPatientDemographics(ctx, match.ID)
 	})
 	if err != nil || demographics.RespPartyID == "" {
 		return domain.CreatedPatient{}, MutationIndeterminateWrite
 	}
 	return domain.CreatedPatient{
-		ID:          matches[0].ID,
+		ID:          domain.StripPatientPrefix(match.ID),
 		RespPartyID: demographics.RespPartyID,
-		Name:        matches[0].FullName,
+		Name:        match.FullName,
 	}, ""
 }
 
@@ -585,15 +649,22 @@ func retryRead[T any](ctx context.Context, read func() (T, error)) (T, error) {
 			return zero, err
 		}
 
-		timer := time.NewTimer(readRetryDelay * time.Duration(attempt))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return zero, ctx.Err()
-		case <-timer.C:
+		if err := waitReadRetry(ctx, attempt); err != nil {
+			return zero, err
 		}
 	}
 	return zero, errors.New("patient read retry exhausted")
+}
+
+func waitReadRetry(ctx context.Context, attempt int) error {
+	timer := time.NewTimer(readRetryDelay * time.Duration(attempt))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func isTransientReadError(err error) bool {
