@@ -322,6 +322,35 @@ func TestRequestLogPreservesPartialPatientProviderFailure(t *testing.T) {
 	}
 }
 
+func TestRequestLogTreatsSuccessfulPatientResolveAsSuccess(t *testing.T) {
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	patients := &patientStub{resolveResult: patientmodule.ResolveResult{
+		Status: patientmodule.StatusVerified,
+	}}
+	router := NewRouter(&Handlers{patient: patients}, "test-secret", nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/patient/resolve",
+		strings.NewReader(`{"patientId":"17604634"}`),
+	)
+	req.Header.Set("Authorization", "Bearer test-secret")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	entry := decodeLastLogEntry(t, logs.String())
+	if entry["outcome_category"] != "success" {
+		t.Errorf("outcome_category = %v, want success", entry["outcome_category"])
+	}
+	if entry["provider_failure_category"] != "none" {
+		t.Errorf("provider_failure_category = %v, want none", entry["provider_failure_category"])
+	}
+}
+
 func decodeLastLogEntry(t *testing.T, output string) map[string]any {
 	t.Helper()
 
