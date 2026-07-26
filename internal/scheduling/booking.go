@@ -100,22 +100,30 @@ func (s *service) Book(ctx context.Context, command BookCommand) (BookReceipt, e
 		return s.reconcileBooking(ctx, prepared)
 	}
 
-	switch providerCategory(err) {
+	providerFailure := providerCategory(err)
+	switch providerFailure {
 	case safeerrors.CategoryConflict:
-		return BookReceipt{}, slotUnavailableError()
+		return BookReceipt{}, categorizedProviderError(
+			CategorySlotUnavailable,
+			providerFailure,
+			"This time slot is no longer available. Please check availability again and choose a different slot.",
+		)
 	case safeerrors.CategoryRejected:
-		return BookReceipt{}, categorizedError(
+		return BookReceipt{}, categorizedProviderError(
 			CategoryProviderRejected,
+			providerFailure,
 			"AdvancedMD rejected the booking. Please check availability again or contact the office.",
 		)
 	case safeerrors.CategoryAuthentication, safeerrors.CategoryUnavailable:
-		return BookReceipt{}, categorizedError(
+		return BookReceipt{}, categorizedProviderError(
 			CategoryWriteFailed,
+			providerFailure,
 			"Service authentication is temporarily unavailable. Please try again.",
 		)
 	default:
-		return BookReceipt{}, categorizedError(
+		return BookReceipt{}, categorizedProviderError(
 			CategoryWriteFailed,
+			providerFailure,
 			"Failed to book appointment in AdvancedMD. Please try again or contact the office.",
 		)
 	}

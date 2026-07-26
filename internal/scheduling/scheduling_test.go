@@ -428,6 +428,9 @@ func TestSearchPreservesAuthenticationFailureContract(t *testing.T) {
 		if err == nil || err.Error() != want {
 			t.Fatalf("Search error = %v, want %q", err, want)
 		}
+		if got := scheduling.ProviderFailureOf(err); got != safeerrors.CategoryUnavailable {
+			t.Fatalf("ProviderFailureOf(error) = %q, want unavailable", got)
+		}
 	})
 
 	t.Run("schedule read", func(t *testing.T) {
@@ -439,6 +442,9 @@ func TestSearchPreservesAuthenticationFailureContract(t *testing.T) {
 			})
 		if err == nil || err.Error() != want {
 			t.Fatalf("Search error = %v, want %q", err, want)
+		}
+		if got := scheduling.ProviderFailureOf(err); got != safeerrors.CategoryAuthentication {
+			t.Fatalf("ProviderFailureOf(error) = %q, want authentication", got)
 		}
 	})
 }

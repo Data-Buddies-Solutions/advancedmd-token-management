@@ -3,11 +3,17 @@ package http
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
+	"advancedmd-token-management/internal/safeerrors"
+	"advancedmd-token-management/internal/session"
+
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -19,7 +25,37 @@ const (
 	RequestIDKey contextKey = "requestID"
 	// LogRequestIDKey is the context key for the redacted request ID used in logs.
 	LogRequestIDKey contextKey = "logRequestID"
+	requestLogKey   contextKey = "requestLog"
 )
+
+type outcomeCategory string
+
+const (
+	outcomeSuccess                outcomeCategory = "success"
+	outcomeInvalidRequest         outcomeCategory = "invalid_request"
+	outcomeAuthenticationRejected outcomeCategory = "authentication_rejected"
+	outcomeProviderFailure        outcomeCategory = "provider_failure"
+	outcomeInternalFailure        outcomeCategory = "internal_failure"
+	outcomeNotFound               outcomeCategory = "not_found"
+	outcomeClientError            outcomeCategory = "client_error"
+	outcomeServerError            outcomeCategory = "server_error"
+)
+
+type requestLogState struct {
+	outcome         outcomeCategory
+	providerFailure safeerrors.Category
+}
+
+type requestLogEntry struct {
+	RequestID       string               `json:"request_id"`
+	RouteTemplate   string               `json:"route_template"`
+	Outcome         outcomeCategory      `json:"outcome_category"`
+	LatencyMS       int64                `json:"latency_ms"`
+	SessionState    session.SessionState `json:"session_state"`
+	ProviderFailure safeerrors.Category  `json:"provider_failure_category"`
+}
+
+var requestLogMu sync.Mutex
 
 // AuthMiddleware validates the API secret in the Authorization header.
 func AuthMiddleware(apiSecret string) func(http.Handler) http.Handler {
@@ -30,6 +66,7 @@ func AuthMiddleware(apiSecret string) func(http.Handler) http.Handler {
 
 			// Accept either "Bearer {secret}" or raw "{secret}"
 			if auth != expectedBearer && auth != apiSecret {
+				recordRequestOutcome(r.Context(), outcomeAuthenticationRejected, safeerrors.CategoryNone)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				w.Write([]byte(`{"error":"Unauthorized"}`))
@@ -65,26 +102,88 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 }
 
 // LoggingMiddleware logs request details and duration.
-func LoggingMiddleware(next http.Handler) http.Handler {
+func LoggingMiddleware(amdSession session.Session) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			state := &requestLogState{providerFailure: safeerrors.CategoryNone}
+			ctx := context.WithValue(r.Context(), requestLogKey, state)
+
+			// Capture status only. Request/response bodies may contain PHI.
+			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+			next.ServeHTTP(wrapped, r.WithContext(ctx))
+
+			if state.outcome == "" {
+				state.outcome = outcomeForStatus(wrapped.statusCode)
+			}
+			routeTemplate := chi.RouteContext(r.Context()).RoutePattern()
+			if routeTemplate == "" {
+				routeTemplate = "unmatched"
+			}
+			writeRequestLog(requestLogEntry{
+				RequestID:       GetLogRequestID(r.Context()),
+				RouteTemplate:   routeTemplate,
+				Outcome:         state.outcome,
+				LatencyMS:       time.Since(start).Milliseconds(),
+				SessionState:    requestSessionState(amdSession),
+				ProviderFailure: state.providerFailure,
+			})
+		})
+	}
+}
+
+func recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		// Capture status only. Request/response bodies may contain PHI.
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-
-		next.ServeHTTP(wrapped, r)
-
-		duration := time.Since(start)
-		requestID := GetLogRequestID(r.Context())
-
-		log.Printf("[%s] %s %s %d %v",
-			requestID,
-			r.Method,
-			r.URL.Path,
-			wrapped.statusCode,
-			duration,
-		)
+		defer func() {
+			if recover() == nil {
+				return
+			}
+			recordRequestOutcome(r.Context(), outcomeInternalFailure, safeerrors.CategoryNone)
+			w.WriteHeader(http.StatusInternalServerError)
+		}()
+		next.ServeHTTP(w, r)
 	})
+}
+
+func requestSessionState(amdSession session.Session) session.SessionState {
+	if amdSession == nil {
+		return session.SessionUninitialized
+	}
+	return amdSession.Status().State
+}
+
+func recordRequestOutcome(ctx context.Context, outcome outcomeCategory, providerFailure safeerrors.Category) {
+	state, ok := ctx.Value(requestLogKey).(*requestLogState)
+	if !ok {
+		return
+	}
+	state.outcome = outcome
+	state.providerFailure = providerFailure
+}
+
+func outcomeForStatus(status int) outcomeCategory {
+	switch {
+	case status == http.StatusNotFound:
+		return outcomeNotFound
+	case status >= http.StatusInternalServerError:
+		return outcomeServerError
+	case status >= http.StatusBadRequest:
+		return outcomeClientError
+	default:
+		return outcomeSuccess
+	}
+}
+
+func writeRequestLog(entry requestLogEntry) {
+	encoded, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	encoded = append(encoded, '\n')
+	requestLogMu.Lock()
+	defer requestLogMu.Unlock()
+	_, _ = log.Writer().Write(encoded)
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.

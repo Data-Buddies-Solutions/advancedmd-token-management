@@ -579,6 +579,8 @@ func TestPatientMutationRoutesCallPatientInterface(t *testing.T) {
 }
 
 type patientStub struct {
+	resolveResult patientmodule.ResolveResult
+	resolveErr    error
 	createResult  patientmodule.CreateResult
 	updateResult  patientmodule.UpdateInsuranceResult
 	createCommand patientmodule.CreateCommand
@@ -588,7 +590,7 @@ type patientStub struct {
 }
 
 func (s *patientStub) Resolve(context.Context, patientmodule.ResolveCommand) (patientmodule.ResolveResult, error) {
-	return patientmodule.ResolveResult{}, nil
+	return s.resolveResult, s.resolveErr
 }
 
 func (s *patientStub) Create(_ context.Context, command patientmodule.CreateCommand) patientmodule.CreateResult {

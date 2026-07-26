@@ -876,6 +876,9 @@ func TestResolveKeepsVerifiedPatientWhenAppointmentsFail(t *testing.T) {
 	if got.AppointmentsStatus != patient.AppointmentsError {
 		t.Fatalf("AppointmentsStatus = %q, want error", got.AppointmentsStatus)
 	}
+	if got.ProviderFailure != safeerrors.CategoryUpstreamStatus {
+		t.Fatalf("ProviderFailure = %q, want upstream_status", got.ProviderFailure)
+	}
 	if got.AppointmentsMessage != "Failed to retrieve appointments from AdvancedMD. Please try again." {
 		t.Fatalf("AppointmentsMessage = %q", got.AppointmentsMessage)
 	}
@@ -934,6 +937,9 @@ func TestResolveKeepsVerifiedPatientWhenDemographicsProviderReadFails(t *testing
 	}
 	if got.AppointmentsStatus != patient.AppointmentsNone {
 		t.Fatalf("AppointmentsStatus = %q, want none", got.AppointmentsStatus)
+	}
+	if got.ProviderFailure != safeerrors.CategoryAuthentication {
+		t.Fatalf("ProviderFailure = %q, want authentication", got.ProviderFailure)
 	}
 }
 

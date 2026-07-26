@@ -86,6 +86,7 @@ type Appointment struct {
 // ResolveResult is one complete Acuity patient resolution outcome.
 type ResolveResult struct {
 	Status              Status
+	ProviderFailure     safeerrors.Category
 	PatientID           string
 	Name                string
 	DOB                 string
@@ -758,18 +759,23 @@ func (p *patient) Resolve(ctx context.Context, command ResolveCommand) (ResolveR
 	}
 	if len(matches) > 1 {
 		results := make([]ResolveResult, 0, len(matches))
+		providerFailure := safeerrors.CategoryNone
 		for _, candidate := range matches {
 			match, err := p.resolvePatient(ctx, candidate, command.Phone, office)
 			if err != nil {
 				return ResolveResult{}, err
 			}
+			if providerFailure == safeerrors.CategoryNone && match.ProviderFailure != safeerrors.CategoryNone {
+				providerFailure = match.ProviderFailure
+			}
 			results = append(results, match)
 		}
 		return ResolveResult{
-			Status:       StatusMultipleMatches,
-			Appointments: []Appointment{},
-			Matches:      results,
-			Message:      multipleMatchesMessage(command, len(results)),
+			Status:          StatusMultipleMatches,
+			ProviderFailure: providerFailure,
+			Appointments:    []Appointment{},
+			Matches:         results,
+			Message:         multipleMatchesMessage(command, len(results)),
 		}, nil
 	}
 
@@ -825,6 +831,7 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 	demographics, err := p.advancedMD.GetPatientDemographics(ctx, candidate.ID)
 	if err != nil {
 		category := advancedmd.CategoryOf(err)
+		result.ProviderFailure = category
 		log.Printf("patient-resolve: failed to get demographics category=%s", category)
 		if category == safeerrors.CategoryUnavailable {
 			return ResolveResult{}, err
@@ -841,7 +848,8 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 		OfficeIDs: appointmentOfficeIDs(office),
 	})
 	if err != nil {
-		log.Printf("patient-resolve: failed to get appointments category=%s", advancedmd.CategoryOf(err))
+		result.ProviderFailure = advancedmd.CategoryOf(err)
+		log.Printf("patient-resolve: failed to get appointments category=%s", result.ProviderFailure)
 		result.AppointmentsStatus = AppointmentsError
 		result.AppointmentsMessage = "Failed to retrieve appointments from AdvancedMD. Please try again."
 		result.Message = "Patient verified, appointment lookup unavailable"

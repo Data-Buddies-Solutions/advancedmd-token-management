@@ -13,9 +13,9 @@ func NewRouter(handlers *Handlers, apiSecret string, maintenanceAuthorizer Maint
 
 	// Global middleware
 	r.Use(chimw.RealIP)
-	r.Use(chimw.Recoverer)
 	r.Use(RequestIDMiddleware)
-	r.Use(LoggingMiddleware)
+	r.Use(LoggingMiddleware(handlers.session))
+	r.Use(recoveryMiddleware)
 
 	// Process health checks (no auth required, no provider calls)
 	r.Get("/health", handlers.HandleLive)
