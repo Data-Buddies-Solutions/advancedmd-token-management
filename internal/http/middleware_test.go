@@ -93,8 +93,8 @@ func TestRequestLogIsStructuredAndPHISafe(t *testing.T) {
 	if requestID, ok := entry["request_id"].(string); !ok || !strings.HasPrefix(requestID, "external-") {
 		t.Errorf("request_id = %v, want hashed external ID", entry["request_id"])
 	}
-	if len(entry) != 6 {
-		t.Errorf("log fields = %v, want fixed six-field schema", entry)
+	if len(entry) != 7 {
+		t.Errorf("log fields = %v, want six base fields plus patient-resolution stages", entry)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 		if !json.Valid([]byte(line)) {
@@ -348,6 +348,102 @@ func TestRequestLogTreatsSuccessfulPatientResolveAsSuccess(t *testing.T) {
 	}
 	if entry["provider_failure_category"] != "none" {
 		t.Errorf("provider_failure_category = %v, want none", entry["provider_failure_category"])
+	}
+}
+
+func TestRequestLogRecordsPHISafePatientResolutionStages(t *testing.T) {
+	tests := []struct {
+		name            string
+		body            string
+		wantSearchReads float64
+		wantDemoReads   float64
+		wantApptReads   float64
+		wantTotalReads  float64
+		wantCandidates  string
+		wantApptOutcome string
+	}{
+		{
+			name:            "paired office single match",
+			body:            `{"phone":"9542872010","office":"Spring Hill"}`,
+			wantSearchReads: 1,
+			wantDemoReads:   1,
+			wantApptReads:   6,
+			wantTotalReads:  8,
+			wantCandidates:  "1",
+			wantApptOutcome: "found",
+		},
+		{
+			name:            "multiple matches defer hydration",
+			body:            `{"phone":"5552223333","office":"Spring Hill"}`,
+			wantSearchReads: 1,
+			wantDemoReads:   0,
+			wantApptReads:   0,
+			wantTotalReads:  1,
+			wantCandidates:  "2-5",
+			wantApptOutcome: "deferred",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousWriter := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+			router := NewRouter(
+				newPatientResolveTestHandlers(t, http.StatusOK),
+				"test-secret",
+				nil,
+			)
+			req := httptest.NewRequest(http.MethodPost, "/api/patient/resolve", strings.NewReader(test.body))
+			req.Header.Set("Authorization", "Bearer test-secret")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			entry := decodeLastLogEntry(t, logs.String())
+			observation, ok := entry["patient_resolution"].(map[string]any)
+			if !ok {
+				t.Fatalf("patient_resolution = %#v, want structured observation", entry["patient_resolution"])
+			}
+			want := map[string]any{
+				"patient_search_reads": test.wantSearchReads,
+				"demographic_reads":    test.wantDemoReads,
+				"appointment_reads":    test.wantApptReads,
+				"provider_reads":       test.wantTotalReads,
+				"office_group_size":    float64(2),
+				"candidate_count":      test.wantCandidates,
+				"appointment_outcome":  test.wantApptOutcome,
+			}
+			for field, expected := range want {
+				if observation[field] != expected {
+					t.Errorf("%s = %v, want %v", field, observation[field], expected)
+				}
+			}
+			for _, field := range []string{
+				"patient_search_duration_ms",
+				"demographic_duration_ms",
+				"appointment_duration_ms",
+			} {
+				if duration, ok := observation[field].(float64); !ok || duration < 0 {
+					t.Errorf("%s = %#v, want non-negative duration", field, observation[field])
+				}
+			}
+			for _, forbidden := range []string{
+				"9542872010",
+				"5552223333",
+				"JANE",
+				"JOHN",
+				"01/15/1980",
+				"03/20/1982",
+				"9570263",
+				"cancellationToken",
+			} {
+				if strings.Contains(logs.String(), forbidden) {
+					t.Errorf("patient-resolution log exposed %q: %s", forbidden, logs.String())
+				}
+			}
+		})
 	}
 }
 

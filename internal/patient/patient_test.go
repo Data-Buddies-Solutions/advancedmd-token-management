@@ -639,7 +639,7 @@ func TestUpdateInsuranceReturnsIndeterminateWhenInsuranceStateIsIncomplete(t *te
 	}
 }
 
-func TestResolveReturnsCompleteResultsForMultipleMatches(t *testing.T) {
+func TestResolveReturnsLightweightCandidatesWithoutHydrationForMultipleMatches(t *testing.T) {
 	domain.InitRegistry("")
 	office, _ := domain.LookupOffice("Spring Hill")
 
@@ -649,20 +649,6 @@ func TestResolveReturnsCompleteResultsForMultipleMatches(t *testing.T) {
 		{ID: "123", FirstName: "JANE", FullName: "DOE,JANE", DOB: "01/15/1980", Phone: "5552223333"},
 		{ID: "456", FirstName: "JOHN", FullName: "DOE,JOHN", DOB: "03/20/1982", Phone: "5552223333"},
 	}
-	amd.Demographics["123"] = domain.PatientDemographics{CarrierName: "HUMANA MEDICARE", CarrierID: "car40906"}
-	amd.Demographics["456"] = domain.PatientDemographics{CarrierName: "AETNA", CarrierID: "car40887"}
-	amd.AppointmentResults["123"] = advancedmdtest.AppointmentResult{
-		Read: advancedmd.AppointmentRead{
-			Appointments: []domain.PatientAppointment{{
-				ID:       9570263,
-				Start:    time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
-				OfficeID: "spring_hill",
-				Office:   "Spring Hill",
-			}},
-			Complete: true,
-		},
-	}
-
 	got, err := patient.New(amd).Resolve(context.Background(), patient.ResolveCommand{
 		Phone:    "5552223333",
 		OfficeID: office.ID,
@@ -681,13 +667,96 @@ func TestResolveReturnsCompleteResultsForMultipleMatches(t *testing.T) {
 		t.Fatalf("top-level Appointments = %#v, want non-nil empty slice", got.Appointments)
 	}
 	if len(got.Matches) != 2 {
-		t.Fatalf("Matches = %+v, want two complete results", got.Matches)
+		t.Fatalf("Matches = %+v, want two candidates", got.Matches)
 	}
-	if got.Matches[0].PatientID != "123" || got.Matches[0].AppointmentsStatus != patient.AppointmentsFound {
+	if got.Matches[0].Status != "candidate" ||
+		got.Matches[0].PatientID != "123" ||
+		got.Matches[0].FirstName != "JANE" ||
+		got.Matches[0].LastName != "DOE" ||
+		got.Matches[0].DOB != "01/15/1980" {
 		t.Fatalf("first match = %+v", got.Matches[0])
 	}
-	if got.Matches[1].PatientID != "456" || got.Matches[1].AppointmentsStatus != patient.AppointmentsNone {
+	if got.Matches[1].Status != "candidate" ||
+		got.Matches[1].PatientID != "456" ||
+		got.Matches[1].FirstName != "JOHN" ||
+		got.Matches[1].LastName != "DOE" ||
+		got.Matches[1].DOB != "03/20/1982" {
 		t.Fatalf("second match = %+v", got.Matches[1])
+	}
+	if amd.DemographicCalls != 0 || amd.AppointmentReadCalls != 0 {
+		t.Fatalf(
+			"hydration calls = demographics:%d appointments:%d, want 0/0",
+			amd.DemographicCalls,
+			amd.AppointmentReadCalls,
+		)
+	}
+}
+
+func TestResolveDoesNotHydrateAmbiguousFirstNameCandidates(t *testing.T) {
+	domain.InitRegistry("")
+	office, _ := domain.LookupOffice("Spring Hill")
+	search := domain.PatientSearch{Phone: "5552223333"}
+	amd := advancedmdtest.NewAdapter()
+	amd.PatientSearches[search] = []domain.Patient{
+		{ID: "123", FirstName: "JANE", FullName: "DOE,JANE", DOB: "01/15/1980"},
+		{ID: "456", FirstName: "JANET", FullName: "DOE,JANET", DOB: "03/20/1982"},
+	}
+
+	got, err := patient.New(amd).Resolve(context.Background(), patient.ResolveCommand{
+		Phone:     "5552223333",
+		FirstName: "Ja",
+		OfficeID:  office.ID,
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Status != patient.StatusMultipleMatches || len(got.Matches) != 2 {
+		t.Fatalf("Resolve() = %+v, want two ambiguous candidates", got)
+	}
+	if amd.DemographicCalls != 0 || amd.AppointmentReadCalls != 0 {
+		t.Fatalf(
+			"hydration calls = demographics:%d appointments:%d, want 0/0",
+			amd.DemographicCalls,
+			amd.AppointmentReadCalls,
+		)
+	}
+}
+
+func TestResolvePreservesMalformedAndTimeoutSearchErrors(t *testing.T) {
+	domain.InitRegistry("")
+	office, _ := domain.LookupOffice("Spring Hill")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	tests := []struct {
+		name     string
+		category safeerrors.Category
+	}{
+		{name: "malformed provider response", category: safeerrors.CategoryInvalidResponse},
+		{name: "provider timeout", category: safeerrors.CategoryTimeout},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			amd := advancedmdtest.NewAdapter()
+			amd.PatientErrors[search] = advancedmd.NewError(test.category)
+
+			got, err := patient.New(amd).Resolve(context.Background(), patient.ResolveCommand{
+				Phone:    "9542872010",
+				OfficeID: office.ID,
+			})
+			if err == nil || advancedmd.CategoryOf(err) != test.category {
+				t.Fatalf("Resolve() error = %v, want category %q", err, test.category)
+			}
+			if got.Status != "" || got.Observation.CandidateCountBucket != "unknown" {
+				t.Fatalf("Resolve() = %+v, want unresolved compatible error", got)
+			}
+			if amd.DemographicCalls != 0 || amd.AppointmentReadCalls != 0 {
+				t.Fatalf(
+					"hydration calls = demographics:%d appointments:%d, want 0/0",
+					amd.DemographicCalls,
+					amd.AppointmentReadCalls,
+				)
+			}
+		})
 	}
 }
 
@@ -844,6 +913,70 @@ func TestResolveRefreshesKnownPatientByID(t *testing.T) {
 	}
 	if got.AppointmentsStatus != patient.AppointmentsFound || len(got.Appointments) != 1 {
 		t.Fatalf("appointments = %q %+v", got.AppointmentsStatus, got.Appointments)
+	}
+	if amd.SearchPatientCalls != 0 || amd.DemographicCalls != 1 || amd.AppointmentReadCalls != 1 {
+		t.Fatalf(
+			"provider calls = search:%d demographics:%d appointments:%d, want 0/1/1",
+			amd.SearchPatientCalls,
+			amd.DemographicCalls,
+			amd.AppointmentReadCalls,
+		)
+	}
+}
+
+func TestResolveStartsDemographicsAndAppointmentsConcurrently(t *testing.T) {
+	domain.InitRegistry("")
+	office, _ := domain.LookupOffice("Spring Hill")
+	demographicsStarted := make(chan struct{}, 1)
+	appointmentsStarted := make(chan struct{}, 1)
+	demographicsRelease := make(chan struct{})
+	appointmentsRelease := make(chan struct{})
+	amd := advancedmdtest.NewAdapter()
+	amd.PatientSearches[domain.PatientSearch{Phone: "9542872010"}] = []domain.Patient{{
+		ID:        "123",
+		FirstName: "JANE",
+		FullName:  "DOE,JANE",
+		DOB:       "01/15/1980",
+	}}
+	amd.DemographicsStarted = demographicsStarted
+	amd.DemographicsRelease = demographicsRelease
+	amd.AppointmentsStarted = appointmentsStarted
+	amd.AppointmentsRelease = appointmentsRelease
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	type resolveResponse struct {
+		result patient.ResolveResult
+		err    error
+	}
+	resolved := make(chan resolveResponse, 1)
+	go func() {
+		result, err := patient.New(amd).Resolve(ctx, patient.ResolveCommand{
+			Phone:    "9542872010",
+			OfficeID: office.ID,
+		})
+		resolved <- resolveResponse{result: result, err: err}
+	}()
+
+	select {
+	case <-demographicsStarted:
+	case <-ctx.Done():
+		t.Fatal("demographic read did not start")
+	}
+	select {
+	case <-appointmentsStarted:
+	case <-ctx.Done():
+		t.Fatal("appointment read did not start while demographics was blocked")
+	}
+	close(demographicsRelease)
+	close(appointmentsRelease)
+
+	response := <-resolved
+	if response.err != nil {
+		t.Fatalf("Resolve() error = %v", response.err)
+	}
+	if response.result.Status != patient.StatusVerified {
+		t.Fatalf("Resolve() = %+v, want verified patient", response.result)
 	}
 }
 

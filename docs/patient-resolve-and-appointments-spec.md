@@ -52,7 +52,8 @@ Request:
 
 Valid identity input shapes:
 
-- `phone` only: pre-call lookup. Returns a single match, multiple full patient matches, or no match.
+- `phone` only: pre-call lookup. Returns one fully hydrated match, lightweight
+  private candidates for multiple matches, or no match.
 - `phone` + `firstName`: phone lookup filtered by first name.
 - `phone` + `dob`: phone lookup filtered by DOB.
 - `phone` + `firstName` + `dob`: phone lookup filtered by both.
@@ -60,7 +61,10 @@ Valid identity input shapes:
 - `lastName` + `firstName` + `dob`: narrower name lookup filtered by DOB.
 - `patientId`: direct load/appointment refresh for an already verified patient.
 
-Appointment loading is always part of patient resolve. Clients should not send an appointment-loading toggle.
+Appointment loading is always part of a verified single-patient resolve. A
+multiple-match response defers all demographic and appointment hydration until
+the client selects one candidate through the existing private `patientId` path.
+Clients should not send an appointment-loading toggle.
 
 ## Response Contract
 
@@ -96,6 +100,30 @@ Successful single-patient response:
 }
 ```
 
+Multiple-match response:
+
+```json
+{
+  "status": "multiple_matches",
+  "matches": [
+    {
+      "status": "candidate",
+      "patientId": "17604634",
+      "firstName": "JANE",
+      "lastName": "DOE",
+      "dob": "01/15/1980"
+    }
+  ],
+  "appointments": [],
+  "message": "Found 2 patients for this phone number. Ask the caller to confirm their name."
+}
+```
+
+Candidate entries contain exactly the five fields shown. `patientId` remains
+private to the middleware adapter and Call State. Candidates contain no
+insurance or routing hydration, appointments, cancellation tokens, or other
+full-patient fields.
+
 Appointment status values:
 
 - `found`: appointments loaded and at least one future appointment exists.
@@ -126,58 +154,7 @@ When appointment loading fails, keep `status: "verified"`:
 }
 ```
 
-Non-single-patient statuses:
-
-```json
-{
-  "status": "multiple_matches",
-  "appointments": [],
-  "message": "Found 2 patients for this phone number. Ask the caller to confirm their name.",
-  "matches": [
-    {
-      "status": "verified",
-      "patientId": "17604634",
-      "name": "DOE,JANE",
-      "dob": "01/15/1980",
-      "phone": "(954)287-2010",
-      "insuranceCarrier": "Aetna",
-      "insuranceCarrierId": "123",
-      "routing": "bach_only",
-      "allowedProviders": ["Dr. Austin Bach"],
-      "routingAmbiguous": false,
-      "appointmentsStatus": "found",
-      "appointments": [
-        {
-          "id": 9570263,
-          "date": "Wednesday, March 18, 2026",
-          "time": "12:00 PM",
-          "provider": "Dr. Austin Bach",
-          "type": "Follow Up",
-          "facility": "Abita Eye Group Spring Hill",
-          "officeId": "spring_hill",
-          "office": "Spring Hill"
-        }
-      ],
-      "message": "Patient verified with 1 appointment(s)"
-    },
-    {
-      "status": "verified",
-      "patientId": "17604635",
-      "name": "DOE,JOHN",
-      "dob": "03/20/1982",
-      "phone": "(954)287-2010",
-      "insuranceCarrier": "Humana Medicare",
-      "insuranceCarrierId": "456",
-      "routing": "accepted",
-      "allowedProviders": ["Dr. Austin Bach"],
-      "routingAmbiguous": false,
-      "appointmentsStatus": "none",
-      "appointments": [],
-      "message": "Patient verified, no appointments found"
-    }
-  ]
-}
-```
+Other non-single-patient statuses:
 
 ```json
 {
@@ -281,7 +258,8 @@ This keeps one endpoint behavior consistent while allowing different input shape
 Middleware tests:
 
 - `phone` only single match returns `status: verified`, routing, and appointments.
-- `phone` only multiple matches returns full patient details and appointments for each match.
+- `phone` only multiple matches returns exact lightweight candidate entries and
+  performs no demographic or appointment reads.
 - `phone` + `firstName` resolves a multiple-match phone number and loads appointments.
 - `phone` + `dob` resolves and loads appointments.
 - `lastName` + `dob` resolves and loads appointments.
@@ -297,7 +275,8 @@ Agent tests:
 - `verify_patient` stores appointments from patient resolve.
 - `confirm_appt` is skipped when appointments are already loaded.
 - `confirm_appt` uses patient resolve with `patientId` when appointment status is `error`, missing, stale, or patient changed.
-- multiple-match flow still asks for first name before using names from backend data.
+- multiple-match flow still asks for first name and fully hydrates only the
+  privately selected candidate before identity promotion.
 
 ## Open Questions
 

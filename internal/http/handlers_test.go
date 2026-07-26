@@ -10,7 +10,9 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -370,8 +372,20 @@ func TestHandlePatientResolve_PhoneOnlyLoadsAppointments(t *testing.T) {
 	}
 }
 
-func TestHandlePatientResolve_PhoneOnlyMultipleMatchesReturnsFullDetails(t *testing.T) {
-	handlers := newPatientResolveTestHandlers(t, http.StatusOK)
+func TestHandlePatientResolve_PhoneOnlyMultipleMatchesReturnsCandidatesWithoutHydration(t *testing.T) {
+	var mu sync.Mutex
+	demographicReads := 0
+	appointmentReads := 0
+	handlers := newPatientResolveTestHandlers(t, http.StatusOK, func(r *http.Request, body []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.Contains(string(body), `"@action":"getdemographic"`):
+			demographicReads++
+		case strings.Contains(r.URL.Path, "/scheduler/appointments"):
+			appointmentReads++
+		}
+	})
 
 	req := httptest.NewRequest("POST", "/api/patient/resolve", strings.NewReader(`{"phone":"5552223333","office":"Spring Hill"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -379,7 +393,10 @@ func TestHandlePatientResolve_PhoneOnlyMultipleMatchesReturnsFullDetails(t *test
 
 	handlers.HandlePatientResolve(w, req)
 
-	var body PatientResolveResponse
+	var body struct {
+		Status  string           `json:"status"`
+		Matches []map[string]any `json:"matches"`
+	}
 	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -387,28 +404,68 @@ func TestHandlePatientResolve_PhoneOnlyMultipleMatchesReturnsFullDetails(t *test
 		t.Fatalf("status = %q, want multiple_matches; body = %+v", body.Status, body)
 	}
 	if len(body.Matches) != 2 {
-		t.Fatalf("matches = %+v, want two full patient details", body.Matches)
+		t.Fatalf("matches = %+v, want two lightweight candidates", body.Matches)
 	}
-	if body.Matches[0].Status != "verified" || body.Matches[0].PatientID != "123" {
-		t.Fatalf("first match = %+v, want verified patient 123", body.Matches[0])
+	want := []map[string]any{
+		{"status": "candidate", "patientId": "123", "firstName": "JANE", "lastName": "DOE", "dob": "01/15/1980"},
+		{"status": "candidate", "patientId": "456", "firstName": "JOHN", "lastName": "DOE", "dob": "03/20/1982"},
 	}
-	if body.Matches[0].AppointmentsStatus != string(patientmodule.AppointmentsFound) || len(body.Matches[0].Appointments) != 1 {
-		t.Fatalf("first match appointments = %q/%+v, want found appointment", body.Matches[0].AppointmentsStatus, body.Matches[0].Appointments)
+	for i := range want {
+		if !reflect.DeepEqual(body.Matches[i], want[i]) {
+			t.Fatalf("match %d = %#v, want exact candidate %#v", i, body.Matches[i], want[i])
+		}
 	}
-	if body.Matches[0].Appointments[0].ID != 9570263 {
-		t.Fatalf("first match appointment ID = %d, want 9570263", body.Matches[0].Appointments[0].ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if demographicReads != 0 || appointmentReads != 0 {
+		t.Fatalf("hydration reads = demographics:%d appointments:%d, want 0/0", demographicReads, appointmentReads)
 	}
-	if body.Matches[0].Appointments[0].AppointmentTypeID != 1007 {
-		t.Fatalf("first match appointment type ID = %d, want 1007", body.Matches[0].Appointments[0].AppointmentTypeID)
+}
+
+func TestHandlePatientResolve_PairedOfficeUsesEightProviderReads(t *testing.T) {
+	var mu sync.Mutex
+	patientSearches := 0
+	demographicReads := 0
+	appointmentColumns := make([]string, 0, 6)
+	handlers := newPatientResolveTestHandlers(t, http.StatusOK, func(r *http.Request, body []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.Contains(string(body), `"@action":"lookuppatient"`):
+			patientSearches++
+		case strings.Contains(string(body), `"@action":"getdemographic"`):
+			demographicReads++
+		case strings.Contains(r.URL.Path, "/scheduler/appointments"):
+			appointmentColumns = append(appointmentColumns, r.URL.Query().Get("columnId"))
+		}
+	})
+
+	req := httptest.NewRequest("POST", "/api/patient/resolve", strings.NewReader(`{"phone":"9542872010","office":"Spring Hill"}`))
+	w := httptest.NewRecorder()
+	handlers.HandlePatientResolve(w, req)
+
+	var body PatientResolveResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if body.Matches[0].Appointments[0].OfficeID != "spring_hill" {
-		t.Fatalf("first match appointment office ID = %q, want spring_hill", body.Matches[0].Appointments[0].OfficeID)
+	if body.Status != "verified" {
+		t.Fatalf("response = %+v, want verified", body)
 	}
-	if body.Matches[1].Status != "verified" || body.Matches[1].PatientID != "456" {
-		t.Fatalf("second match = %+v, want verified patient 456", body.Matches[1])
+
+	mu.Lock()
+	defer mu.Unlock()
+	if patientSearches != 1 || demographicReads != 1 || len(appointmentColumns) != 6 {
+		t.Fatalf(
+			"provider reads = search:%d demographics:%d appointments:%d, want 1/1/6",
+			patientSearches,
+			demographicReads,
+			len(appointmentColumns),
+		)
 	}
-	if body.Matches[1].AppointmentsStatus != string(patientmodule.AppointmentsNone) || len(body.Matches[1].Appointments) != 0 {
-		t.Fatalf("second match appointments = %q/%+v, want none", body.Matches[1].AppointmentsStatus, body.Matches[1].Appointments)
+	for _, columns := range appointmentColumns {
+		if !strings.Contains(columns, "1513") || !strings.Contains(columns, "1593") {
+			t.Fatalf("batched appointment columns = %q, want Spring Hill and Crystal River", columns)
+		}
 	}
 }
 
@@ -1225,7 +1282,11 @@ func newUpdateInsuranceTestHandlers(t *testing.T) (*Handlers, *[]string) {
 	), &writes
 }
 
-func newPatientResolveTestHandlers(t *testing.T, appointmentStatus int) *Handlers {
+func newPatientResolveTestHandlers(
+	t *testing.T,
+	appointmentStatus int,
+	observers ...func(*http.Request, []byte),
+) *Handlers {
 	t.Helper()
 	future := time.Now().In(eastern).Add(48 * time.Hour)
 	futureMonth := time.Date(future.Year(), future.Month(), 1, 0, 0, 0, 0, eastern).Format("2006-01-02")
@@ -1235,6 +1296,9 @@ func newPatientResolveTestHandlers(t *testing.T, appointmentStatus int) *Handler
 			var body []byte
 			if r.Body != nil {
 				body, _ = io.ReadAll(r.Body)
+			}
+			for _, observe := range observers {
+				observe(r, body)
 			}
 			contentType := r.Header.Get("Content-Type")
 

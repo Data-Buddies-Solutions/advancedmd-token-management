@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -167,11 +168,6 @@ func (a *Adapter) EndDatePatientInsurance(ctx context.Context, command domain.Pa
 	return nil
 }
 
-func (a *Adapter) GetUpcomingAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) ([]domain.PatientAppointment, error) {
-	read, err := a.readPatientAppointments(ctx, query)
-	return read.Appointments, err
-}
-
 func (a *Adapter) ReadPatientAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) (AppointmentRead, error) {
 	return a.readPatientAppointments(ctx, query)
 }
@@ -231,64 +227,48 @@ func (a *Adapter) readPatientAppointments(ctx context.Context, query domain.Pati
 		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
 	}
 
-	read := AppointmentRead{
-		Appointments: make([]domain.PatientAppointment, 0),
-		Complete:     true,
+	lookup, err := newAppointmentLookup(query.OfficeIDs)
+	if err != nil {
+		return AppointmentRead{}, err
 	}
-	for _, officeID := range query.OfficeIDs {
-		office, ok := domain.LookupOfficeByID(officeID)
-		if !ok {
-			return read, NewError(safeerrors.CategoryInternal)
-		}
-		officeRead, err := a.upcomingAppointmentsForOffice(ctx, token, patientIDNumber, office)
-		read.ProviderReads += officeRead.ProviderReads
-		if err != nil {
-			return read, err
-		}
-		read.Appointments = append(read.Appointments, officeRead.Appointments...)
-		read.Complete = read.Complete && officeRead.Complete
-	}
-	return read, nil
-}
-
-func (a *Adapter) upcomingAppointmentsForOffice(
-	ctx context.Context,
-	token *domain.TokenData,
-	patientID int,
-	office *domain.OfficeConfig,
-) (AppointmentRead, error) {
-	if office == nil {
-		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
-	}
-
 	now := a.now().In(eastern)
 	cutoff := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), 0, time.UTC)
 	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, eastern)
-	columnIDs := strings.Join(office.AllowedColumnIDs(), "-")
 
 	type monthResult struct {
+		month        int
 		appointments []clients.AMDAppointmentResponse
 		err          error
 	}
 	results := make(chan monthResult, 6)
 	for month := 0; month < 6; month++ {
 		startDate := thisMonth.AddDate(0, month, 0).Format("2006-01-02")
-		go func() {
-			appointments, err := a.restClient.GetAppointmentsByMonth(ctx, token, columnIDs, startDate)
-			results <- monthResult{appointments: appointments, err: err}
-		}()
+		go func(month int, startDate string) {
+			appointments, err := a.restClient.GetAppointmentsByMonth(
+				ctx,
+				token,
+				strings.Join(lookup.columnIDs, "-"),
+				startDate,
+			)
+			results <- monthResult{month: month, appointments: appointments, err: err}
+		}(month, startDate)
 	}
 
-	var rawAppointments []clients.AMDAppointmentResponse
+	monthlyAppointments := make([][]clients.AMDAppointmentResponse, 6)
 	for range 6 {
 		result := <-results
 		if result.err != nil {
 			return AppointmentRead{ProviderReads: 6}, classify(result.err)
 		}
-		rawAppointments = append(rawAppointments, result.appointments...)
+		monthlyAppointments[result.month] = result.appointments
+	}
+	var rawAppointments []clients.AMDAppointmentResponse
+	for _, appointments := range monthlyAppointments {
+		rawAppointments = append(rawAppointments, appointments...)
 	}
 
-	read := patientAppointmentRead(rawAppointments, patientID, office, &cutoff)
+	read := patientAppointmentRead(rawAppointments, patientIDNumber, lookup.officeByColumn, nil, &cutoff)
+	normalizePatientAppointments(&read)
 	read.ProviderReads = 6
 	return read, nil
 }
@@ -312,15 +292,56 @@ func (a *Adapter) patientAppointmentsForOfficeMonth(
 	if err != nil {
 		return AppointmentRead{ProviderReads: 1}, classify(err)
 	}
-	read := patientAppointmentRead(rawAppointments, patientID, office, nil)
+	read := patientAppointmentRead(rawAppointments, patientID, nil, office, nil)
 	read.ProviderReads = 1
 	return read, nil
+}
+
+type appointmentLookup struct {
+	columnIDs      []string
+	officeByColumn map[int]*domain.OfficeConfig
+}
+
+func newAppointmentLookup(officeIDs []string) (appointmentLookup, error) {
+	lookup := appointmentLookup{
+		columnIDs:      make([]string, 0),
+		officeByColumn: make(map[int]*domain.OfficeConfig),
+	}
+	seenOffices := make(map[string]bool, len(officeIDs))
+	for _, officeID := range officeIDs {
+		if seenOffices[officeID] {
+			continue
+		}
+		seenOffices[officeID] = true
+
+		office, ok := domain.LookupOfficeByID(officeID)
+		if !ok {
+			return appointmentLookup{}, NewError(safeerrors.CategoryInternal)
+		}
+		for _, columnID := range office.AllowedColumnIDs() {
+			columnIDNumber, err := strconv.Atoi(columnID)
+			if err != nil {
+				return appointmentLookup{}, NewError(safeerrors.CategoryInternal)
+			}
+			if _, exists := lookup.officeByColumn[columnIDNumber]; exists {
+				continue
+			}
+			lookup.officeByColumn[columnIDNumber] = office
+			lookup.columnIDs = append(lookup.columnIDs, columnID)
+		}
+	}
+	if len(lookup.columnIDs) == 0 {
+		return appointmentLookup{}, NewError(safeerrors.CategoryInternal)
+	}
+	sort.Strings(lookup.columnIDs)
+	return lookup, nil
 }
 
 func patientAppointmentRead(
 	rawAppointments []clients.AMDAppointmentResponse,
 	patientID int,
-	office *domain.OfficeConfig,
+	officeByColumn map[int]*domain.OfficeConfig,
+	fallbackOffice *domain.OfficeConfig,
 	cutoff *time.Time,
 ) AppointmentRead {
 	read := AppointmentRead{
@@ -345,6 +366,14 @@ func patientAppointmentRead(
 			continue
 		}
 		if cutoff != nil && !start.After(*cutoff) {
+			continue
+		}
+		office := officeByColumn[raw.ColumnID]
+		if office == nil {
+			office = fallbackOffice
+		}
+		if office == nil {
+			read.Complete = false
 			continue
 		}
 
@@ -387,6 +416,33 @@ func patientAppointmentRead(
 		})
 	}
 	return read
+}
+
+func normalizePatientAppointments(read *AppointmentRead) {
+	sort.Slice(read.Appointments, func(i, j int) bool {
+		left := read.Appointments[i]
+		right := read.Appointments[j]
+		if !left.Start.Equal(right.Start) {
+			return left.Start.Before(right.Start)
+		}
+		if left.ID != right.ID {
+			return left.ID < right.ID
+		}
+		if left.OfficeID != right.OfficeID {
+			return left.OfficeID < right.OfficeID
+		}
+		return left.Provider < right.Provider
+	})
+	deduplicated := read.Appointments[:0]
+	seenAppointmentIDs := make(map[int]bool, len(read.Appointments))
+	for _, appointment := range read.Appointments {
+		if seenAppointmentIDs[appointment.ID] {
+			continue
+		}
+		seenAppointmentIDs[appointment.ID] = true
+		deduplicated = append(deduplicated, appointment)
+	}
+	read.Appointments = deduplicated
 }
 
 func (a *Adapter) ReadAppointmentState(

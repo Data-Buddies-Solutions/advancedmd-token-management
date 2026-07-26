@@ -197,14 +197,19 @@ provider reads, the middleware returns
 instead of calling it no availability; after one retry, the agent should ask
 for different preferences.
 
-For patient resolve, the middleware queries six months of columns for the
-resolved office's nearby appointment group, then filters by patient ID. Spring
-Hill and Crystal River are grouped together; Hollywood and Sweetwater are
-grouped together. Each returned appointment includes `officeId` and `office`.
-Appointment loading is best effort and reported with
-`appointmentsStatus` so identity resolution can still succeed when appointment
-loading fails. Provider payloads and session data remain inside the AdvancedMD
-adapter; the Patient module receives only Acuity appointment values.
+For a verified patient resolve, the middleware flattens and deduplicates the
+columns for the resolved office's nearby appointment group. It issues six
+multi-column monthly reads, maps every returned row to its owning office by
+column ID, and filters by patient ID. Spring Hill and Crystal River are grouped
+together; Hollywood and Sweetwater are grouped together. Demographics and the
+six-month appointment group load concurrently after one patient is selected.
+Each returned appointment includes `officeId` and `office`. Appointment loading
+is best effort and reported with `appointmentsStatus` so identity resolution can
+still succeed when appointment loading fails. A multiple-match lookup returns
+only private lightweight candidates and performs no hydration until one
+`patientId` is privately selected. Provider payloads and session data remain
+inside the AdvancedMD adapter; the Patient module receives only Acuity
+appointment values.
 
 ### `GET /scheduler/blockholds`
 
