@@ -431,7 +431,7 @@ func TestAdapterUpcomingAppointmentsUsesControlledRESTServer(t *testing.T) {
 		func() time.Time { return fixedNow },
 	)
 
-	got, err := adapter.GetUpcomingAppointments(
+	read, err := adapter.ReadPatientAppointments(
 		context.Background(),
 		domain.PatientAppointmentsQuery{
 			PatientID: "123",
@@ -439,10 +439,14 @@ func TestAdapterUpcomingAppointmentsUsesControlledRESTServer(t *testing.T) {
 		},
 	)
 	if err != nil {
-		t.Fatalf("GetUpcomingAppointments() error = %v", err)
+		t.Fatalf("ReadPatientAppointments() error = %v", err)
 	}
+	got := read.Appointments
 	if len(got) != 2 {
-		t.Fatalf("GetUpcomingAppointments() = %+v, want two", got)
+		t.Fatalf("ReadPatientAppointments() = %+v, want two", got)
+	}
+	if read.ProviderReads != 12 {
+		t.Fatalf("ProviderReads = %d, want twelve", read.ProviderReads)
 	}
 	if got[0].OfficeID != "spring_hill" || got[0].Provider != "Dr. Austin Bach" ||
 		got[0].Type != "Established Adult Medical (Follow Up)" {
@@ -554,7 +558,10 @@ func TestAdapterMarksPatientAppointmentReadIncompleteWhenRowsCannotBeReconciled(
 	if err != nil {
 		t.Fatalf("ReadPatientAppointments() error = %v", err)
 	}
-	if read.Complete || len(read.Appointments) != 1 || read.Appointments[0].ID != 30002 {
+	if read.Complete ||
+		read.ProviderReads != 6 ||
+		len(read.Appointments) != 1 ||
+		read.Appointments[0].ID != 30002 {
 		t.Fatalf("ReadPatientAppointments() = %#v, want one partial appointment and incomplete proof", read)
 	}
 }
@@ -596,7 +603,10 @@ func TestAdapterReadsIntendedAppointmentMonth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadPatientAppointmentsForMonth() error = %v", err)
 	}
-	if !read.Complete || len(read.Appointments) != 1 || read.Appointments[0].ID != 30004 {
+	if !read.Complete ||
+		read.ProviderReads != 1 ||
+		len(read.Appointments) != 1 ||
+		read.Appointments[0].ID != 30004 {
 		t.Fatalf("ReadPatientAppointmentsForMonth() = %#v, want exact complete match", read)
 	}
 }
@@ -847,7 +857,11 @@ func TestAdapterBooksAndCancelsThroughControlledRESTServer(t *testing.T) {
 		t.Fatalf("booking payload = %#v", bookingPayload)
 	}
 
-	if err := adapter.CancelAppointment(context.Background(), appointmentID); err != nil {
+	if err := adapter.CancelAppointment(context.Background(), Cancellation{
+		PatientID:     "12345",
+		AppointmentID: appointmentID,
+		OfficeID:      "spring_hill",
+	}); err != nil {
 		t.Fatalf("CancelAppointment error = %v", err)
 	}
 	if cancellationPayload["id"] != float64(98765) {

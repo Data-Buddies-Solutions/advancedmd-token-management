@@ -55,7 +55,7 @@ type Adapter struct {
 	BookAppointmentErr       error
 	Bookings                 []advancedmd.Booking
 	CancelAppointmentErr     error
-	Cancellations            []int
+	Cancellations            []advancedmd.Cancellation
 }
 
 func NewAdapter() *Adapter {
@@ -118,10 +118,13 @@ func (a *Adapter) ReadPatientAppointmentsForMonth(_ context.Context, query advan
 
 func (a *Adapter) nextAppointmentRead(patientID string) (advancedmd.AppointmentRead, error) {
 	result, configured := a.AppointmentResults[patientID]
-	if result.Err != nil {
-		return advancedmd.AppointmentRead{}, result.Err
-	}
 	read := result.Read
+	if read.ProviderReads == 0 {
+		read.ProviderReads = 1
+	}
+	if result.Err != nil {
+		return read, result.Err
+	}
 	read.Appointments = append([]domain.PatientAppointment(nil), read.Appointments...)
 	if !configured {
 		read.Complete = true
@@ -175,8 +178,8 @@ func (a *Adapter) BookAppointment(_ context.Context, booking advancedmd.Booking)
 	return a.BookAppointmentID, nil
 }
 
-func (a *Adapter) CancelAppointment(_ context.Context, appointmentID int) error {
-	a.Cancellations = append(a.Cancellations, appointmentID)
+func (a *Adapter) CancelAppointment(_ context.Context, cancellation advancedmd.Cancellation) error {
+	a.Cancellations = append(a.Cancellations, cancellation)
 	return a.CancelAppointmentErr
 }
 

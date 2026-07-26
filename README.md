@@ -89,7 +89,7 @@ gives callers leverage and keeps change local.
 | --- | --- | --- |
 | HTTP | Authenticated JSON routes and stable response shapes | Authentication, request IDs, transport validation, and mapping |
 | Patient | `Resolve`, `Create`, `UpdateInsurance` | Identity resolution, demographics, insurance policy, patient mutations, and reconciliation |
-| Scheduling | `Search`, `Book`, `Cancel` | Availability, signed slots, appointment intent, live revalidation, ownership checks, and reconciliation |
+| Scheduling | `Search`, `Book`, `Cancel` | Availability, purpose-separated signed slots and cancellations, appointment intent, live revalidation, ownership checks, and reconciliation |
 | Domain | Policy and domain values | Offices, routing, eligibility, appointment types, capacity, and time rules |
 | Session | `Get`, `Maintain`, `Status` | Credentials, token lifecycle, single-flight login, and last-known-good state |
 | AdvancedMD | `PatientRecords`, `SchedulingRecords` | The external-records seam, production adapter, stable errors, transport, parsing, and normalization |
@@ -247,6 +247,20 @@ All `/api/*` routes require `Authorization: Bearer <API_SECRET>`.
 | `POST /api/scheduler/availability` | Find policy-valid slots and sign them |
 | `POST /api/appointment/book` | Revalidate and book a signed slot |
 | `POST /api/appointment/cancel` | Verify ownership and cancel an appointment |
+
+Each appointment returned by patient resolution may include a private,
+short-lived `cancellationToken`. A cancellation request may send that token
+with the legacy patient, appointment, and office fields; supplied legacy fields
+must match the signed context. A valid token cancels without appointment
+rediscovery. A supplied invalid token returns `invalid_cancellation_token`
+without falling back or mutating the provider. Requests without the field keep
+the legacy ownership-read path during the mixed-version rollout. The token is
+an agent-to-middleware value and must not enter model prompts, speech, logs, or
+analytics.
+
+The structured request log adds a PHI-free `cancellation` object for this route
+with path, semantic outcome, actual provider schedule-read count, cancellation
+mutation count, and duration.
 
 Operational routes have separate contracts:
 

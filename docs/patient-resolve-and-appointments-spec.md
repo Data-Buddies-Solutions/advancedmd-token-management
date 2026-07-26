@@ -88,7 +88,8 @@ Successful single-patient response:
       "type": "Follow Up",
       "facility": "Abita Eye Group Spring Hill",
       "officeId": "spring_hill",
-      "office": "Spring Hill"
+      "office": "Spring Hill",
+      "cancellationToken": "<opaque short-lived token>"
     }
   ],
   "message": "Patient verified with 1 appointment(s)"
@@ -100,6 +101,12 @@ Appointment status values:
 - `found`: appointments loaded and at least one future appointment exists.
 - `none`: appointments loaded and no future appointments exist.
 - `error`: patient was verified, but appointment loading failed.
+
+`cancellationToken` is optional for response compatibility and is issued once
+per upcoming appointment when cancellation-token support is configured. It is
+bound to that patient, appointment, and owning office. The Voice Agent keeps it
+in private Call State; it is not a model-visible appointment reference and must
+not be included in prompt text, speech, logs, or analytics.
 
 When appointment loading fails, keep `status: "verified"`:
 

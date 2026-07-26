@@ -105,7 +105,7 @@ type SchedulingRecords interface {
 	ReadPatientAppointmentsForMonth(ctx context.Context, query AppointmentMonthQuery) (AppointmentRead, error)
 	ReadAppointmentState(ctx context.Context, query AppointmentStateQuery) (AppointmentState, error)
 	BookAppointment(ctx context.Context, booking Booking) (int, error)
-	CancelAppointment(ctx context.Context, appointmentID int) error
+	CancelAppointment(ctx context.Context, cancellation Cancellation) error
 }
 
 // AppointmentRead distinguishes a complete provider snapshot from a partial
@@ -113,6 +113,8 @@ type SchedulingRecords interface {
 type AppointmentRead struct {
 	Appointments []domain.PatientAppointment
 	Complete     bool
+	// ProviderReads is the number of provider schedule requests attempted.
+	ProviderReads int
 }
 
 // AppointmentMonthQuery selects the provider month containing an intended
@@ -149,4 +151,12 @@ type Booking struct {
 	AppointmentTypeID int
 	Force             bool
 	Comments          string
+}
+
+// Cancellation is the verified Acuity context for one provider cancellation.
+// The production adapter owns which fields the provider transport requires.
+type Cancellation struct {
+	PatientID     string
+	AppointmentID int
+	OfficeID      string
 }

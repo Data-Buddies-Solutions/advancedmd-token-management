@@ -43,17 +43,18 @@ type Scheduling interface {
 type Category string
 
 const (
-	CategoryValidation             Category = "validation"
-	CategoryInvalidBookingToken    Category = "invalid_booking_token"
-	CategoryBookingTokenRequired   Category = "booking_token_required"
-	CategoryAppointmentTypeMissing Category = "appointment_type_unresolved"
-	CategoryPatientContextMismatch Category = "patient_context_mismatch"
-	CategorySlotUnavailable        Category = "slot_unavailable"
-	CategoryProviderConflict       Category = "provider_conflict"
-	CategoryProviderRejected       Category = "provider_rejected"
-	CategoryOwnershipMismatch      Category = "ownership_mismatch"
-	CategoryWriteFailed            Category = "write_failed"
-	CategoryIndeterminateWrite     Category = "indeterminate_write"
+	CategoryValidation               Category = "validation"
+	CategoryInvalidBookingToken      Category = "invalid_booking_token"
+	CategoryInvalidCancellationToken Category = "invalid_cancellation_token"
+	CategoryBookingTokenRequired     Category = "booking_token_required"
+	CategoryAppointmentTypeMissing   Category = "appointment_type_unresolved"
+	CategoryPatientContextMismatch   Category = "patient_context_mismatch"
+	CategorySlotUnavailable          Category = "slot_unavailable"
+	CategoryProviderConflict         Category = "provider_conflict"
+	CategoryProviderRejected         Category = "provider_rejected"
+	CategoryOwnershipMismatch        Category = "ownership_mismatch"
+	CategoryWriteFailed              Category = "write_failed"
+	CategoryIndeterminateWrite       Category = "indeterminate_write"
 )
 
 // Error contains only caller-safe scheduling failure details.
@@ -103,6 +104,7 @@ func MissingOf(err error) []string {
 type service struct {
 	records            advancedmd.SchedulingRecords
 	bookingTokenSecret string
+	cancellationTokens *CancellationTokens
 	allowRawBooking    bool
 	now                func() time.Time
 
@@ -134,6 +136,7 @@ func NewWithConfig(
 	return &service{
 		records:            records,
 		bookingTokenSecret: bookingTokenSecret,
+		cancellationTokens: NewCancellationTokens(bookingTokenSecret, now),
 		allowRawBooking:    config.AllowRawBooking,
 		now:                now,
 	}
