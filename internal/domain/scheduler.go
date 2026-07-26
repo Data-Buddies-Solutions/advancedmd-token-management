@@ -148,6 +148,7 @@ type AvailabilityResponse struct {
 	DateShifted           bool                     `json:"dateShifted,omitempty"`
 	SearchedFrom          string                   `json:"searchedFrom,omitempty"`
 	SearchedThrough       string                   `json:"searchedThrough,omitempty"`
+	BookingTokenExpiresAt string                   `json:"bookingTokenExpiresAt,omitempty"`
 	ShouldRetrySameSearch bool                     `json:"shouldRetrySameSearch"`
 	NextAction            string                   `json:"nextAction"`
 	Message               string                   `json:"message,omitempty"`
