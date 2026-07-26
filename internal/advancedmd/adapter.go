@@ -2,6 +2,8 @@ package advancedmd
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,12 +84,87 @@ func (a *Adapter) GetPatientDemographics(ctx context.Context, patientID string) 
 		return domain.PatientDemographics{}, nil
 	}
 	return domain.PatientDemographics{
-		CarrierName: result.CarrierName,
-		CarrierID:   result.CarrierID,
-		InsPlanID:   result.InsPlanID,
-		RespPartyID: result.RespPartyID,
-		DOB:         result.DOB,
+		CarrierName:         result.CarrierName,
+		CarrierID:           result.CarrierID,
+		InsPlanID:           result.InsPlanID,
+		RespPartyID:         result.RespPartyID,
+		SubscriberNum:       result.SubscriberNum,
+		DOB:                 result.DOB,
+		InsuranceStateKnown: result.InsuranceStateKnown,
 	}, nil
+}
+
+func (a *Adapter) CreatePatient(ctx context.Context, command domain.PatientCreate) (domain.CreatedPatient, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return domain.CreatedPatient{}, err
+	}
+	if a.xmlClient == nil {
+		return domain.CreatedPatient{}, NewError(safeerrors.CategoryInternal)
+	}
+	office, ok := domain.LookupOfficeByID(command.OfficeID)
+	if !ok {
+		return domain.CreatedPatient{}, NewError(safeerrors.CategoryInternal)
+	}
+
+	rawPatientID, respPartyID, name, err := a.xmlClient.AddPatient(ctx, token, clients.AddPatientParams{
+		FirstName: command.FirstName,
+		LastName:  command.LastName,
+		DOB:       command.DOB,
+		Phone:     command.Phone,
+		Email:     command.Email,
+		Street:    command.Street,
+		AptSuite:  command.AptSuite,
+		City:      command.City,
+		State:     command.State,
+		Zip:       command.Zip,
+		Sex:       command.Sex,
+		SSN:       command.SSN,
+		ProfileID: office.DefaultProfileID,
+	})
+	if err != nil {
+		return domain.CreatedPatient{}, classifyMutation(err)
+	}
+	return domain.CreatedPatient{
+		ID:          domain.StripPatientPrefix(rawPatientID),
+		RespPartyID: respPartyID,
+		Name:        name,
+	}, nil
+}
+
+func (a *Adapter) AddPatientInsurance(ctx context.Context, command domain.PatientInsurance) error {
+	token, err := a.token(ctx)
+	if err != nil {
+		return err
+	}
+	if a.xmlClient == nil {
+		return NewError(safeerrors.CategoryInternal)
+	}
+	if err := a.xmlClient.AddInsurance(
+		ctx,
+		token,
+		command.PatientID,
+		command.RespPartyID,
+		command.CarrierID,
+		command.SubscriberNum,
+	); err != nil {
+		return classifyMutation(err)
+	}
+	return nil
+}
+
+func (a *Adapter) EndDatePatientInsurance(ctx context.Context, command domain.PatientInsuranceEnd) error {
+	token, err := a.token(ctx)
+	if err != nil {
+		return err
+	}
+	if a.xmlClient == nil {
+		return NewError(safeerrors.CategoryInternal)
+	}
+	if err := a.xmlClient.EndDateInsurance(ctx, token, command.PatientID, command.InsPlanID); err != nil {
+		return classifyMutation(err)
+	}
+	return nil
 }
 
 func (a *Adapter) GetUpcomingAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) ([]domain.PatientAppointment, error) {
@@ -511,9 +588,26 @@ func classifyMutation(err error) error {
 		return NewError(safeerrors.CategoryRejected)
 	case clients.MutationDispositionAmbiguous:
 		return NewAmbiguousWriteError(safeerrors.Classify(err))
-	default:
-		return classify(err)
 	}
+	if err == nil {
+		return nil
+	}
+	var rejection *clients.ProviderRejectionError
+	if errors.As(err, &rejection) {
+		return NewError(safeerrors.CategoryRejected)
+	}
+	var status *clients.HTTPStatusError
+	if errors.As(err, &status) &&
+		status.StatusCode >= 400 &&
+		status.StatusCode < 500 &&
+		status.StatusCode != http.StatusRequestTimeout {
+		return NewError(safeerrors.CategoryRejected)
+	}
+	category := safeerrors.Classify(err)
+	if category == safeerrors.CategoryInternal {
+		return NewError(category)
+	}
+	return NewAmbiguousWriteError(category)
 }
 
 func friendlyFacilityName(name string) string {

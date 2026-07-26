@@ -82,6 +82,9 @@ func NewHandlers(
 	patient patientmodule.Patient,
 	scheduling schedulingmodule.Scheduling,
 ) *Handlers {
+	if patient == nil {
+		patient = patientmodule.New(advancedmd.NewAdapter(amdSession, amdClient, amdRestClient))
+	}
 	return &Handlers{
 		session:       amdSession,
 		amdClient:     amdClient,
@@ -102,6 +105,22 @@ func (h *Handlers) HandleLive(w http.ResponseWriter, _ *http.Request) {
 func (h *Handlers) HandleReady(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"ready"}`))
+}
+
+// HandleMetrics exposes PHI-free patient mutation outcome counters.
+func (h *Handlers) HandleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintln(w, "# HELP patient_mutation_outcomes_total Patient mutation outcomes by operation and category.")
+	fmt.Fprintln(w, "# TYPE patient_mutation_outcomes_total counter")
+	for _, metric := range patientmodule.MutationMetricSnapshot() {
+		fmt.Fprintf(
+			w,
+			"patient_mutation_outcomes_total{operation=%q,outcome=%q} %d\n",
+			metric.Operation,
+			metric.Outcome,
+			metric.Count,
+		)
+	}
 }
 
 // HandleSessionMaintenance refreshes the process-local AdvancedMD session
@@ -141,6 +160,7 @@ type AddPatientRequest struct {
 // AddPatientResponse is returned after creating a patient.
 type AddPatientResponse struct {
 	Status           string   `json:"status"`
+	Outcome          string   `json:"outcome,omitempty"`
 	PatientID        string   `json:"patientId,omitempty"`
 	Name             string   `json:"name,omitempty"`
 	DOB              string   `json:"dob,omitempty"`
@@ -164,194 +184,40 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	office, err := domain.ResolveOffice(req.Office)
-	if err != nil {
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: err.Error(),
-		})
-		return
-	}
-	policy := domain.NewSchedulingPolicy(office)
-
-	insuranceMode := domain.InsuranceModeForCoverage(req.CoverageType)
-	if domain.IsSelfPayInsurance(req.Insurance) && strings.TrimSpace(req.SubscriberNum) == "" {
-		req.SubscriberNum = "self pay"
-	}
-
-	log.Printf("add-patient: received request office=%s coverageMode=%s", office.ID, insuranceMode)
-
-	// Validate required fields (aptSuite and email are optional)
-	missing := addPatientMissingFields(req)
-	if len(missing) > 0 {
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Missing required fields: %s", strings.Join(missing, ", ")),
-		})
-		return
-	}
-	if insuranceMode == domain.InsuranceModeVision && !policy.SupportsRouting(domain.RoutingOpticalOnly) {
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Routine vision coverage is not supported at %s. Route the patient to Spring Hill routine vision scheduling.", office.DisplayName),
-		})
-		return
-	}
-	if insuranceMode == domain.InsuranceModeMedical && !policy.SupportsMedical() {
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Medical coverage is not supported at %s. Use routine vision coverage for this office or route medical visits to a medical office.", office.DisplayName),
-		})
-		return
-	}
-
-	// Normalize inputs
-	normalizedDOB := domain.NormalizeDOB(req.DOB)
-	formattedPhone := domain.FormatPhone(req.Phone)
-	normalizedSex := domain.NormalizeSex(req.Sex)
-	normalizedFirstName := domain.StripDiacritics(req.FirstName)
-	normalizedLastName := domain.StripDiacritics(req.LastName)
-	normalizedEmail := strings.TrimSpace(req.Email)
-
-	// Get auth token
-	tokenData, err := h.session.Get(r.Context())
-	if err != nil {
-		log.Printf("add-patient: authentication failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: "Service authentication is temporarily unavailable. Please try again.",
-		})
-		return
-	}
-
-	// Create patient in AMD
-	rawPatientID, respPartyID, patientName, err := h.amdClient.AddPatient(r.Context(), tokenData, clients.AddPatientParams{
-		FirstName: normalizedFirstName,
-		LastName:  normalizedLastName,
-		DOB:       normalizedDOB,
-		Phone:     formattedPhone,
-		Email:     normalizedEmail,
-		Street:    req.Street,
-		AptSuite:  req.AptSuite,
-		City:      req.City,
-		State:     strings.ToUpper(req.State),
-		Zip:       req.Zip,
-		Sex:       normalizedSex,
-		SSN:       strings.TrimSpace(req.SSN),
-		ProfileID: office.DefaultProfileID,
+	result := h.patient.Create(r.Context(), patientmodule.CreateCommand{
+		FirstName:      req.FirstName,
+		LastName:       req.LastName,
+		DOB:            req.DOB,
+		Phone:          req.Phone,
+		Email:          req.Email,
+		Street:         req.Street,
+		AptSuite:       req.AptSuite,
+		City:           req.City,
+		State:          req.State,
+		Zip:            req.Zip,
+		Sex:            req.Sex,
+		SSN:            req.SSN,
+		Insurance:      req.Insurance,
+		CoverageType:   req.CoverageType,
+		SubscriberName: req.SubscriberName,
+		SubscriberNum:  req.SubscriberNum,
+		Office:         req.Office,
 	})
-	if err != nil {
-		log.Printf("add-patient: provider request failed category=%s", safeerrors.Classify(err))
-		if strings.Contains(err.Error(), "Duplicate name/DOB") {
-			json.NewEncoder(w).Encode(AddPatientResponse{
-				Status:  "error",
-				Message: "A patient with this name and date of birth already exists in the system. Please try verifying the patient again instead of registering.",
-			})
-			return
-		}
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:  "error",
-			Message: "Failed to create patient in AdvancedMD. Please try again or contact the office.",
-		})
-		return
+	outcome := ""
+	if result.Status != patientmodule.CreateStatusCreated {
+		outcome = string(result.Outcome)
 	}
-
-	strippedID := domain.StripPatientPrefix(rawPatientID)
-
-	// Look up insurance entry from name
-	insEntry, ok := domain.LookupInsuranceForCoverageAtOffice(req.Insurance, insuranceMode, office)
-	if !ok {
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:    "partial",
-			PatientID: strippedID,
-			Name:      patientName,
-			DOB:       normalizedDOB,
-			Message:   fmt.Sprintf("Patient created but insurance not recognized: %q. Please use an insurance name from the accepted list.", req.Insurance),
-		})
-		return
-	}
-
-	// Reject insurance not accepted at this office
-	if insEntry.Routing == domain.RoutingNotAccepted {
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:    "partial",
-			PatientID: strippedID,
-			Name:      patientName,
-			DOB:       normalizedDOB,
-			Message:   fmt.Sprintf("%s is not accepted at %s. The patient may self-pay or contact the office for options.", req.Insurance, office.DisplayName),
-		})
-		return
-	}
-
-	// Attach insurance
-	if err := h.amdClient.AddInsurance(r.Context(), tokenData, rawPatientID, respPartyID, insEntry.CarrierID, req.SubscriberNum); err != nil {
-		log.Printf("add-patient: add insurance failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(AddPatientResponse{
-			Status:    "partial",
-			PatientID: strippedID,
-			Name:      patientName,
-			DOB:       normalizedDOB,
-			Message:   "Patient created but insurance could not be attached. Please contact the office.",
-		})
-		return
-	}
-
-	routing := insEntry.Routing
-	if insuranceMode == domain.InsuranceModeMedical {
-		routing = policy.SchedulingRouting(routing, normalizedDOB)
-	}
-
 	json.NewEncoder(w).Encode(AddPatientResponse{
-		Status:           "created",
-		PatientID:        strippedID,
-		Name:             patientName,
-		DOB:              normalizedDOB,
-		Routing:          string(routing),
-		AllowedProviders: policy.ProviderNames(routing, normalizedDOB),
-		PreauthRequired:  insEntry.PreauthRequired,
-		Message:          "Patient created and insurance attached successfully",
+		Status:           string(result.Status),
+		Outcome:          outcome,
+		PatientID:        result.PatientID,
+		Name:             result.Name,
+		DOB:              result.DOB,
+		Routing:          string(result.Routing),
+		AllowedProviders: result.AllowedProviders,
+		PreauthRequired:  result.PreauthRequired,
+		Message:          result.Message,
 	})
-}
-
-func addPatientMissingFields(req AddPatientRequest) []string {
-	missing := []string{}
-	if req.FirstName == "" {
-		missing = append(missing, "firstName")
-	}
-	if req.LastName == "" {
-		missing = append(missing, "lastName")
-	}
-	if req.DOB == "" {
-		missing = append(missing, "dob")
-	}
-	if req.Phone == "" {
-		missing = append(missing, "phone")
-	}
-	if req.Street == "" {
-		missing = append(missing, "street")
-	}
-	if req.City == "" {
-		missing = append(missing, "city")
-	}
-	if req.State == "" {
-		missing = append(missing, "state")
-	}
-	if req.Zip == "" {
-		missing = append(missing, "zip")
-	}
-	if req.Sex == "" {
-		missing = append(missing, "sex")
-	}
-	if req.Insurance == "" {
-		missing = append(missing, "insurance")
-	}
-	if req.SubscriberName == "" {
-		missing = append(missing, "subscriberName")
-	}
-	if req.SubscriberNum == "" {
-		missing = append(missing, "subscriberNum")
-	}
-	return missing
 }
 
 // PatientApptDetail is a single appointment formatted for LLM consumption.
@@ -737,6 +603,7 @@ type UpdateInsuranceRequest struct {
 // UpdateInsuranceResponse is returned after updating insurance.
 type UpdateInsuranceResponse struct {
 	Status           string   `json:"status"`
+	Outcome          string   `json:"outcome,omitempty"`
 	PatientID        string   `json:"patientId,omitempty"`
 	OldInsurance     string   `json:"oldInsurance,omitempty"`
 	NewInsurance     string   `json:"newInsurance,omitempty"`
@@ -760,111 +627,32 @@ func (h *Handlers) HandleUpdateInsurance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate required fields
-	if domain.IsSelfPayInsurance(req.Insurance) && strings.TrimSpace(req.SubscriberNum) == "" {
-		req.SubscriberNum = "self pay"
+	result := h.patient.UpdateInsurance(r.Context(), patientmodule.UpdateInsuranceCommand{
+		PatientID:      req.PatientID,
+		DOB:            req.DOB,
+		InsPlanID:      req.InsPlanID,
+		RespPartyID:    req.RespPartyID,
+		OldInsurance:   req.OldInsurance,
+		Insurance:      req.Insurance,
+		CoverageType:   req.CoverageType,
+		SubscriberName: req.SubscriberName,
+		SubscriberNum:  req.SubscriberNum,
+		Office:         req.Office,
+	})
+	outcome := ""
+	if result.Status != patientmodule.UpdateInsuranceStatusUpdated {
+		outcome = string(result.Outcome)
 	}
-	if req.PatientID == "" || req.Insurance == "" || req.SubscriberNum == "" {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: "patientId, insurance, and subscriberNum are required",
-		})
-		return
-	}
-	if err := domain.ValidateOptionalDOB(req.DOB); err != nil {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{Status: "error", Message: err.Error()})
-		return
-	}
-
-	office, err := domain.ResolveOffice(req.Office)
-	if err != nil {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: err.Error(),
-		})
-		return
-	}
-	policy := domain.NewSchedulingPolicy(office)
-	insuranceMode := domain.InsuranceModeForCoverage(req.CoverageType)
-	if insuranceMode == domain.InsuranceModeVision && !policy.SupportsRouting(domain.RoutingOpticalOnly) {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Routine vision coverage is not supported at %s. Route the patient to Spring Hill routine vision scheduling.", office.DisplayName),
-		})
-		return
-	}
-	if insuranceMode == domain.InsuranceModeMedical && !policy.SupportsMedical() {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Medical coverage is not supported at %s. Use routine vision coverage for this office or route medical visits to a medical office.", office.DisplayName),
-		})
-		return
-	}
-
-	// Look up new insurance
-	insEntry, found := domain.LookupInsuranceForCoverageAtOffice(req.Insurance, insuranceMode, office)
-	if !found {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("Insurance not recognized: %q. Please use an insurance name from the accepted list.", req.Insurance),
-		})
-		return
-	}
-
-	if insEntry.Routing == domain.RoutingNotAccepted {
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("%s is not accepted at %s.", req.Insurance, office.DisplayName),
-		})
-		return
-	}
-
-	// Get AMD token
-	tokenData, err := h.session.Get(r.Context())
-	if err != nil {
-		log.Printf("update-insurance: authentication failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: "Service authentication is temporarily unavailable. Please try again.",
-		})
-		return
-	}
-
-	// End-date old plan if insplan ID provided
-	if req.InsPlanID != "" {
-		if err := h.amdClient.EndDateInsurance(r.Context(), tokenData, req.PatientID, req.InsPlanID); err != nil {
-			log.Printf("update-insurance: end-date failed category=%s", safeerrors.Classify(err))
-			json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-				Status:  "error",
-				Message: "Failed to update existing insurance in AdvancedMD. Please try again or contact the office.",
-			})
-			return
-		}
-	}
-
-	// Add new insurance plan
-	if err := h.amdClient.AddInsurance(r.Context(), tokenData, req.PatientID, req.RespPartyID, insEntry.CarrierID, req.SubscriberNum); err != nil {
-		log.Printf("update-insurance: add insurance failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-			Status:  "error",
-			Message: "Failed to attach new insurance in AdvancedMD. Please try again or contact the office.",
-		})
-		return
-	}
-
-	routing := insEntry.Routing
-	routing = policy.SchedulingRouting(routing, req.DOB)
-	_, ambiguous := domain.RoutingForDemographicInsurance(insEntry.CarrierID, req.Insurance, office)
-
 	json.NewEncoder(w).Encode(UpdateInsuranceResponse{
-		Status:           "updated",
-		PatientID:        req.PatientID,
-		OldInsurance:     req.OldInsurance,
-		NewInsurance:     req.Insurance,
-		Routing:          string(routing),
-		AllowedProviders: policy.ProviderNames(routing, req.DOB),
-		RoutingAmbiguous: ambiguous,
-		PreauthRequired:  insEntry.PreauthRequired,
-		Message:          "Insurance updated successfully",
+		Status:           string(result.Status),
+		Outcome:          outcome,
+		PatientID:        result.PatientID,
+		OldInsurance:     result.OldInsurance,
+		NewInsurance:     result.NewInsurance,
+		Routing:          string(result.Routing),
+		AllowedProviders: result.AllowedProviders,
+		RoutingAmbiguous: result.RoutingAmbiguous,
+		PreauthRequired:  result.PreauthRequired,
+		Message:          result.Message,
 	})
 }

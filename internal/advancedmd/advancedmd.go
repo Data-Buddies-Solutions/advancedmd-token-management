@@ -18,6 +18,17 @@ type Error struct {
 	ambiguousWrite bool
 }
 
+type MutationFailure string
+
+const (
+	MutationRejected  MutationFailure = "rejected"
+	MutationAmbiguous MutationFailure = "ambiguous_write"
+)
+
+type MutationError struct {
+	failure MutationFailure
+}
+
 func NewError(category safeerrors.Category) error {
 	return &Error{category: category}
 }
@@ -28,8 +39,16 @@ func NewAmbiguousWriteError(category safeerrors.Category) error {
 	return &Error{category: category, ambiguousWrite: true}
 }
 
+func NewMutationError(failure MutationFailure) error {
+	return &MutationError{failure: failure}
+}
+
 func (e *Error) Error() string {
 	return string(e.category)
+}
+
+func (e *MutationError) Error() string {
+	return string(e.failure)
 }
 
 func CategoryOf(err error) safeerrors.Category {
@@ -47,6 +66,22 @@ func IsAmbiguousWrite(err error) bool {
 	return errors.As(err, &classified) && classified.ambiguousWrite
 }
 
+func MutationFailureOf(err error) MutationFailure {
+	var classified *MutationError
+	if errors.As(err, &classified) {
+		return classified.failure
+	}
+	if IsAmbiguousWrite(err) {
+		return MutationAmbiguous
+	}
+	switch CategoryOf(err) {
+	case safeerrors.CategoryAuthentication, safeerrors.CategoryConflict, safeerrors.CategoryRejected:
+		return MutationRejected
+	default:
+		return ""
+	}
+}
+
 // PatientRecords is the AdvancedMD surface required by the Patient module.
 // Implementations own authentication, provider endpoints, request formats, and
 // response parsing.
@@ -54,6 +89,9 @@ type PatientRecords interface {
 	SearchPatients(ctx context.Context, search domain.PatientSearch) ([]domain.Patient, error)
 	GetPatientDemographics(ctx context.Context, patientID string) (domain.PatientDemographics, error)
 	GetUpcomingAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) ([]domain.PatientAppointment, error)
+	CreatePatient(ctx context.Context, command domain.PatientCreate) (domain.CreatedPatient, error)
+	AddPatientInsurance(ctx context.Context, command domain.PatientInsurance) error
+	EndDatePatientInsurance(ctx context.Context, command domain.PatientInsuranceEnd) error
 }
 
 // SchedulingRecords is the AdvancedMD surface required by the Scheduling

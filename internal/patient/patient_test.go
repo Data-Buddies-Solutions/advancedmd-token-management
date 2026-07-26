@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +96,549 @@ func TestResolveReturnsCompletePatientForPhoneLookup(t *testing.T) {
 	var _ advancedmd.PatientRecords = amd
 }
 
+func TestCreateReturnsExistingSuccessContract(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatedPatient = domain.CreatedPatient{
+		ID:          "123",
+		RespPartyID: "resp456",
+		Name:        "DOE,JANE",
+	}
+
+	got := patient.New(amd).Create(context.Background(), patient.CreateCommand{
+		FirstName:      "Jäne",
+		LastName:       "Döe",
+		DOB:            "1980-01-15",
+		Phone:          "9542872010",
+		Email:          " jane@example.com ",
+		Street:         "123 Main St",
+		City:           "Spring Hill",
+		State:          "fl",
+		Zip:            "34609",
+		Sex:            "female",
+		Insurance:      "Humana Medicare",
+		SubscriberName: "Jane Doe",
+		SubscriberNum:  "H123",
+		Office:         "Spring Hill",
+	})
+
+	want := patient.CreateResult{
+		Status:           patient.CreateStatusCreated,
+		PatientID:        "123",
+		Name:             "DOE,JANE",
+		DOB:              "01/15/1980",
+		Routing:          domain.RoutingBachOnly,
+		AllowedProviders: []string{"Dr. Bach"},
+		Message:          "Patient created and insurance attached successfully",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Create() = %+v, want %+v", got, want)
+	}
+}
+
+func TestCreateOwnsValidationAndOfficeResolution(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+
+	command := validCreateCommand()
+	command.Office = "Unknown"
+	command.FirstName = ""
+	got := patient.New(amd).Create(context.Background(), command)
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationValidationFailed {
+		t.Fatalf("Create() = %+v, want validation failure", got)
+	}
+	if got.Message != `unknown office: "Unknown". Valid options: Crystal River, Hollywood, North Miami Beach Optical, Spring Hill, Sweetwater` {
+		t.Fatalf("Message = %q", got.Message)
+	}
+	if amd.CreatePatientCalls != 0 {
+		t.Fatalf("CreatePatient calls = %d, want none", amd.CreatePatientCalls)
+	}
+}
+
+func TestCreateReturnsStableRejectionWithoutRetry(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationRejected)
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationRejected {
+		t.Fatalf("Create() = %+v, want stable rejection", got)
+	}
+	if amd.CreatePatientCalls != 1 {
+		t.Fatalf("CreatePatient calls = %d, want one", amd.CreatePatientCalls)
+	}
+	if amd.SearchPatientCalls != 1 {
+		t.Fatalf("SearchPatients calls = %d, want one pre-write baseline read", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateReconcilesAmbiguousWriteAfterTransientReadFailure(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.PatientSearchSequence[search] = []advancedmdtest.PatientSearchStep{
+		{},
+		{Err: advancedmd.NewError(safeerrors.CategoryNetwork)},
+		{Patients: []domain.Patient{{
+			ID:        "123",
+			FirstName: "JANE",
+			FullName:  "DOE,JANE",
+			DOB:       "01/15/1980",
+			Phone:     "(954)287-2010",
+		}}},
+	}
+	amd.Demographics["123"] = domain.PatientDemographics{RespPartyID: "resp456"}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusCreated || got.Outcome != patient.MutationReconciledSuccess {
+		t.Fatalf("Create() = %+v, want reconciled success", got)
+	}
+	if amd.CreatePatientCalls != 1 {
+		t.Fatalf("CreatePatient calls = %d, want one", amd.CreatePatientCalls)
+	}
+	if amd.SearchPatientCalls != 3 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus transient read and retry", amd.SearchPatientCalls)
+	}
+	if amd.AddInsuranceCalls != 1 {
+		t.Fatalf("AddPatientInsurance calls = %d, want one after reconciliation", amd.AddInsuranceCalls)
+	}
+}
+
+func TestCreateKeepsEmptyReconciliationLookupIndeterminate(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("Create() = %+v, want indeterminate write", got)
+	}
+	if amd.CreatePatientCalls != 1 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 1/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 4 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus three bounded polls", amd.SearchPatientCalls)
+	}
+	if !strings.Contains(got.Message, "Do not retry automatically") {
+		t.Fatalf("Message = %q, want no-retry guidance", got.Message)
+	}
+}
+
+func TestCreatePollsUntilNewPatientBecomesVisible(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.PatientSearchSequence[search] = []advancedmdtest.PatientSearchStep{
+		{},
+		{},
+		{Patients: []domain.Patient{{
+			ID:        "123",
+			FirstName: "JANE",
+			FullName:  "DOE,JANE",
+			DOB:       "01/15/1980",
+			Phone:     "(954)287-2010",
+		}}},
+	}
+	amd.Demographics["123"] = domain.PatientDemographics{RespPartyID: "resp456"}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusCreated || got.Outcome != patient.MutationReconciledSuccess {
+		t.Fatalf("Create() = %+v, want reconciled success after visibility delay", got)
+	}
+	if amd.SearchPatientCalls != 3 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus two post-write polls", amd.SearchPatientCalls)
+	}
+	if amd.AddInsuranceCalls != 1 {
+		t.Fatalf("AddPatientInsurance calls = %d, want one", amd.AddInsuranceCalls)
+	}
+}
+
+func TestCreateKeepsUnidentifiablePostWriteMatchIndeterminate(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.PatientSearchSequence[search] = []advancedmdtest.PatientSearchStep{
+		{},
+		{Patients: []domain.Patient{
+			{
+				ID:        "123",
+				FirstName: "JANE",
+				FullName:  "DOE,JANE",
+				DOB:       "01/15/1980",
+				Phone:     "(954)287-2010",
+			},
+			{
+				FirstName: "JANE",
+				FullName:  "DOE,JANE",
+				DOB:       "01/15/1980",
+				Phone:     "(954)287-2010",
+			},
+		}},
+	}
+	amd.Demographics["123"] = domain.PatientDemographics{RespPartyID: "resp456"}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("Create() = %+v, want unidentifiable post-write match to remain indeterminate", got)
+	}
+	if amd.CreatePatientCalls != 1 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 1/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 2 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus one unsafe result", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateDoesNotAdoptPreexistingPatientAfterAmbiguousWrite(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	existing := domain.Patient{
+		ID:        "123",
+		FirstName: "JANE",
+		FullName:  "DOE,JANE",
+		DOB:       "01/15/1980",
+		Phone:     "(954)287-2010",
+	}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.PatientSearches[search] = []domain.Patient{existing}
+	amd.Demographics["123"] = domain.PatientDemographics{RespPartyID: "resp456"}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("Create() = %+v, want pre-existing match to remain indeterminate", got)
+	}
+	if amd.CreatePatientCalls != 1 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 1/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 4 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus three bounded polls", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateDoesNotAdoptPreexistingPatientWhoseLookupDetailsChanged(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	existing := domain.Patient{
+		ID:        "123",
+		FirstName: "JANE",
+		FullName:  "DOE,JANE",
+		DOB:       "01/15/1980",
+		Phone:     "(954)287-2010",
+	}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.PatientSearchSequence[search] = []advancedmdtest.PatientSearchStep{{
+		Patients: []domain.Patient{{
+			ID:        "123",
+			FirstName: "JANE",
+		}},
+	}}
+	amd.PatientSearches[search] = []domain.Patient{existing}
+	amd.Demographics["123"] = domain.PatientDemographics{RespPartyID: "resp456"}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("Create() = %+v, want changed pre-existing match to remain indeterminate", got)
+	}
+	if amd.CreatePatientCalls != 1 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 1/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 4 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus three bounded polls", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateDoesNotWriteWithAnUnidentifiableBaselinePatient(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatedPatient = domain.CreatedPatient{
+		ID:          "123",
+		RespPartyID: "resp456",
+		Name:        "DOE,JANE",
+	}
+	amd.PatientSearches[search] = []domain.Patient{{
+		FirstName: "JANE",
+		FullName:  "DOE,JANE",
+		DOB:       "01/15/1980",
+		Phone:     "(954)287-2010",
+	}}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationFailed {
+		t.Fatalf("Create() = %+v, want safe pre-write failure", got)
+	}
+	if amd.CreatePatientCalls != 0 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 0/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 1 {
+		t.Fatalf("SearchPatients calls = %d, want one baseline read", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateDoesNotWriteWithoutAReconciliationBaseline(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	amd := advancedmdtest.NewAdapter()
+	amd.PatientErrors[search] = advancedmd.NewError(safeerrors.CategoryNetwork)
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationFailed {
+		t.Fatalf("Create() = %+v, want safe pre-write failure", got)
+	}
+	if amd.CreatePatientCalls != 0 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 0/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 3 {
+		t.Fatalf("SearchPatients calls = %d, want bounded baseline retries", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateReturnsIndeterminateWhenReconciliationCannotProveOutcome(t *testing.T) {
+	domain.InitRegistry("")
+	search := domain.PatientSearch{Phone: "9542872010"}
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatePatientError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.PatientSearchSequence[search] = []advancedmdtest.PatientSearchStep{
+		{},
+		{Err: advancedmd.NewError(safeerrors.CategoryNetwork)},
+		{Err: advancedmd.NewError(safeerrors.CategoryNetwork)},
+		{Err: advancedmd.NewError(safeerrors.CategoryNetwork)},
+	}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("Create() = %+v, want indeterminate write", got)
+	}
+	if amd.CreatePatientCalls != 1 || amd.AddInsuranceCalls != 0 {
+		t.Fatalf("mutation calls = create:%d insurance:%d, want 1/0", amd.CreatePatientCalls, amd.AddInsuranceCalls)
+	}
+	if amd.SearchPatientCalls != 4 {
+		t.Fatalf("SearchPatients calls = %d, want baseline plus bounded three attempts", amd.SearchPatientCalls)
+	}
+}
+
+func TestCreateReconcilesAmbiguousInsuranceAttachment(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.CreatedPatient = domain.CreatedPatient{
+		ID:          "123",
+		RespPartyID: "resp456",
+		Name:        "DOE,JANE",
+	}
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.Demographics["123"] = domain.PatientDemographics{
+		CarrierName:         "HUMANA MEDICARE",
+		CarrierID:           "car308175",
+		InsPlanID:           "ins456",
+		RespPartyID:         "resp456",
+		SubscriberNum:       "H123",
+		InsuranceStateKnown: true,
+	}
+
+	got := patient.New(amd).Create(context.Background(), validCreateCommand())
+
+	if got.Status != patient.CreateStatusCreated || got.Outcome != patient.MutationReconciledSuccess {
+		t.Fatalf("Create() = %+v, want reconciled insurance success", got)
+	}
+	if amd.AddInsuranceCalls != 1 || amd.DemographicCalls != 1 {
+		t.Fatalf("calls = add:%d demographics:%d, want 1/1", amd.AddInsuranceCalls, amd.DemographicCalls)
+	}
+}
+
+func TestUpdateInsuranceReturnsExistingSuccessContract(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+
+	got := patient.New(amd).UpdateInsurance(context.Background(), patient.UpdateInsuranceCommand{
+		PatientID:      "123",
+		DOB:            "01/15/1980",
+		InsPlanID:      "ins123",
+		RespPartyID:    "resp123",
+		OldInsurance:   "Old",
+		Insurance:      "Humana Medicare",
+		SubscriberName: "Jane Doe",
+		SubscriberNum:  "H123",
+		Office:         "Spring Hill",
+	})
+
+	want := patient.UpdateInsuranceResult{
+		Status:           patient.UpdateInsuranceStatusUpdated,
+		PatientID:        "123",
+		OldInsurance:     "Old",
+		NewInsurance:     "Humana Medicare",
+		Routing:          domain.RoutingBachOnly,
+		AllowedProviders: []string{"Dr. Bach"},
+		Message:          "Insurance updated successfully",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("UpdateInsurance() = %+v, want %+v", got, want)
+	}
+}
+
+func TestUpdateInsuranceReturnsStableRejectionWithoutRetry(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationRejected)
+
+	command := validUpdateInsuranceCommand()
+	command.InsPlanID = ""
+	got := patient.New(amd).UpdateInsurance(context.Background(), command)
+
+	if got.Status != patient.UpdateInsuranceStatusError || got.Outcome != patient.MutationRejected {
+		t.Fatalf("UpdateInsurance() = %+v, want stable rejection", got)
+	}
+	if amd.AddInsuranceCalls != 1 {
+		t.Fatalf("AddPatientInsurance calls = %d, want one", amd.AddInsuranceCalls)
+	}
+}
+
+func TestUpdateInsuranceReconcilesAmbiguousWriteAfterTransientReadFailure(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.DemographicErrorSequence["123"] = []error{
+		advancedmd.NewError(safeerrors.CategoryTimeout),
+		nil,
+	}
+	amd.Demographics["123"] = domain.PatientDemographics{
+		CarrierName:         "HUMANA MEDICARE",
+		CarrierID:           "car308175",
+		InsPlanID:           "ins456",
+		RespPartyID:         "resp123",
+		SubscriberNum:       "H123",
+		InsuranceStateKnown: true,
+	}
+
+	command := validUpdateInsuranceCommand()
+	command.InsPlanID = ""
+	got := patient.New(amd).UpdateInsurance(context.Background(), command)
+
+	if got.Status != patient.UpdateInsuranceStatusUpdated || got.Outcome != patient.MutationReconciledSuccess {
+		t.Fatalf("UpdateInsurance() = %+v, want reconciled success", got)
+	}
+	if amd.AddInsuranceCalls != 1 {
+		t.Fatalf("AddPatientInsurance calls = %d, want one", amd.AddInsuranceCalls)
+	}
+	if amd.DemographicCalls != 2 {
+		t.Fatalf("GetPatientDemographics calls = %d, want transient read plus retry", amd.DemographicCalls)
+	}
+}
+
+func TestUpdateInsuranceReconcilesAmbiguousEndDateBeforeAddingReplacement(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.EndInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.Demographics["123"] = domain.PatientDemographics{
+		RespPartyID:         "resp123",
+		InsuranceStateKnown: true,
+	}
+
+	got := patient.New(amd).UpdateInsurance(context.Background(), validUpdateInsuranceCommand())
+
+	if got.Status != patient.UpdateInsuranceStatusUpdated || got.Outcome != patient.MutationReconciledSuccess {
+		t.Fatalf("UpdateInsurance() = %+v, want reconciled success", got)
+	}
+	if amd.EndInsuranceCalls != 1 || amd.AddInsuranceCalls != 1 {
+		t.Fatalf("mutation calls = end:%d add:%d, want 1/1", amd.EndInsuranceCalls, amd.AddInsuranceCalls)
+	}
+}
+
+func TestUpdateInsuranceReturnsReconciledFailureWhenDemographicsProveNoWrite(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.Demographics["123"] = domain.PatientDemographics{
+		CarrierName:         "AETNA",
+		CarrierID:           "car40887",
+		InsPlanID:           "ins123",
+		InsuranceStateKnown: true,
+	}
+
+	command := validUpdateInsuranceCommand()
+	command.InsPlanID = ""
+	got := patient.New(amd).UpdateInsurance(context.Background(), command)
+
+	if got.Status != patient.UpdateInsuranceStatusError || got.Outcome != patient.MutationReconciledFailure {
+		t.Fatalf("UpdateInsurance() = %+v, want reconciled failure", got)
+	}
+	if amd.AddInsuranceCalls != 1 {
+		t.Fatalf("AddPatientInsurance calls = %d, want one", amd.AddInsuranceCalls)
+	}
+}
+
+func TestUpdateInsuranceDoesNotAcceptPreexistingSameCarrierAsReconciledSuccess(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.Demographics["123"] = domain.PatientDemographics{
+		CarrierID:           "car308175",
+		InsPlanID:           "ins456",
+		RespPartyID:         "resp123",
+		SubscriberNum:       "OLD-MEMBER",
+		InsuranceStateKnown: true,
+	}
+
+	command := validUpdateInsuranceCommand()
+	command.InsPlanID = ""
+	got := patient.New(amd).UpdateInsurance(context.Background(), command)
+
+	if got.Status != patient.UpdateInsuranceStatusError || got.Outcome != patient.MutationReconciledFailure {
+		t.Fatalf("UpdateInsurance() = %+v, want same-carrier mismatch failure", got)
+	}
+}
+
+func TestUpdateInsuranceReturnsIndeterminateWhenDemographicsCannotProveOutcome(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.DemographicErrors["123"] = advancedmd.NewError(safeerrors.CategoryNetwork)
+
+	command := validUpdateInsuranceCommand()
+	command.InsPlanID = ""
+	got := patient.New(amd).UpdateInsurance(context.Background(), command)
+
+	if got.Status != patient.UpdateInsuranceStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("UpdateInsurance() = %+v, want indeterminate write", got)
+	}
+	if amd.AddInsuranceCalls != 1 || amd.DemographicCalls != 3 {
+		t.Fatalf("calls = add:%d demographics:%d, want 1/3", amd.AddInsuranceCalls, amd.DemographicCalls)
+	}
+}
+
+func TestUpdateInsuranceReturnsIndeterminateWhenInsuranceStateIsIncomplete(t *testing.T) {
+	domain.InitRegistry("")
+	amd := advancedmdtest.NewAdapter()
+	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
+	amd.Demographics["123"] = domain.PatientDemographics{
+		CarrierID: "car308175",
+		InsPlanID: "ins456",
+	}
+
+	command := validUpdateInsuranceCommand()
+	command.InsPlanID = ""
+	got := patient.New(amd).UpdateInsurance(context.Background(), command)
+
+	if got.Status != patient.UpdateInsuranceStatusError || got.Outcome != patient.MutationIndeterminateWrite {
+		t.Fatalf("UpdateInsurance() = %+v, want incomplete-state indeterminate write", got)
+	}
+}
+
 func TestResolveReturnsCompleteResultsForMultipleMatches(t *testing.T) {
 	domain.InitRegistry("")
 	office, _ := domain.LookupOffice("Spring Hill")
@@ -144,6 +688,38 @@ func TestResolveReturnsCompleteResultsForMultipleMatches(t *testing.T) {
 	}
 	if got.Matches[1].PatientID != "456" || got.Matches[1].AppointmentsStatus != patient.AppointmentsNone {
 		t.Fatalf("second match = %+v", got.Matches[1])
+	}
+}
+
+func validCreateCommand() patient.CreateCommand {
+	return patient.CreateCommand{
+		FirstName:      "Jane",
+		LastName:       "Doe",
+		DOB:            "01/15/1980",
+		Phone:          "9542872010",
+		Street:         "123 Main St",
+		City:           "Spring Hill",
+		State:          "FL",
+		Zip:            "34609",
+		Sex:            "female",
+		Insurance:      "Humana Medicare",
+		SubscriberName: "Jane Doe",
+		SubscriberNum:  "H123",
+		Office:         "Spring Hill",
+	}
+}
+
+func validUpdateInsuranceCommand() patient.UpdateInsuranceCommand {
+	return patient.UpdateInsuranceCommand{
+		PatientID:      "123",
+		DOB:            "01/15/1980",
+		InsPlanID:      "ins123",
+		RespPartyID:    "resp123",
+		OldInsurance:   "Old",
+		Insurance:      "Humana Medicare",
+		SubscriberName: "Jane Doe",
+		SubscriberNum:  "H123",
+		Office:         "Spring Hill",
 	}
 }
 

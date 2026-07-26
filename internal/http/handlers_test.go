@@ -43,6 +43,30 @@ func TestHandleLive(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointExposesSafePatientMutationOutcomes(t *testing.T) {
+	const patientID = "patient-identifier-must-not-appear"
+	patientmodule.New(advancedmdtest.NewAdapter()).UpdateInsurance(context.Background(), patientmodule.UpdateInsuranceCommand{
+		PatientID: patientID,
+	})
+
+	router := NewRouter(NewHandlers(nil, nil, nil, nil, nil), "test-secret", nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `patient_mutation_outcomes_total{operation="update_insurance",outcome="validation_failed"}`) {
+		t.Fatalf("metrics body = %q", body)
+	}
+	if strings.Contains(body, patientID) {
+		t.Fatalf("metrics exposed patient identifier: %q", body)
+	}
+}
+
 func TestPatientResolveKeepsStableResponseWhenSessionUnavailable(t *testing.T) {
 	records := advancedmd.NewAdapter(unavailableSession{}, nil, nil)
 	handlers := NewHandlers(unavailableSession{}, nil, nil, patientmodule.New(records), nil)
@@ -501,6 +525,84 @@ func TestProviderFailuresAreRedactedFromResponsesAndLogs(t *testing.T) {
 	})
 }
 
+func TestPatientMutationRoutesCallPatientInterface(t *testing.T) {
+	service := &patientStub{
+		createResult: patientmodule.CreateResult{
+			Status:    patientmodule.CreateStatusCreated,
+			PatientID: "123",
+			Name:      "DOE,JANE",
+			DOB:       "01/15/1980",
+			Message:   "Patient created and insurance attached successfully",
+		},
+		updateResult: patientmodule.UpdateInsuranceResult{
+			Status:       patientmodule.UpdateInsuranceStatusUpdated,
+			PatientID:    "123",
+			OldInsurance: "Old",
+			NewInsurance: "Humana Medicare",
+			Message:      "Insurance updated successfully",
+		},
+	}
+	handlers := &Handlers{patient: service}
+
+	t.Run("create", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/add-patient", strings.NewReader(`{
+			"firstName":"Jane","lastName":"Doe","dob":"01/15/1980","phone":"9542872010",
+			"street":"123 Main St","city":"Spring Hill","state":"FL","zip":"34609","sex":"female",
+			"insurance":"Humana Medicare","subscriberName":"Jane Doe","subscriberNum":"H123","office":"Spring Hill"
+		}`))
+		w := httptest.NewRecorder()
+		handlers.HandleAddPatient(w, req)
+
+		if service.createCalls != 1 || service.createCommand.Office != "Spring Hill" {
+			t.Fatalf("Create calls = %d command = %+v", service.createCalls, service.createCommand)
+		}
+		if strings.Contains(w.Body.String(), `"outcome"`) {
+			t.Fatalf("successful response changed contract: %s", w.Body.String())
+		}
+	})
+
+	t.Run("update insurance", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/patient/update-insurance", strings.NewReader(`{
+			"patientId":"123","oldInsurance":"Old","insurance":"Humana Medicare",
+			"subscriberNum":"H123","office":"Spring Hill"
+		}`))
+		w := httptest.NewRecorder()
+		handlers.HandleUpdateInsurance(w, req)
+
+		if service.updateCalls != 1 || service.updateCommand.PatientID != "123" {
+			t.Fatalf("UpdateInsurance calls = %d command = %+v", service.updateCalls, service.updateCommand)
+		}
+		if strings.Contains(w.Body.String(), `"outcome"`) {
+			t.Fatalf("successful response changed contract: %s", w.Body.String())
+		}
+	})
+}
+
+type patientStub struct {
+	createResult  patientmodule.CreateResult
+	updateResult  patientmodule.UpdateInsuranceResult
+	createCommand patientmodule.CreateCommand
+	updateCommand patientmodule.UpdateInsuranceCommand
+	createCalls   int
+	updateCalls   int
+}
+
+func (s *patientStub) Resolve(context.Context, patientmodule.ResolveCommand) (patientmodule.ResolveResult, error) {
+	return patientmodule.ResolveResult{}, nil
+}
+
+func (s *patientStub) Create(_ context.Context, command patientmodule.CreateCommand) patientmodule.CreateResult {
+	s.createCalls++
+	s.createCommand = command
+	return s.createResult
+}
+
+func (s *patientStub) UpdateInsurance(_ context.Context, command patientmodule.UpdateInsuranceCommand) patientmodule.UpdateInsuranceResult {
+	s.updateCalls++
+	s.updateCommand = command
+	return s.updateResult
+}
+
 func captureLogs(run func()) string {
 	var logs bytes.Buffer
 	previousWriter := log.Writer()
@@ -525,45 +627,8 @@ func assertRedacted(t *testing.T, response, logs string, forbidden ...string) {
 	}
 }
 
-func TestAddPatientMissingFields_EmailAndSSNOptional(t *testing.T) {
-	baseReq := AddPatientRequest{
-		FirstName:      "Jane",
-		LastName:       "Doe",
-		DOB:            "2000-03-01",
-		Phone:          "555-123-4567",
-		Street:         "123 Main St",
-		City:           "Miami",
-		State:          "FL",
-		Zip:            "33101",
-		Sex:            "F",
-		Insurance:      "Aetna",
-		SubscriberName: "Jane Doe",
-		SubscriberNum:  "A12345",
-	}
-
-	tests := []struct {
-		name  string
-		email string
-	}{
-		{name: "omitted", email: ""},
-		{name: "blank", email: "   "},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := baseReq
-			req.Email = tt.email
-
-			missing := addPatientMissingFields(req)
-			if len(missing) != 0 {
-				t.Fatalf("Expected no missing fields when email is %s, got %v", tt.name, missing)
-			}
-		})
-	}
-}
-
 func TestHandleAddPatient_RoutineVisionRequiresOpticalOffice(t *testing.T) {
-	handlers := &Handlers{}
+	handlers := &Handlers{patient: patientmodule.New(advancedmdtest.NewAdapter())}
 	req := httptest.NewRequest("POST", "/api/add-patient", bytes.NewBufferString(`{
 		"firstName":"Jane",
 		"lastName":"Doe",
@@ -597,7 +662,7 @@ func TestHandleAddPatient_RoutineVisionRequiresOpticalOffice(t *testing.T) {
 }
 
 func TestHandleAddPatient_RoutineOnlyOfficeRejectsMedical(t *testing.T) {
-	handlers := &Handlers{}
+	handlers := &Handlers{patient: patientmodule.New(advancedmdtest.NewAdapter())}
 	req := httptest.NewRequest("POST", "/api/add-patient", bytes.NewBufferString(`{
 		"firstName":"Jane",
 		"lastName":"Doe",
@@ -888,7 +953,7 @@ func TestPatientApptDetail_IncludesID(t *testing.T) {
 }
 
 func TestHandleUpdateInsurance_ValidationErrors(t *testing.T) {
-	handlers := &Handlers{}
+	handlers := &Handlers{patient: patientmodule.New(advancedmdtest.NewAdapter())}
 
 	tests := []struct {
 		name        string

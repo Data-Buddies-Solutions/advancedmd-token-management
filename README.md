@@ -180,7 +180,8 @@ deployment, smoke, and rollback contract.
 
 ## Authentication
 
-`GET /health`, `GET /live`, and `GET /ready` are unauthenticated. Every
+`GET /health`, `GET /live`, `GET /ready`, and `GET /metrics` are
+unauthenticated. Every
 `/api/*` route requires:
 
 ```http
@@ -326,6 +327,11 @@ AdvancedMD outages do not make this probe fail:
 {"status":"ready"}
 ```
 
+### GET /metrics
+
+Returns Prometheus counters for patient mutations labeled only by operation and
+outcome category. Patient identifiers and provider details are never included.
+
 ### POST /ops/session/maintenance
 
 Invokes proactive Session maintenance. Cloud Scheduler calls this route with
@@ -380,8 +386,15 @@ tokens when appointments exist.
 
 ### POST /api/add-patient
 
-Creates the patient with XMLRPC `addpatient`, then attaches insurance with
-`addinsurance`.
+The Patient module validates and normalizes the request, resolves the office and
+insurance route, creates the patient with XMLRPC `addpatient`, and then attaches
+insurance with `addinsurance`. A timeout, connection reset, or unreadable
+provider response is never retried as a mutation. Patient creation is reconciled
+through patient lookup before insurance can be attached. Patient identifiers are
+captured before the write, and creation does not proceed without a complete
+baseline. After an ambiguous response, only a newly appearing exact match proves
+success. Empty, unidentifiable, or pre-existing-only results remain
+`indeterminate_write`.
 
 Request:
 
@@ -412,10 +425,15 @@ Required fields: `firstName`, `lastName`, `dob`, `phone`, `street`, `city`,
 Optional fields: `email`, `aptSuite`, `coverageType`, `office`.
 
 Response statuses: `created`, `partial`, `error`.
+Failure responses include a stable `outcome`, including `rejected`,
+`reconciled_failure`, and `indeterminate_write`. An
+`indeterminate_write` response must not be retried automatically.
 
 ### POST /api/patient/update-insurance
 
-End-dates the old insurance plan and attaches a new one.
+The Patient module end-dates the old insurance plan and attaches a new one. An
+ambiguous write is reconciled by re-reading the active demographic insurance
+state; the mutation itself is never retried.
 
 Request:
 
@@ -438,6 +456,8 @@ Request:
 return age-filtered `allowedProviders` and apply medical pediatric routing.
 
 Response statuses: `updated`, `error`.
+Failure responses use the same stable mutation `outcome` categories as patient
+creation.
 
 ### POST /api/scheduler/availability
 
