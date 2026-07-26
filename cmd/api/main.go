@@ -15,6 +15,8 @@ import (
 	"advancedmd-token-management/internal/domain"
 	apphttp "advancedmd-token-management/internal/http"
 	"advancedmd-token-management/internal/patient"
+	"advancedmd-token-management/internal/safeerrors"
+	"advancedmd-token-management/internal/safelog"
 	"advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
 )
@@ -23,7 +25,8 @@ const version = "1.0.0"
 
 func main() {
 	// Configure logger to write to stdout (Railway interprets stderr as error-level)
-	log.SetOutput(os.Stdout)
+	log.SetFlags(0)
+	log.SetOutput(safelog.NewWriter(os.Stdout))
 	log.Printf("Starting gateway v%s", version)
 
 	// Initialize office registry based on AMD_ENV
@@ -32,7 +35,7 @@ func main() {
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("Failed to load config category=%s", safeerrors.Classify(err))
 	}
 
 	// Initialize shared HTTP client for AdvancedMD calls
@@ -99,7 +102,7 @@ func main() {
 	go func() {
 		log.Printf("Server listening on port %s", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+			log.Fatalf("Server error category=%s", safeerrors.Classify(err))
 		}
 	}()
 
@@ -114,7 +117,7 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		log.Fatalf("Server forced to shutdown category=%s", safeerrors.Classify(err))
 	}
 
 	log.Println("Server exited")

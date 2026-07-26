@@ -180,19 +180,22 @@ func TestBookUsesVerifiedPatientDOBWhenSignedSlotOmittedIt(t *testing.T) {
 func TestBookReturnsExplicitProviderFailuresWithoutRetry(t *testing.T) {
 	now := mutationTestNow()
 	tests := []struct {
-		name     string
-		provider error
-		category scheduling.Category
+		name            string
+		provider        error
+		category        scheduling.Category
+		providerFailure safeerrors.Category
 	}{
 		{
-			name:     "conflict",
-			provider: advancedmd.NewError(safeerrors.CategoryConflict),
-			category: scheduling.CategorySlotUnavailable,
+			name:            "conflict",
+			provider:        advancedmd.NewError(safeerrors.CategoryConflict),
+			category:        scheduling.CategorySlotUnavailable,
+			providerFailure: safeerrors.CategoryConflict,
 		},
 		{
-			name:     "rejection",
-			provider: advancedmd.NewError(safeerrors.CategoryRejected),
-			category: scheduling.CategoryProviderRejected,
+			name:            "rejection",
+			provider:        advancedmd.NewError(safeerrors.CategoryRejected),
+			category:        scheduling.CategoryProviderRejected,
+			providerFailure: safeerrors.CategoryRejected,
 		},
 	}
 
@@ -205,6 +208,9 @@ func TestBookReturnsExplicitProviderFailuresWithoutRetry(t *testing.T) {
 				Book(context.Background(), signedBookCommand(t, now))
 			if scheduling.CategoryOf(err) != tt.category {
 				t.Fatalf("Book error = %v, category = %q", err, scheduling.CategoryOf(err))
+			}
+			if got := scheduling.ProviderFailureOf(err); got != tt.providerFailure {
+				t.Fatalf("ProviderFailureOf(error) = %q, want %q", got, tt.providerFailure)
 			}
 			if len(records.Bookings) != 1 {
 				t.Fatalf("provider bookings = %d, want exactly one", len(records.Bookings))
@@ -420,19 +426,22 @@ func TestCancelRequiresCompleteReadToRejectOwnership(t *testing.T) {
 func TestCancelReturnsExplicitProviderFailuresWithoutRetry(t *testing.T) {
 	now := mutationTestNow()
 	tests := []struct {
-		name     string
-		provider error
-		category scheduling.Category
+		name            string
+		provider        error
+		category        scheduling.Category
+		providerFailure safeerrors.Category
 	}{
 		{
-			name:     "conflict",
-			provider: advancedmd.NewError(safeerrors.CategoryConflict),
-			category: scheduling.CategoryProviderConflict,
+			name:            "conflict",
+			provider:        advancedmd.NewError(safeerrors.CategoryConflict),
+			category:        scheduling.CategoryProviderConflict,
+			providerFailure: safeerrors.CategoryConflict,
 		},
 		{
-			name:     "rejection",
-			provider: advancedmd.NewError(safeerrors.CategoryRejected),
-			category: scheduling.CategoryProviderRejected,
+			name:            "rejection",
+			provider:        advancedmd.NewError(safeerrors.CategoryRejected),
+			category:        scheduling.CategoryProviderRejected,
+			providerFailure: safeerrors.CategoryRejected,
 		},
 	}
 	for _, tt := range tests {
@@ -444,6 +453,9 @@ func TestCancelReturnsExplicitProviderFailuresWithoutRetry(t *testing.T) {
 				Cancel(context.Background(), cancellationCommand())
 			if scheduling.CategoryOf(err) != tt.category {
 				t.Fatalf("Cancel error = %v, category = %q", err, scheduling.CategoryOf(err))
+			}
+			if got := scheduling.ProviderFailureOf(err); got != tt.providerFailure {
+				t.Fatalf("ProviderFailureOf(error) = %q, want %q", got, tt.providerFailure)
 			}
 			if len(records.Cancellations) != 1 {
 				t.Fatalf("provider cancellations = %d, want exactly one", len(records.Cancellations))

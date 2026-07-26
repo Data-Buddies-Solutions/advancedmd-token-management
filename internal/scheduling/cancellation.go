@@ -79,25 +79,30 @@ func (s *service) Cancel(ctx context.Context, command CancelCommand) (CancelRece
 		return s.reconcileCancellation(ctx, command.AppointmentID, appointment, owningOffice)
 	}
 
-	switch providerCategory(err) {
+	providerFailure := providerCategory(err)
+	switch providerFailure {
 	case safeerrors.CategoryConflict:
-		return CancelReceipt{}, categorizedError(
+		return CancelReceipt{}, categorizedProviderError(
 			CategoryProviderConflict,
+			providerFailure,
 			"AdvancedMD could not cancel the appointment because its state changed. Please load appointments again.",
 		)
 	case safeerrors.CategoryRejected:
-		return CancelReceipt{}, categorizedError(
+		return CancelReceipt{}, categorizedProviderError(
 			CategoryProviderRejected,
+			providerFailure,
 			"AdvancedMD rejected the cancellation. Please load appointments again or contact the office.",
 		)
 	case safeerrors.CategoryAuthentication, safeerrors.CategoryUnavailable:
-		return CancelReceipt{}, categorizedError(
+		return CancelReceipt{}, categorizedProviderError(
 			CategoryWriteFailed,
+			providerFailure,
 			"Service authentication is temporarily unavailable. Please try again.",
 		)
 	default:
-		return CancelReceipt{}, categorizedError(
+		return CancelReceipt{}, categorizedProviderError(
 			CategoryWriteFailed,
+			providerFailure,
 			"Failed to cancel appointment in AdvancedMD. Please try again or contact the office.",
 		)
 	}

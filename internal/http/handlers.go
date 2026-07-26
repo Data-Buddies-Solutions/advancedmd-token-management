@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -127,7 +126,8 @@ func (h *Handlers) HandleMetrics(w http.ResponseWriter, _ *http.Request) {
 // without returning credentials, tokens, or provider endpoints.
 func (h *Handlers) HandleSessionMaintenance(w http.ResponseWriter, r *http.Request) {
 	if err := h.session.Maintain(r.Context()); err != nil {
-		log.Printf("session maintenance failed category=%s", safeerrors.Classify(err))
+		category := safeerrors.Classify(err)
+		recordRequestOutcome(r.Context(), outcomeProviderFailure, category)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(`{"status":"unavailable"}`))
@@ -176,7 +176,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 
 	var req AddPatientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("add-patient: failed to decode JSON")
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(AddPatientResponse{
 			Status:  "error",
 			Message: "Invalid JSON body",
@@ -203,6 +203,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 		SubscriberNum:  req.SubscriberNum,
 		Office:         req.Office,
 	})
+	recordPatientMutationOutcome(r.Context(), result.Outcome)
 	outcome := ""
 	if result.Status != patientmodule.CreateStatusCreated {
 		outcome = string(result.Outcome)
@@ -239,6 +240,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 
 	var req PatientResolveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(PatientResolveResponse{
 			Status:  "error",
 			Message: "Invalid JSON body",
@@ -248,6 +250,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 
 	office, err := domain.ResolveOffice(req.Office)
 	if err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(PatientResolveResponse{
 			Status:  "error",
 			Message: err.Error(),
@@ -256,6 +259,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if msg := validatePatientResolveRequest(req); msg != "" {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(PatientResolveResponse{
 			Status:  "error",
 			Message: msg,
@@ -264,7 +268,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.patient == nil {
-		log.Printf("patient-resolve: module unavailable category=%s", safeerrors.CategoryInternal)
+		recordRequestOutcome(r.Context(), outcomeInternalFailure, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(PatientResolveResponse{
 			Status:  "error",
 			Message: "Failed to look up patient in AdvancedMD. Please try again.",
@@ -282,7 +286,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 	})
 	if err != nil {
 		category := advancedmd.CategoryOf(err)
-		log.Printf("patient-resolve: failed category=%s", category)
+		recordRequestOutcome(r.Context(), outcomeProviderFailure, category)
 		message := "Failed to look up patient in AdvancedMD. Please try again."
 		if category == safeerrors.CategoryAuthentication || category == safeerrors.CategoryUnavailable {
 			message = "Service authentication is temporarily unavailable. Please try again."
@@ -292,6 +296,9 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 			Message: message,
 		})
 		return
+	}
+	if result.ProviderFailure != safeerrors.CategoryNone {
+		recordRequestOutcome(r.Context(), outcomeProviderFailure, result.ProviderFailure)
 	}
 
 	json.NewEncoder(w).Encode(patientResolveResponse(result))
@@ -489,6 +496,7 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 
 	var req CancelAppointmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{
 			Status:  "error",
 			Message: "Invalid JSON body",
@@ -496,6 +504,7 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if h.scheduling == nil {
+		recordRequestOutcome(r.Context(), outcomeInternalFailure, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{
 			Status:  "error",
 			Outcome: string(schedulingmodule.CategoryWriteFailed),
@@ -505,6 +514,7 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 	}
 	response, err := h.scheduling.Cancel(r.Context(), req)
 	if err != nil {
+		recordSchedulingError(r.Context(), err)
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{
 			Status:  "error",
 			Outcome: schedulingOutcome(err),
@@ -524,10 +534,12 @@ func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request)
 
 	var req BookAppointmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "Invalid JSON body"})
 		return
 	}
 	if h.scheduling == nil {
+		recordRequestOutcome(r.Context(), outcomeInternalFailure, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(BookAppointmentResponse{
 			Status:  "error",
 			Outcome: string(schedulingmodule.CategoryWriteFailed),
@@ -537,6 +549,7 @@ func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request)
 	}
 	response, err := h.scheduling.Book(r.Context(), req)
 	if err != nil {
+		recordSchedulingError(r.Context(), err)
 		json.NewEncoder(w).Encode(BookAppointmentResponse{
 			Status:  "error",
 			Outcome: schedulingOutcome(err),
@@ -566,12 +579,13 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 
 	var req AvailabilityRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Invalid JSON body"})
 		return
 	}
 
 	if h.scheduling == nil {
-		log.Printf("availability: module unavailable category=%s", safeerrors.CategoryInternal)
+		recordRequestOutcome(r.Context(), outcomeInternalFailure, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(ErrorResponse{
 			Status:  "error",
 			Message: "Appointment scheduling is temporarily unavailable. Please try again.",
@@ -580,8 +594,12 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	}
 	response, err := h.scheduling.Search(r.Context(), req)
 	if err != nil {
+		recordSchedulingError(r.Context(), err)
 		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: err.Error()})
 		return
+	}
+	if response.Status == domain.AvailabilityStatusError {
+		recordRequestOutcome(r.Context(), outcomeProviderFailure, safeerrors.CategoryInvalidResponse)
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -620,6 +638,7 @@ func (h *Handlers) HandleUpdateInsurance(w http.ResponseWriter, r *http.Request)
 
 	var req UpdateInsuranceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
 		json.NewEncoder(w).Encode(UpdateInsuranceResponse{
 			Status:  "error",
 			Message: "Invalid JSON body",
@@ -639,6 +658,7 @@ func (h *Handlers) HandleUpdateInsurance(w http.ResponseWriter, r *http.Request)
 		SubscriberNum:  req.SubscriberNum,
 		Office:         req.Office,
 	})
+	recordPatientMutationOutcome(r.Context(), result.Outcome)
 	outcome := ""
 	if result.Status != patientmodule.UpdateInsuranceStatusUpdated {
 		outcome = string(result.Outcome)
@@ -655,4 +675,36 @@ func (h *Handlers) HandleUpdateInsurance(w http.ResponseWriter, r *http.Request)
 		PreauthRequired:  result.PreauthRequired,
 		Message:          result.Message,
 	})
+}
+
+func recordPatientMutationOutcome(ctx context.Context, outcome patientmodule.MutationOutcome) {
+	switch outcome {
+	case "", patientmodule.MutationReconciledSuccess:
+		return
+	case patientmodule.MutationValidationFailed:
+		recordRequestOutcome(ctx, outcomeInvalidRequest, safeerrors.CategoryNone)
+	case patientmodule.MutationRejected:
+		recordRequestOutcome(ctx, outcomeProviderFailure, safeerrors.CategoryRejected)
+	case patientmodule.MutationUnavailable:
+		recordRequestOutcome(ctx, outcomeProviderFailure, safeerrors.CategoryUnavailable)
+	default:
+		recordRequestOutcome(ctx, outcomeProviderFailure, safeerrors.CategoryUpstreamError)
+	}
+}
+
+func recordSchedulingError(ctx context.Context, err error) {
+	providerFailure := schedulingmodule.ProviderFailureOf(err)
+	if providerFailure != safeerrors.CategoryNone {
+		recordRequestOutcome(ctx, outcomeProviderFailure, providerFailure)
+		return
+	}
+	switch schedulingmodule.CategoryOf(err) {
+	case schedulingmodule.CategoryProviderConflict,
+		schedulingmodule.CategoryProviderRejected,
+		schedulingmodule.CategoryWriteFailed,
+		schedulingmodule.CategoryIndeterminateWrite:
+		recordRequestOutcome(ctx, outcomeProviderFailure, safeerrors.CategoryUpstreamError)
+	default:
+		recordRequestOutcome(ctx, outcomeInvalidRequest, safeerrors.CategoryNone)
+	}
 }

@@ -58,9 +58,10 @@ const (
 
 // Error contains only caller-safe scheduling failure details.
 type Error struct {
-	category Category
-	message  string
-	missing  []string
+	category        Category
+	providerFailure safeerrors.Category
+	message         string
+	missing         []string
 }
 
 func (e *Error) Error() string {
@@ -74,6 +75,19 @@ func CategoryOf(err error) Category {
 		return schedulingErr.category
 	}
 	return CategoryValidation
+}
+
+// ProviderFailureOf returns the stable provider category carried by a
+// Scheduling error, or none when the failure did not come from AdvancedMD.
+func ProviderFailureOf(err error) safeerrors.Category {
+	var schedulingErr *Error
+	if errors.As(err, &schedulingErr) {
+		if schedulingErr.providerFailure == "" {
+			return safeerrors.CategoryNone
+		}
+		return schedulingErr.providerFailure
+	}
+	return safeerrors.CategoryNone
 }
 
 // MissingOf returns caller-safe fields required to complete a Scheduling
@@ -162,10 +176,10 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	setup, err := s.schedulerSetup(ctx, now.UTC())
 	if err != nil {
 		log.Printf("availability: scheduler setup failed category=%s", providerCategory(err))
-		return empty, schedulingError(providerFailureMessage(
+		return empty, providerError(
 			err,
 			"Failed to load scheduler configuration from AdvancedMD. Please try again.",
-		))
+		)
 	}
 
 	profileMap := make(map[string]domain.SchedulerProfile, len(setup.Profiles))
@@ -219,10 +233,10 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		})
 		if err != nil {
 			log.Printf("availability: schedule read failed category=%s", providerCategory(err))
-			return empty, schedulingError(providerFailureMessage(
+			return empty, providerError(
 				err,
 				"Appointment scheduling is temporarily unavailable. Please try again.",
-			))
+			)
 		}
 
 		slots = nil
@@ -309,6 +323,18 @@ func schedulingError(message string) error {
 
 func categorizedError(category Category, message string) error {
 	return &Error{category: category, message: message}
+}
+
+func categorizedProviderError(category Category, providerFailure safeerrors.Category, message string) error {
+	return &Error{category: category, providerFailure: providerFailure, message: message}
+}
+
+func providerError(err error, fallback string) error {
+	return &Error{
+		category:        CategoryValidation,
+		providerFailure: providerCategory(err),
+		message:         providerFailureMessage(err, fallback),
+	}
 }
 
 func providerFailureMessage(err error, fallback string) string {

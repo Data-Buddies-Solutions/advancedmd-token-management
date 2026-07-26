@@ -1,0 +1,12 @@
+--path: /live
+--period: 15
+--protocol: https
+--regions:
+  - asia-pacific
+  - europe
+  - usa-virginia
+--request-method: get
+--status-codes:
+  - 200
+--timeout: 10
+--validate-ssl: "true"

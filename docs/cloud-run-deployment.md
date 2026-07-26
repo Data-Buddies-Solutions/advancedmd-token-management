@@ -41,6 +41,65 @@ present Google IAM identity. `/api/*` remains protected by `API_SECRET`, while
 service-account issuer, audience, verified email claim, and exact Scheduler
 service-account email.
 
+## Built-in latency and request logs
+
+Use Cloud Run's built-in `run.googleapis.com/request_latencies` distribution,
+filtered to the `abita-middleware` service, for overall service p95 latency.
+This repository does not add a custom, user-defined, or log-based latency
+metric.
+
+All process logs are emitted as one JSON object per line. Existing lifecycle
+events retain their safe categorized message, while each completed HTTP request
+uses exactly these fields:
+
+- `request_id`: the generated request ID or the existing hashed external value
+- `route_template`: the matched Chi template, or `unmatched`; never the raw URL
+- `outcome_category`: a bounded application or transport outcome
+- `latency_ms`: elapsed application time in milliseconds
+- `session_state`: the existing safe Session lifecycle state
+- `provider_failure_category`: a stable safe category, or `none`
+
+Do not turn `request_id` or any other unique value into a metric label. Request
+and response bodies, patient and appointment identifiers, names, dates of
+birth, phones, credentials, tokens, provider URLs, and raw error strings do not
+belong in logs.
+
+## One-time `/live` uptime check
+
+`monitoring/live-uptime-check.flags.yaml` defines one public HTTPS `GET /live`
+check: HTTP 200, TLS validation, a 15-minute period, 10-second timeout, and the
+minimum three regions. It defines no notification channel or alert policy.
+Three regions every 15 minutes produce at most 8,928 regional executions in a
+31-day month.
+
+Before creating the check:
+
+1. Confirm `gcloud` is authenticated to the intended operator account and that
+   the active project is `acuity-health-prod`.
+2. List every existing check with
+   `gcloud monitoring uptime list-configs --project=acuity-health-prod`.
+3. Verify current-month uptime-check execution usage and the active
+   configurations remain below Cloud Monitoring's free monthly allowance after
+   adding 8,928 executions. If cost cannot be proven, stop.
+4. Read the public service host from
+   `gcloud run services describe abita-middleware --project=acuity-health-prod --region=us-east4`.
+   Do not guess or check in the generated host.
+
+After those gates pass, set `SERVICE_HOST` to the hostname only, without
+`https://` or a path, and run:
+
+```bash
+gcloud monitoring uptime create "abita-middleware /live" \
+  --project=acuity-health-prod \
+  --resource-type=uptime-url \
+  --resource-labels="host=${SERVICE_HOST},project_id=acuity-health-prod" \
+  --flags-file=monitoring/live-uptime-check.flags.yaml
+```
+
+List the configuration again and verify the path, period, regions, TLS
+validation, and HTTP status. Do not create an alert policy or notification
+channel.
+
 ## Automatic production pipeline
 
 The `abita-middleware-main-build` trigger runs for every push to `main`:
@@ -99,9 +158,9 @@ out of shell tracing, shared terminals, build logs, and issue comments.
    `POST /api/patient/resolve`. Confirm HTTP 200 and the expected application
    result without copying the response body into logs. Do not substitute a real
    patient.
-7. Confirm logs contain only the route, status, safe outcome category, latency,
-   and redacted request ID. They must not contain request/response bodies,
-   patient identifiers, credentials, tokens, or AdvancedMD URLs.
+7. Confirm the request log contains exactly the six fields documented under
+   "Built-in latency and request logs." It must not contain request/response
+   bodies, patient identifiers, credentials, tokens, or AdvancedMD URLs.
 
 If the Scheduler invocation is delayed or fails, the synthetic patient request
 must still initialize or refresh the Session through the bounded request-time
@@ -139,8 +198,27 @@ If Cloud Run itself is unavailable, reconnect and restart Railway, restore the
 Railway URL in the agent, and verify `/health`. Never leave Railway and Cloud
 Run running as long-lived AdvancedMD token owners.
 
+## Evidence record
+
+Do not run a deployment or rollback solely to fill this record. After one
+separately approved deployment smoke and one rollback exercise, record:
+
+- UTC start/end time, operator, full image commit SHA, and revision name
+- the single revision receiving 100% traffic and its min/max/CPU settings
+- `/live`, `/ready`, maintenance, and synthetic read-only patient smoke results
+  without response bodies or identifiers
+- the JSON request-log fields inspected and confirmation that no PHI, secret,
+  raw provider URL, or raw provider error appeared
+- the rollback image commit SHA and revision, direct 100% traffic result,
+  health results, and Scheduler state required by the rollback mode
+
+Keep credentials, tokens, patient data, appointment data, and response bodies
+out of the evidence.
+
 References:
 
 - [Cloud Scheduler OIDC authentication](https://cloud.google.com/scheduler/docs/http-target-auth)
+- [Cloud Monitoring uptime-check pricing](https://cloud.google.com/products/observability/pricing#uptime-checks)
+- [Cloud Run built-in metrics](https://cloud.google.com/monitoring/api/metrics_gcp_p_z)
 - [Cloud Run billing settings](https://cloud.google.com/run/docs/configuring/billing-settings)
 - [Cloud Run traffic migration and rollback](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)
