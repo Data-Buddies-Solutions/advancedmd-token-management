@@ -478,6 +478,7 @@ func checkXMLRPCError(body []byte, operation string) error {
 
 // DemographicResult holds parsed insurance info from getdemographic.
 type DemographicResult struct {
+	Name                string
 	CarrierName         string // "AETNA"
 	CarrierID           string // "car40887"
 	InsPlanID           string // "ins8719894" — active insplan ID for end-dating
@@ -492,6 +493,7 @@ type AMDDemographicResults struct {
 	PatientList struct {
 		Patient struct {
 			ID          string          `json:"@id"`
+			Name        string          `json:"@name"`
 			RespParty   string          `json:"@respparty"`
 			DOB         string          `json:"@dob"`
 			InsPlanList json.RawMessage `json:"insplanlist"`
@@ -569,6 +571,7 @@ func (c *AdvancedMDClient) GetDemographic(ctx context.Context, tokenData *domain
 	}
 
 	result := &DemographicResult{
+		Name:                patient.Name,
 		RespPartyID:         patient.RespParty,
 		DOB:                 patient.DOB,
 		InsuranceStateKnown: true,

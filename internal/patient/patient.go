@@ -21,6 +21,7 @@ type Status string
 
 const (
 	StatusVerified        Status = "verified"
+	StatusCandidate       Status = "candidate"
 	StatusMultipleMatches Status = "multiple_matches"
 	StatusNotFound        Status = "not_found"
 )
@@ -84,11 +85,23 @@ type Appointment struct {
 	CancellationToken string
 }
 
+// Candidate contains only the private identity-selection facts available
+// before one patient is fully hydrated.
+type Candidate struct {
+	Status    Status
+	PatientID string
+	FirstName string
+	LastName  string
+	DOB       string
+}
+
 // ResolveResult is one complete Acuity patient resolution outcome.
 type ResolveResult struct {
 	Status              Status
 	ProviderFailure     safeerrors.Category
 	PatientID           string
+	FirstName           string
+	LastName            string
 	Name                string
 	DOB                 string
 	Phone               string
@@ -104,7 +117,23 @@ type ResolveResult struct {
 	Appointments        []Appointment
 	AppointmentsMessage string
 	Message             string
-	Matches             []ResolveResult
+	Matches             []Candidate
+	Observation         ResolutionObservation
+}
+
+// ResolutionObservation contains only PHI-free operational facts for one
+// patient-resolution request.
+type ResolutionObservation struct {
+	Recorded                bool
+	PatientSearchDurationMS int64
+	DemographicDurationMS   int64
+	AppointmentDurationMS   int64
+	PatientSearchReads      int
+	DemographicReads        int
+	AppointmentReads        int
+	OfficeGroupSize         int
+	CandidateCountBucket    string
+	AppointmentOutcome      string
 }
 
 // CreateCommand is the complete caller intent for creating a patient and
@@ -761,41 +790,55 @@ func (p *patient) Resolve(ctx context.Context, command ResolveCommand) (ResolveR
 	}
 
 	search := patientSearch(command)
+	searchStarted := time.Now()
 	patients, err := p.advancedMD.SearchPatients(ctx, search)
+	observation := ResolutionObservation{
+		Recorded:                true,
+		PatientSearchDurationMS: time.Since(searchStarted).Milliseconds(),
+		PatientSearchReads:      1,
+		OfficeGroupSize:         len(appointmentOfficeIDs(office)),
+		AppointmentOutcome:      "not_requested",
+	}
 	if err != nil {
-		return ResolveResult{}, err
+		observation.CandidateCountBucket = "unknown"
+		return ResolveResult{Observation: observation}, err
 	}
 	matches := selectPatients(patients, command)
+	observation.CandidateCountBucket = candidateCountBucket(len(matches))
 	if len(matches) == 0 {
 		return ResolveResult{
 			Status:       StatusNotFound,
 			Appointments: []Appointment{},
 			Message:      notFoundMessage(command),
+			Observation:  observation,
 		}, nil
 	}
 	if len(matches) > 1 {
-		results := make([]ResolveResult, 0, len(matches))
-		providerFailure := safeerrors.CategoryNone
+		results := make([]Candidate, 0, len(matches))
 		for _, candidate := range matches {
-			match, err := p.resolvePatient(ctx, candidate, command.Phone, office)
-			if err != nil {
-				return ResolveResult{}, err
-			}
-			if providerFailure == safeerrors.CategoryNone && match.ProviderFailure != safeerrors.CategoryNone {
-				providerFailure = match.ProviderFailure
-			}
-			results = append(results, match)
+			results = append(results, Candidate{
+				Status:    StatusCandidate,
+				PatientID: candidate.ID,
+				FirstName: patientFirstName(candidate),
+				LastName:  patientLastName(candidate),
+				DOB:       candidate.DOB,
+			})
 		}
+		observation.AppointmentOutcome = "deferred"
 		return ResolveResult{
-			Status:          StatusMultipleMatches,
-			ProviderFailure: providerFailure,
-			Appointments:    []Appointment{},
-			Matches:         results,
-			Message:         multipleMatchesMessage(command, len(results)),
+			Status:       StatusMultipleMatches,
+			Appointments: []Appointment{},
+			Matches:      results,
+			Message:      multipleMatchesMessage(command, len(results)),
+			Observation:  observation,
 		}, nil
 	}
 
-	return p.resolvePatient(ctx, matches[0], command.Phone, office)
+	result, err := p.resolvePatient(ctx, matches[0], command.Phone, office)
+	result.Observation.PatientSearchDurationMS = observation.PatientSearchDurationMS
+	result.Observation.PatientSearchReads = observation.PatientSearchReads
+	result.Observation.CandidateCountBucket = observation.CandidateCountBucket
+	return result, err
 }
 
 func patientSearch(command ResolveCommand) domain.PatientSearch {
@@ -835,6 +878,7 @@ func selectPatients(patients []domain.Patient, command ResolveCommand) []domain.
 }
 
 func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, lookupPhone string, office *domain.OfficeConfig) (ResolveResult, error) {
+	officeIDs := appointmentOfficeIDs(office)
 	result := ResolveResult{
 		Status:       StatusVerified,
 		PatientID:    candidate.ID,
@@ -842,29 +886,77 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 		DOB:          candidate.DOB,
 		Phone:        firstNonEmpty(candidate.Phone, lookupPhone),
 		Appointments: []Appointment{},
+		Observation: ResolutionObservation{
+			Recorded:             true,
+			DemographicReads:     1,
+			OfficeGroupSize:      len(officeIDs),
+			CandidateCountBucket: "1",
+			AppointmentOutcome:   "not_requested",
+		},
 	}
 
-	demographics, err := p.advancedMD.GetPatientDemographics(ctx, candidate.ID)
-	if err != nil {
-		category := advancedmd.CategoryOf(err)
+	type demographicsResult struct {
+		demographics domain.PatientDemographics
+		err          error
+		durationMS   int64
+	}
+	type appointmentsResult struct {
+		read       advancedmd.AppointmentRead
+		err        error
+		durationMS int64
+	}
+	demographicsResults := make(chan demographicsResult, 1)
+	appointmentsResults := make(chan appointmentsResult, 1)
+	go func() {
+		started := time.Now()
+		demographics, err := p.advancedMD.GetPatientDemographics(ctx, candidate.ID)
+		demographicsResults <- demographicsResult{
+			demographics: demographics,
+			err:          err,
+			durationMS:   time.Since(started).Milliseconds(),
+		}
+	}()
+	go func() {
+		started := time.Now()
+		read, err := p.advancedMD.ReadPatientAppointments(ctx, domain.PatientAppointmentsQuery{
+			PatientID: candidate.ID,
+			OfficeIDs: officeIDs,
+		})
+		appointmentsResults <- appointmentsResult{
+			read:       read,
+			err:        err,
+			durationMS: time.Since(started).Milliseconds(),
+		}
+	}()
+
+	demographicsRead := <-demographicsResults
+	appointmentsRead := <-appointmentsResults
+	result.Observation.DemographicDurationMS = demographicsRead.durationMS
+	result.Observation.AppointmentDurationMS = appointmentsRead.durationMS
+	result.Observation.AppointmentReads = appointmentsRead.read.ProviderReads
+	result.Observation.AppointmentOutcome = appointmentLoadOutcome(
+		appointmentsRead.read.Appointments,
+		appointmentsRead.err,
+	)
+	if demographicsRead.err != nil {
+		category := advancedmd.CategoryOf(demographicsRead.err)
 		result.ProviderFailure = category
 		log.Printf("patient-resolve: failed to get demographics category=%s", category)
 		if category == safeerrors.CategoryUnavailable {
-			return ResolveResult{}, err
+			return result, demographicsRead.err
 		}
 	} else {
 		if result.DOB == "" {
-			result.DOB = demographics.DOB
+			result.DOB = demographicsRead.demographics.DOB
 		}
-		applyDemographics(&result, demographics, office, result.DOB)
+		if result.Name == "" {
+			result.Name = demographicsRead.demographics.FullName
+		}
+		applyDemographics(&result, demographicsRead.demographics, office, result.DOB)
 	}
 
-	appointments, err := p.advancedMD.GetUpcomingAppointments(ctx, domain.PatientAppointmentsQuery{
-		PatientID: candidate.ID,
-		OfficeIDs: appointmentOfficeIDs(office),
-	})
-	if err != nil {
-		result.ProviderFailure = advancedmd.CategoryOf(err)
+	if appointmentsRead.err != nil {
+		result.ProviderFailure = advancedmd.CategoryOf(appointmentsRead.err)
 		log.Printf("patient-resolve: failed to get appointments category=%s", result.ProviderFailure)
 		result.AppointmentsStatus = AppointmentsError
 		result.AppointmentsMessage = "Failed to retrieve appointments from AdvancedMD. Please try again."
@@ -872,15 +964,17 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 		return result, nil
 	}
 
-	for _, appointment := range appointments {
+	for _, appointment := range appointmentsRead.read.Appointments {
 		cancellationToken := ""
 		if p.cancellationTokens != nil {
-			cancellationToken, err = p.cancellationTokens.IssueCancellationToken(candidate.ID, appointment)
-			if err != nil {
+			var tokenErr error
+			cancellationToken, tokenErr = p.cancellationTokens.IssueCancellationToken(candidate.ID, appointment)
+			if tokenErr != nil {
 				result.Appointments = []Appointment{}
 				result.AppointmentsStatus = AppointmentsError
 				result.AppointmentsMessage = "Failed to prepare appointments for cancellation. Please try again."
 				result.Message = "Patient verified, appointment lookup unavailable"
+				result.Observation.AppointmentOutcome = "error"
 				return result, nil
 			}
 		}
@@ -906,6 +1000,43 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 	result.AppointmentsStatus = AppointmentsFound
 	result.Message = fmt.Sprintf("Patient verified with %d appointment(s)", len(result.Appointments))
 	return result, nil
+}
+
+func candidateCountBucket(count int) string {
+	switch {
+	case count == 0:
+		return "0"
+	case count == 1:
+		return "1"
+	case count <= 5:
+		return "2-5"
+	default:
+		return "6+"
+	}
+}
+
+func appointmentLoadOutcome(appointments []domain.PatientAppointment, err error) string {
+	if err != nil {
+		return "error"
+	}
+	if len(appointments) == 0 {
+		return "none"
+	}
+	return "found"
+}
+
+func patientFirstName(candidate domain.Patient) string {
+	if candidate.FirstName != "" {
+		return candidate.FirstName
+	}
+	return domain.ParseFirstName(candidate.FullName)
+}
+
+func patientLastName(candidate domain.Patient) string {
+	if candidate.LastName != "" {
+		return candidate.LastName
+	}
+	return strings.TrimSpace(strings.SplitN(candidate.FullName, ",", 2)[0])
 }
 
 func appointmentOfficeIDs(office *domain.OfficeConfig) []string {

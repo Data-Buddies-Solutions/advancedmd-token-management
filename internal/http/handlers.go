@@ -44,24 +44,34 @@ type PatientResolveRequest struct {
 
 // PatientResolveResponse is returned by /api/patient/resolve.
 type PatientResolveResponse struct {
-	Status              string                   `json:"status"`
-	PatientID           string                   `json:"patientId,omitempty"`
-	Name                string                   `json:"name,omitempty"`
-	DOB                 string                   `json:"dob,omitempty"`
-	Phone               string                   `json:"phone,omitempty"`
-	InsuranceCarrier    string                   `json:"insuranceCarrier,omitempty"`
-	InsuranceCarrierID  string                   `json:"insuranceCarrierId,omitempty"`
-	InsPlanID           string                   `json:"insPlanId,omitempty"`
-	RespPartyID         string                   `json:"respPartyId,omitempty"`
-	Routing             string                   `json:"routing,omitempty"`
-	AllowedProviders    []string                 `json:"allowedProviders,omitempty"`
-	RoutingAmbiguous    bool                     `json:"routingAmbiguous,omitempty"`
-	PreauthRequired     bool                     `json:"preauthRequired,omitempty"`
-	AppointmentsStatus  string                   `json:"appointmentsStatus,omitempty"`
-	Appointments        []PatientApptDetail      `json:"appointments"`
-	AppointmentsMessage string                   `json:"appointmentsMessage,omitempty"`
-	Message             string                   `json:"message,omitempty"`
-	Matches             []PatientResolveResponse `json:"matches,omitempty"`
+	Status              string                     `json:"status"`
+	PatientID           string                     `json:"patientId,omitempty"`
+	Name                string                     `json:"name,omitempty"`
+	DOB                 string                     `json:"dob,omitempty"`
+	Phone               string                     `json:"phone,omitempty"`
+	InsuranceCarrier    string                     `json:"insuranceCarrier,omitempty"`
+	InsuranceCarrierID  string                     `json:"insuranceCarrierId,omitempty"`
+	InsPlanID           string                     `json:"insPlanId,omitempty"`
+	RespPartyID         string                     `json:"respPartyId,omitempty"`
+	Routing             string                     `json:"routing,omitempty"`
+	AllowedProviders    []string                   `json:"allowedProviders,omitempty"`
+	RoutingAmbiguous    bool                       `json:"routingAmbiguous,omitempty"`
+	PreauthRequired     bool                       `json:"preauthRequired,omitempty"`
+	AppointmentsStatus  string                     `json:"appointmentsStatus,omitempty"`
+	Appointments        []PatientApptDetail        `json:"appointments"`
+	AppointmentsMessage string                     `json:"appointmentsMessage,omitempty"`
+	Message             string                     `json:"message,omitempty"`
+	Matches             []PatientCandidateResponse `json:"matches,omitempty"`
+}
+
+// PatientCandidateResponse is the private, lightweight identity selection
+// shape returned before one patient is fully hydrated.
+type PatientCandidateResponse struct {
+	Status    string `json:"status"`
+	PatientID string `json:"patientId"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	DOB       string `json:"dob"`
 }
 
 // Handlers holds the dependencies for HTTP handlers.
@@ -285,6 +295,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 		Phone:     req.Phone,
 		OfficeID:  office.ID,
 	})
+	recordPatientResolutionObservation(r.Context(), result.Observation)
 	if err != nil {
 		category := advancedmd.CategoryOf(err)
 		recordRequestOutcome(r.Context(), outcomeProviderFailure, category)
@@ -321,9 +332,15 @@ func patientResolveResponse(result patientmodule.ResolveResult) PatientResolveRe
 			CancellationToken: appointment.CancellationToken,
 		}
 	}
-	matches := make([]PatientResolveResponse, len(result.Matches))
+	matches := make([]PatientCandidateResponse, len(result.Matches))
 	for i, match := range result.Matches {
-		matches[i] = patientResolveResponse(match)
+		matches[i] = PatientCandidateResponse{
+			Status:    string(match.Status),
+			PatientID: match.PatientID,
+			FirstName: match.FirstName,
+			LastName:  match.LastName,
+			DOB:       match.DOB,
+		}
 	}
 	return PatientResolveResponse{
 		Status:              string(result.Status),

@@ -32,7 +32,12 @@ type Adapter struct {
 	Demographics             map[string]domain.PatientDemographics
 	DemographicErrors        map[string]error
 	DemographicErrorSequence map[string][]error
+	DemographicsStarted      chan<- struct{}
+	DemographicsRelease      <-chan struct{}
 	AppointmentResults       map[string]AppointmentResult
+	AppointmentsStarted      chan<- struct{}
+	AppointmentsRelease      <-chan struct{}
+	AppointmentQueries       []domain.PatientAppointmentsQuery
 	AppointmentMonthQueries  []advancedmd.AppointmentMonthQuery
 	AppointmentStateResults  map[int]AppointmentStateResult
 	AppointmentStateQueries  []advancedmd.AppointmentStateQuery
@@ -44,6 +49,7 @@ type Adapter struct {
 	SearchPatientCalls       int
 	AddInsuranceCalls        int
 	DemographicCalls         int
+	AppointmentReadCalls     int
 	EndInsuranceCalls        int
 	SchedulerSetup           domain.SchedulerSetup
 	SchedulerSetupError      error
@@ -86,8 +92,11 @@ func (a *Adapter) SearchPatients(_ context.Context, search domain.PatientSearch)
 	return append([]domain.Patient(nil), a.PatientSearches[search]...), nil
 }
 
-func (a *Adapter) GetPatientDemographics(_ context.Context, patientID string) (domain.PatientDemographics, error) {
+func (a *Adapter) GetPatientDemographics(ctx context.Context, patientID string) (domain.PatientDemographics, error) {
 	a.DemographicCalls++
+	if err := waitBarrier(ctx, a.DemographicsStarted, a.DemographicsRelease); err != nil {
+		return domain.PatientDemographics{}, err
+	}
 	if sequence := a.DemographicErrorSequence[patientID]; len(sequence) > 0 {
 		err := sequence[0]
 		a.DemographicErrorSequence[patientID] = sequence[1:]
@@ -101,12 +110,10 @@ func (a *Adapter) GetPatientDemographics(_ context.Context, patientID string) (d
 	return a.Demographics[patientID], nil
 }
 
-func (a *Adapter) GetUpcomingAppointments(_ context.Context, query domain.PatientAppointmentsQuery) ([]domain.PatientAppointment, error) {
-	read, err := a.nextAppointmentRead(query.PatientID)
-	return read.Appointments, err
-}
-
-func (a *Adapter) ReadPatientAppointments(_ context.Context, query domain.PatientAppointmentsQuery) (advancedmd.AppointmentRead, error) {
+func (a *Adapter) ReadPatientAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) (advancedmd.AppointmentRead, error) {
+	if err := a.recordAppointmentRead(ctx, query); err != nil {
+		return advancedmd.AppointmentRead{}, err
+	}
 	return a.nextAppointmentRead(query.PatientID)
 }
 
@@ -130,6 +137,31 @@ func (a *Adapter) nextAppointmentRead(patientID string) (advancedmd.AppointmentR
 		read.Complete = true
 	}
 	return read, nil
+}
+
+func (a *Adapter) recordAppointmentRead(ctx context.Context, query domain.PatientAppointmentsQuery) error {
+	a.AppointmentReadCalls++
+	query.OfficeIDs = append([]string(nil), query.OfficeIDs...)
+	a.AppointmentQueries = append(a.AppointmentQueries, query)
+	return waitBarrier(ctx, a.AppointmentsStarted, a.AppointmentsRelease)
+}
+
+func waitBarrier(ctx context.Context, started chan<- struct{}, release <-chan struct{}) error {
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func (a *Adapter) ReadAppointmentState(_ context.Context, query advancedmd.AppointmentStateQuery) (advancedmd.AppointmentState, error) {

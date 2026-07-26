@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	patientmodule "advancedmd-token-management/internal/patient"
 	"advancedmd-token-management/internal/safeerrors"
 	schedulingmodule "advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
@@ -46,6 +47,7 @@ type requestLogState struct {
 	outcome         outcomeCategory
 	providerFailure safeerrors.Category
 	cancellation    *cancellationLogEntry
+	patientResolve  *patientResolutionLogEntry
 }
 
 type cancellationLogEntry struct {
@@ -56,14 +58,28 @@ type cancellationLogEntry struct {
 	DurationMS        int64  `json:"duration_ms"`
 }
 
+type patientResolutionLogEntry struct {
+	PatientSearchDurationMS int64  `json:"patient_search_duration_ms"`
+	DemographicDurationMS   int64  `json:"demographic_duration_ms"`
+	AppointmentDurationMS   int64  `json:"appointment_duration_ms"`
+	PatientSearchReads      int    `json:"patient_search_reads"`
+	DemographicReads        int    `json:"demographic_reads"`
+	AppointmentReads        int    `json:"appointment_reads"`
+	ProviderReads           int    `json:"provider_reads"`
+	OfficeGroupSize         int    `json:"office_group_size"`
+	CandidateCount          string `json:"candidate_count"`
+	AppointmentOutcome      string `json:"appointment_outcome"`
+}
+
 type requestLogEntry struct {
-	RequestID       string                `json:"request_id"`
-	RouteTemplate   string                `json:"route_template"`
-	Outcome         outcomeCategory       `json:"outcome_category"`
-	LatencyMS       int64                 `json:"latency_ms"`
-	SessionState    session.SessionState  `json:"session_state"`
-	ProviderFailure safeerrors.Category   `json:"provider_failure_category"`
-	Cancellation    *cancellationLogEntry `json:"cancellation,omitempty"`
+	RequestID         string                     `json:"request_id"`
+	RouteTemplate     string                     `json:"route_template"`
+	Outcome           outcomeCategory            `json:"outcome_category"`
+	LatencyMS         int64                      `json:"latency_ms"`
+	SessionState      session.SessionState       `json:"session_state"`
+	ProviderFailure   safeerrors.Category        `json:"provider_failure_category"`
+	Cancellation      *cancellationLogEntry      `json:"cancellation,omitempty"`
+	PatientResolution *patientResolutionLogEntry `json:"patient_resolution,omitempty"`
 }
 
 var requestLogMu sync.Mutex
@@ -133,13 +149,14 @@ func LoggingMiddleware(amdSession session.Session) func(http.Handler) http.Handl
 				routeTemplate = "unmatched"
 			}
 			writeRequestLog(requestLogEntry{
-				RequestID:       GetLogRequestID(r.Context()),
-				RouteTemplate:   routeTemplate,
-				Outcome:         state.outcome,
-				LatencyMS:       time.Since(start).Milliseconds(),
-				SessionState:    requestSessionState(amdSession),
-				ProviderFailure: state.providerFailure,
-				Cancellation:    state.cancellation,
+				RequestID:         GetLogRequestID(r.Context()),
+				RouteTemplate:     routeTemplate,
+				Outcome:           state.outcome,
+				LatencyMS:         time.Since(start).Milliseconds(),
+				SessionState:      requestSessionState(amdSession),
+				ProviderFailure:   state.providerFailure,
+				Cancellation:      state.cancellation,
+				PatientResolution: state.patientResolve,
 			})
 		})
 	}
@@ -188,6 +205,33 @@ func recordCancellationObservation(
 		ScheduleReads:     observation.ScheduleReads,
 		ProviderMutations: observation.ProviderMutations,
 		DurationMS:        observation.DurationMS,
+	}
+}
+
+func recordPatientResolutionObservation(
+	ctx context.Context,
+	observation patientmodule.ResolutionObservation,
+) {
+	if !observation.Recorded {
+		return
+	}
+	state, ok := ctx.Value(requestLogKey).(*requestLogState)
+	if !ok {
+		return
+	}
+	state.patientResolve = &patientResolutionLogEntry{
+		PatientSearchDurationMS: observation.PatientSearchDurationMS,
+		DemographicDurationMS:   observation.DemographicDurationMS,
+		AppointmentDurationMS:   observation.AppointmentDurationMS,
+		PatientSearchReads:      observation.PatientSearchReads,
+		DemographicReads:        observation.DemographicReads,
+		AppointmentReads:        observation.AppointmentReads,
+		ProviderReads: observation.PatientSearchReads +
+			observation.DemographicReads +
+			observation.AppointmentReads,
+		OfficeGroupSize:    observation.OfficeGroupSize,
+		CandidateCount:     observation.CandidateCountBucket,
+		AppointmentOutcome: observation.AppointmentOutcome,
 	}
 }
 

@@ -631,14 +631,6 @@ func issueCancellationToken(
 	return token
 }
 
-func (r *cancellationTokenRecords) GetUpcomingAppointments(
-	ctx context.Context,
-	query domain.PatientAppointmentsQuery,
-) ([]domain.PatientAppointment, error) {
-	r.appointmentReads++
-	return r.Adapter.GetUpcomingAppointments(ctx, query)
-}
-
 func (r *cancellationTokenRecords) ReadPatientAppointments(
 	ctx context.Context,
 	query domain.PatientAppointmentsQuery,
