@@ -1,117 +1,285 @@
-# AdvancedMD Middleware 
+# Abita Middleware
 
-Go HTTP middleware between the LiveKit voice agent and AdvancedMD. It owns
-AdvancedMD authentication, office routing, scheduler column selection,
-insurance routing, patient lookup/creation, appointment lookup, booking,
-cancellation, and insurance updates.
+**Safe patient and scheduling workflows between Acuity's voice agent and the
+clinical system of record.**
 
-This repo currently ships one server binary from `./cmd/api`. The old local CLI
-experiment has been removed.
+The caller asks for outcomes—find this patient, offer a valid appointment,
+book this slot, cancel this visit. The middleware owns everything required to
+make those outcomes safe: authentication, office and insurance policy,
+eligibility, concurrency checks, provider translation, and recovery when a
+write may or may not have succeeded.
 
-## Current Capabilities
+It is one Go deployable, organized as a modular monolith. Provider mechanics
+stay at the edge; Acuity behavior stays at the center.
 
-- Owns AdvancedMD credentials and token state in one explicit Session lifecycle.
-- Reuses fresh sessions, performs single-flight request-time authentication,
-  and keeps a usable last-known-good session when refresh temporarily fails.
-- Performs proactive maintenance only through a Google-authenticated
-  operational request; no required refresh depends on background CPU.
-- Exposes authenticated JSON endpoints for the voice agent.
-- Resolves offices by trunk phone number, office name, or display name.
-- Keeps AMD facility IDs, scheduler columns, profile IDs, and routing tiers in
-  `internal/domain/office.go`.
-- Uses separate medical and routine-vision insurance crosswalks.
-- Filters availability and booking by office, routing lane, appointment type,
-  provider column, preauth lead time, and provider age rules.
-- Caches scheduler setup briefly while fetching live appointments and block
-  holds for each availability search.
-- Fetches appointments and block holds concurrently during availability checks.
-- Returns 200 responses with `status: "error"` for agent-readable business
-  errors.
+## Architecture in one minute
 
-## Runtime Shape
+Read this diagram from left to right. The caller speaks in patient and
+scheduling intent. Deep modules turn that intent into verified outcomes.
+Provider-specific endpoints, payloads, and errors live behind the records seam.
 
-```
-LiveKit agent
-  -> POST /api/patient/resolve
-  -> POST /api/scheduler/availability
-  -> POST /api/appointment/book
-  -> POST /api/appointment/cancel
+```mermaid
+flowchart LR
+    caller["Voice agent<br/>care intent"]
+    scheduler["Cloud Scheduler<br/>session maintenance"]
 
-AdvancedMD middleware
-  -> in-memory Session owner with authenticated maintenance and request fallback
-  -> Patient module for complete patient resolution and partial-result semantics
-  -> Scheduling module for complete availability search and signed-slot policy
-  -> domain-oriented AdvancedMD adapter for Patient and Scheduling operations
-  -> AdvancedMD XMLRPC APIs for demographics and scheduler setup
-  -> AdvancedMD REST APIs for appointments, block holds, booking, cancellation
+    subgraph app["One Go deployable"]
+        http["HTTP module<br/>authenticate · decode · map"]
+        patient["Patient module<br/>Resolve · Create · UpdateInsurance"]
+        scheduling["Scheduling module<br/>Search · Book · Cancel"]
+        policy["Domain policy<br/>office · routing · eligibility"]
+        session["Session module<br/>Get · Maintain · Status"]
+        records["Records interfaces<br/>PatientRecords · SchedulingRecords"]
+        adapter["Production records adapter"]
 
-Cloud Scheduler
-  -> POST /ops/session/maintenance with a Google-signed OIDC identity
-```
+        http --> patient
+        http --> scheduling
+        policy --> patient
+        policy --> scheduling
+        patient --> records
+        scheduling --> records
+        records --> adapter
+        session --> adapter
+    end
 
-## Project Structure
-
-```
-advancedmd-token-management/
-|-- cmd/
-|   `-- api/
-|       `-- main.go
-|-- Dockerfile
-|-- docs/
-|   `-- advancedmd-api.md
-|-- internal/
-|   |-- advancedmd/
-|   |   |-- adapter.go
-|   |   `-- advancedmd.go
-|   |-- clients/
-|   |   |-- advancedmd_rest.go
-|   |   `-- advancedmd_xmlrpc.go
-|   |-- config/
-|   |   `-- config.go
-|   |-- domain/
-|   |   |-- insurance.go
-|   |   |-- office.go
-|   |   |-- patient.go
-|   |   |-- scheduler.go
-|   |   `-- token.go
-|   |-- session/
-|   |   |-- authenticator.go
-|   |   `-- session.go
-|   |-- patient/
-|   |   `-- patient.go
-|   |-- scheduling/
-|   |   |-- scheduling.go
-|   |   `-- token.go
-|   `-- http/
-|       |-- handlers.go
-|       |-- middleware.go
-|       `-- router.go
-|-- INSURANCE_CROSSWALK.md
-|-- MULTI_OFFICE.md
-|-- go.mod
-`-- README.md
+    caller --> http
+    scheduler --> http
+    adapter --> provider["External system of record<br/>provider transport"]
+    records -.-> testadapter["Deterministic test adapter"]
 ```
 
-## Environment
+The architectural rule is:
 
-| Variable | Required | Description |
+```text
+caller intent → owned policy → verified effect
+```
+
+The external provider is an implementation detail, not the model the rest of
+the codebase is built around.
+
+## Design from first principles
+
+The middleware exists because the two sides of the system should not need to
+understand each other:
+
+- The voice agent should not know credentials, provider endpoints, transport
+  formats, office IDs, scheduler columns, or write-recovery rules.
+- The clinical system should not need to understand conversational state,
+  patient intent, routing language, or how a caller should recover.
+- The middleware translates between them while preserving Acuity's rules.
+
+Four principles shape the implementation:
+
+1. **Intent enters; provider mechanics do not leak back.** Commands and results
+   use Acuity language. Raw payloads stay in the production adapter.
+2. **Every rule has one owner.** Patient behavior belongs to Patient,
+   scheduling behavior belongs to Scheduling, and deterministic policy belongs
+   to Domain.
+3. **A write is not successful until its effect is known.** Ambiguous writes
+   are reconciled through authoritative reads, never blindly repeated.
+4. **Interfaces are the test surface.** Production and deterministic adapters
+   cross the same seam used by the workflow modules.
+
+## The modules
+
+Each module exposes a small interface and hides a deeper implementation. That
+gives callers leverage and keeps change local.
+
+| Module | Interface callers learn | What the implementation owns |
 | --- | --- | --- |
-| `ADVANCEDMD_USERNAME` | Yes | AdvancedMD API username |
-| `ADVANCEDMD_PASSWORD` | Yes | AdvancedMD API password |
-| `ADVANCEDMD_OFFICE_KEY` | Yes | AdvancedMD office key |
-| `ADVANCEDMD_APP_NAME` | Yes | Registered AdvancedMD app name |
-| `API_SECRET` | Yes | Bearer token required by `/api/*` endpoints |
-| `BOOKING_TOKEN_SECRET` | No | HMAC secret for signed availability slot tokens; defaults to `API_SECRET`, but should be distinct in production |
-| `MAINTENANCE_OIDC_AUDIENCE` | Yes | HTTPS Cloud Run service base URL accepted as the maintenance OIDC audience |
-| `MAINTENANCE_OIDC_SERVICE_ACCOUNT` | Yes | Dedicated Cloud Scheduler service-account email allowed to invoke maintenance |
-| `ALLOW_RAW_SLOT_BOOKING` | No | Temporary legacy escape hatch for booking without `bookingToken`; default `false` |
-| `PORT` | No | Server port, default `8080` |
-| `AMD_ENV` | No | `dev` uses dev office IDs; anything else uses prod |
+| HTTP | Authenticated JSON routes and stable response shapes | Authentication, request IDs, transport validation, and mapping |
+| Patient | `Resolve`, `Create`, `UpdateInsurance` | Identity resolution, demographics, insurance policy, patient mutations, and reconciliation |
+| Scheduling | `Search`, `Book`, `Cancel` | Availability, signed slots, appointment intent, live revalidation, ownership checks, and reconciliation |
+| Domain | Policy and domain values | Offices, routing, eligibility, appointment types, capacity, and time rules |
+| Session | `Get`, `Maintain`, `Status` | Credentials, token lifecycle, single-flight login, and last-known-good state |
+| AdvancedMD | `PatientRecords`, `SchedulingRecords` | The external-records seam, production adapter, stable errors, transport, parsing, and normalization |
 
-Copy the example file and replace every placeholder. `.env` is ignored by both
-Git and Docker build context; never commit or bake credentials into an image.
+`cmd/api/main.go` is the composition root. It creates one Session, one
+production records adapter, one Patient module, one Scheduling module, and one
+HTTP router. No workflow module creates its own production dependency.
 
-Run locally with Go:
+## A request through the system
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant H as HTTP module
+    participant W as Patient or Scheduling
+    participant D as Domain policy
+    participant R as Records adapter
+    participant S as Session
+    participant E as External system
+
+    C->>H: Authenticated JSON intent
+    H->>W: Validated command
+    W->>D: Ask for deterministic policy
+    D-->>W: Provider-independent decision
+    W->>R: Domain read or mutation
+    R->>S: Get a usable session
+    S-->>R: Session data copy
+    R->>E: Provider-specific request
+    E-->>R: Raw response
+    R-->>W: Normalized record or safe error
+    W-->>H: Stable result
+    H-->>C: JSON outcome + request ID
+```
+
+The HTTP module remains thin: it authenticates, validates transport shape, and
+maps commands and results. It does not decide patient or scheduling policy.
+
+## The invariants
+
+These rules are more important than any individual endpoint:
+
+- **One token owner.** Session is the only module that authenticates or mutates
+  process-local session state.
+- **One patient owner.** Patient owns complete resolution and patient mutation
+  outcomes, including partial success.
+- **One scheduling owner.** Scheduling owns availability, booking, and
+  cancellation as one coherent workflow.
+- **One policy owner.** Domain owns office, routing, DOB, provider,
+  appointment-type, and capacity decisions without performing I/O.
+- **Complete reads prove absence.** A missing record from a partial read is
+  unknown, not absent.
+- **Ambiguous writes happen once.** The implementation reconciles through a
+  read or returns `indeterminate_write`; callers must not retry automatically.
+- **A slot is a signed promise.** Availability signs the selected policy facts,
+  and booking revalidates them against current patient and schedule state.
+- **Observability is PHI-safe.** Logs contain route, status, safe category,
+  latency, and a redacted request ID—not bodies, patient IDs, tokens, or raw
+  provider errors.
+
+## Write safety
+
+Network failure is not proof that a write failed. The provider may have applied
+the mutation before the connection disappeared. Patient and Scheduling
+therefore use the same recovery shape:
+
+```mermaid
+flowchart TD
+    command["Validated command"] --> prepare["Read the state needed to prove the effect"]
+    prepare --> write["Attempt the mutation once"]
+    write -->|Definitive success| receipt["Return the normal receipt"]
+    write -->|Definitive rejection| failure["Return a stable failure"]
+    write -->|Ambiguous result| reconcile["Read authoritative state"]
+    reconcile -->|Effect proven| receipt
+    reconcile -->|Effect disproven by a complete read| failure
+    reconcile -->|Read failed or incomplete| unknown["indeterminate_write<br/>Do not retry automatically"]
+```
+
+Examples of authoritative proof:
+
+- Patient creation compares the pre-write patient baseline with exact
+  post-write matches.
+- Insurance updates re-read the active demographic insurance state.
+- Booking reads the intended appointment month and matches the patient, office,
+  time, provider, and appointment type.
+- Cancellation reads the original appointment's owning month and proves
+  whether it still exists.
+
+## The scheduling handshake
+
+Availability and booking are deliberately one workflow. A slot can become
+invalid after it is offered, so booking never trusts an old search result by
+itself.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant S as Scheduling
+    participant D as Domain policy
+    participant R as SchedulingRecords
+
+    C->>S: Search(date, office, routing, DOB)
+    S->>D: Resolve eligible columns and rules
+    S->>R: Read live appointments and holds
+    S-->>C: Slots + signed bookingToken
+    C->>S: Book(patient intent + bookingToken)
+    S->>R: Re-read patient, setup, appointments, and holds
+    S->>D: Revalidate office, type, provider, capacity, and force
+    alt Facts still match
+        S->>R: Attempt booking once
+        R-->>S: Definitive or ambiguous result
+        S-->>C: Receipt, stable failure, or indeterminate_write
+    else Facts changed
+        S-->>C: slot_unavailable
+    end
+```
+
+This prevents a stale slot, changed patient context, or changed capacity
+decision from silently becoming a booking.
+
+## Session lifecycle
+
+The process keeps one session in memory. `Get` performs request-time recovery;
+`Maintain` supports authenticated proactive maintenance; `Status` reports
+lifecycle state without exposing credentials, tokens, or provider URLs.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Uninitialized
+    Uninitialized --> Refreshing: first Get or Maintain
+    Fresh --> Stale: age reaches recovery threshold
+    Fresh --> Refreshing: Maintain
+    Stale --> Refreshing: Get or Maintain
+    Degraded --> Refreshing: retry window passes
+    Refreshing --> Fresh: login succeeds
+    Refreshing --> Degraded: login fails, prior session still usable
+    Refreshing --> Unavailable: login fails, no usable session
+    Degraded --> Unavailable: prior session expires
+    Unavailable --> Refreshing: next Get or Maintain
+```
+
+Concurrent callers share one in-flight login. A refresh failure may degrade the
+session while a last-known-good token remains usable; an expired or missing
+token makes the session unavailable.
+
+## HTTP interface
+
+All `/api/*` routes require `Authorization: Bearer <API_SECRET>`.
+
+| Route | Intent |
+| --- | --- |
+| `POST /api/patient/resolve` | Resolve identity, demographics, routing, and upcoming appointments |
+| `POST /api/add-patient` | Create a patient and attach primary insurance |
+| `POST /api/patient/update-insurance` | Replace primary insurance |
+| `POST /api/scheduler/availability` | Find policy-valid slots and sign them |
+| `POST /api/appointment/book` | Revalidate and book a signed slot |
+| `POST /api/appointment/cancel` | Verify ownership and cancel an appointment |
+
+Operational routes have separate contracts:
+
+| Route | Contract |
+| --- | --- |
+| `GET /health`, `GET /live` | Process liveness; no provider call |
+| `GET /ready` | Local initialization readiness; no provider call |
+| `GET /metrics` | PHI-free patient mutation counters |
+| `POST /ops/session/maintenance` | Google-signed OIDC identity; never `API_SECRET` |
+
+Agent-readable business failures intentionally remain JSON tool results, often
+with HTTP 200 and `status: "error"`. Transport authentication failures use
+HTTP 401, and maintenance failures use a redacted HTTP 503.
+
+## Source map
+
+```text
+cmd/api/main.go                  composition root
+internal/http/                   HTTP interface and transport mapping
+internal/patient/                patient workflow
+internal/scheduling/             availability, booking, and cancellation
+internal/domain/                 pure policy and domain values
+internal/session/                authentication and token lifecycle
+internal/advancedmd/             records interfaces and production adapter
+internal/advancedmd/advancedmdtest/   deterministic records adapter
+internal/clients/                provider transport implementations
+internal/safeerrors/             PHI-safe error classification
+internal/config/                 runtime configuration
+```
+
+## Run locally
+
+Requirements: Go 1.26+ and valid development credentials.
 
 ```bash
 cp .env.example .env
@@ -122,583 +290,59 @@ set +a
 go run ./cmd/api
 ```
 
-Build and run the container:
+The process listens on `0.0.0.0:$PORT` (`8080` by default).
+
+```bash
+curl http://localhost:8080/live
+curl http://localhost:8080/ready
+```
+
+Build and verify:
+
+```bash
+go build ./...
+go test ./...
+go vet ./...
+```
+
+The container uses the same interface:
 
 ```bash
 docker build -t abita-middleware:local .
 docker run --rm --env-file .env -p 8080:8080 abita-middleware:local
-curl http://localhost:8080/health
 ```
 
-The image defaults to port `8080`. Setting `PORT` in `.env` also requires the
-host mapping to match, for example `-p 9090:9090` for `PORT=9090`.
-
-Build and test without a container:
-
-```bash
-go build -o gateway ./cmd/api
-go test ./...
-```
-
-## Cloud Run
-
-The server listens on `0.0.0.0:$PORT`; Cloud Run injects `PORT` automatically,
-so do not set it as a service environment variable. `GET /live` reports process
-liveness, `GET /ready` reports local readiness, and the compatible `GET /health`
-route remains available. All `/api/*` routes still require `API_SECRET`.
-
-Use these service-level settings:
-
-- Minimum instances: `1`
-- Maximum instances: `1`
-- Billing: request-based (CPU throttling enabled)
-- Startup probe: HTTP `GET /live` on port `8080`
-- Readiness probe: HTTP `GET /ready` on port `8080`
-
-One instance is intentional. The AdvancedMD session token and scheduler setup
-cache live in memory. The Session implementation is the only credential and
-token owner; it starts request-time authentication when needed and shares one
-in-flight login across concurrent callers. A session becomes stale after 20
-hours and is never treated as safe after AdvancedMD's documented 24-hour token
-lifetime. Cloud Scheduler requests maintenance every 12 hours by default, while
-patient requests retain bounded fallback authentication if a scheduled request
-is delayed or fails. Scaling to multiple instances would still create
-independent token and cache state.
-
-Production deployment is owned by `scripts/deploy-cloud-run.sh`, invoked by the
-automatic and manual Cloud Build configurations. Use that path instead of
-copying deployment flags into an ad hoc command; it validates the maintenance
-identity, deploys with zero traffic, and then performs one direct 100% cutover.
-
-The runtime service account needs Secret Manager access to those six secrets.
-`ADVANCEDMD_USERNAME`, `ADVANCEDMD_PASSWORD`, `ADVANCEDMD_OFFICE_KEY`,
-`ADVANCEDMD_APP_NAME`, and `API_SECRET` are required by the process.
-`BOOKING_TOKEN_SECRET` technically falls back to `API_SECRET`, but a separate
-production secret limits cross-use between API authentication and signed tokens.
-See `docs/cloud-run-deployment.md` for the production Scheduler identity,
-deployment, smoke, and rollback contract.
-
-## Authentication
-
-`GET /health`, `GET /live`, `GET /ready`, and `GET /metrics` are
-unauthenticated. Every
-`/api/*` route requires:
-
-```http
-Authorization: Bearer <API_SECRET>
-Content-Type: application/json
-```
-
-The Session module performs AdvancedMD's two-step login internally and caches
-the token. Callers do not send AMD credentials or raw AMD session tokens.
-
-`POST /ops/session/maintenance` does not accept `API_SECRET`. It requires a
-Google-signed OIDC bearer token with the configured audience and exact dedicated
-service-account email. It returns no token or provider data.
-
-## Office Registry
-
-Office truth lives in `internal/domain/office.go`.
-
-`office` request fields accept:
-
-- E.164 trunk numbers, for example `+19542872010`
-- 11-digit US numbers, for example `19542872010`
-- 10-digit US numbers, for example `9542872010`
-- formatted US numbers, for example `(954) 287-2010`
-- office IDs or display names, for example `hollywood`, `Hollywood`,
-  `sweetwater`, `Spring Hill`
-
-If `office` is omitted, prod defaults to Spring Hill. Signed `bookingToken`
-requests infer office from the token and reject a conflicting explicit office.
-
-### Production Offices
-
-| Office | ID | Facility | Default Profile | Phone mappings |
-| --- | --- | ---: | ---: | --- |
-| Spring Hill | `spring_hill` | `1568` | `620` | `+17275919997` |
-| Crystal River | `crystal_river` | `1576` | `2064` | `+13523202007`, `+16182265883` placeholder |
-| Hollywood | `hollywood` | `1480` | `620` | `+19542872010` |
-| Sweetwater | `sweetwater` | `670` | `620` | `+17864657475`, `+17864654845`, `+17866134310`, `+17864657479`, `+17864654836`, `+17864654882` |
-| North Miami Beach Optical | `north_miami_beach_optical` | `1582` | `621` | `+13055095333` |
-
-### Scheduler Columns
-
-| Office | Lane | Columns |
-| --- | --- | --- |
-| Spring Hill | Medical | `1513` Dr. Bach, `1598` Dr. Bach, `1551` Dr. Joseph Licht, `1550` Dr. Noel |
-| Spring Hill | Routine vision | `1600` Dr. Melissa Otero |
-| Crystal River | Medical | `1593` Dr. Joseph Licht |
-| Hollywood | Medical | `1268` Dr. Bach, `1478` Dr. Bach |
-| Hollywood | Routine vision | `1555` Dr. Farnan, `1510` Dr. Vidal, `1305` Dr. Calero |
-| Sweetwater | Medical | `682` Dr. Bach, `1307` Dr. Bach |
-| Sweetwater | Routine vision | `1296` Dr. Casas, `1554` Dr. Farnan, `1210` Dr. Calero |
-| North Miami Beach Optical | Routine vision | `1601` Dr. Miriam Bach |
-
-### Provider Age Rules
-
-Medical pediatric routing still sends minors to the office's pediatric routing
-lane. Provider-specific age limits are enforced for availability and booking:
-missing DOB excludes age-restricted providers from availability and blocks
-booking into those columns; malformed DOB is rejected.
-
-| Provider | Minimum age |
-| --- | ---: |
-| Dr. Bach | Newborn and up |
-| Dr. Calero | 4 and up |
-| Dr. Farnan | 5 and up |
-| Dr. Vidal | 7 and up |
-| Dr. Casas | 7 and up |
-
-## Routing And Insurance
-
-Routing values:
-
-| Routing | Meaning |
-| --- | --- |
-| `not_accepted` | Insurance is not accepted |
-| `bach_only` | Medical lane for Dr. Bach columns |
-| `bach_licht` | Medical lane for offices that have Bach and Licht |
-| `all_three` | Full medical lane for the office |
-| `optical_only` | Routine-vision lane |
-
-Current state:
-
-- Spring Hill and Crystal River use the existing medical insurance map.
-- Hollywood and Sweetwater use the Abita Eye Group 7/7/2026 medical insurance
-  list's A.Bach column. Accepted medical plans route to `bach_only` and map to
-  the existing AMD network carrier IDs.
-- Routine vision for Spring Hill, Hollywood, Sweetwater, and North Miami Beach
-  Optical uses the existing vision insurance crosswalk and returns
-  `routing: "optical_only"`.
-- North Miami Beach Optical is routine-vision only and does not support medical
-  scheduling.
-- `coverageType` defaults to medical. Send `"routine_vision"` only after the
-  agent has confirmed an accepted vision plan.
-- Medical patients under 18 are routed through the office's pediatric routing
-  unless the insurance is not accepted. When DOB is present, availability and
-  booking also apply that pediatric routing even if the caller accidentally
-  sends a broader medical routing lane.
-
-## Appointment Types
-
-| Type ID | Name | Lane |
-| ---: | --- | --- |
-| `1006` | New Adult Medical | Medical |
-| `1004` | New Pediatric Medical | Medical |
-| `1007` | Established Adult Medical | Medical |
-| `1005` | Established Pediatric Medical | Medical |
-| `1008` | Post Op | Medical |
-| `1010` | New Adult Vision | Routine vision |
-| `3364` | Established Adult Vision | Routine vision |
-| `4244` | New Pediatric Vision | Routine vision |
-| `4245` | Established Pediatric Vision | Routine vision |
-| `6167` | Crystal River New Patient | Crystal River only |
-| `6168` | Crystal River Post Op | Crystal River only |
-| `6169` | Crystal River Established Patient | Crystal River only |
-
-The booking endpoint rejects medical types on `optical_only`, vision types on
-medical routing, and Crystal River-specific types outside Crystal River.
-
-## Endpoints
-
-### GET /health
-
-Compatibility alias for process liveness. Returns:
-
-```json
-{"status":"ok"}
-```
-
-### GET /live
-
-Reports process liveness without calling AdvancedMD:
-
-```json
-{"status":"ok"}
-```
-
-### GET /ready
-
-Reports that local initialization completed and the process can accept traffic.
-AdvancedMD outages do not make this probe fail:
-
-```json
-{"status":"ready"}
-```
-
-### GET /metrics
-
-Returns Prometheus counters for patient mutations labeled only by operation and
-outcome category. Patient identifiers and provider details are never included.
-
-### POST /ops/session/maintenance
-
-Invokes proactive Session maintenance. Cloud Scheduler calls this route with
-its dedicated Google-signed OIDC identity. A successful request returns
-`204 No Content`; unauthorized requests return `401`, and a provider
-maintenance failure returns a redacted `503`.
-
-### POST /api/patient/resolve
-
-Single patient read route for pre-call lookup, patient verification, and
-appointment refresh. It resolves patients by phone, name/DOB, or known
-`patientId`; returns demographics, insurance routing, allowed providers, and
-loads upcoming appointments by default.
-
-Appointment loading uses nearby office groups: Spring Hill and Crystal River are
-queried together, and Hollywood and Sweetwater are queried together. Returned
-appointments include the owning `officeId` and `office`.
-
-Request:
-
-```json
-{
-  "phone": "9542872010",
-  "firstName": "Jane",
-  "dob": "01/15/1980",
-  "office": "Hollywood"
-}
-```
-
-Valid request shapes:
-
-- `phone`
-- `phone` + `firstName`
-- `phone` + `dob`
-- `phone` + `firstName` + `dob`
-- `lastName` + `dob`
-- `lastName` + `dob` + `firstName`
-- `patientId`
-
-Appointment loading is best effort. A verified patient response uses
-`appointmentsStatus` to separate identity resolution from appointment loading:
-`found`, `none`, or `error`. For cancellation, the agent sends the loaded
-`appointmentId` and verified `patientId`; middleware reloads upcoming
-appointments and verifies that the appointment belongs to that patient before
-calling AdvancedMD.
-
-Response statuses: `verified`, `multiple_matches`, `not_found`, `error`.
-For `multiple_matches`, the top-level response keeps `status: "multiple_matches"`
-and `matches` contains full verified patient payloads,
-including `patientId`, routing, appointment status, appointments, and cancel
-tokens when appointments exist.
-
-### POST /api/add-patient
-
-The Patient module validates and normalizes the request, resolves the office and
-insurance route, creates the patient with XMLRPC `addpatient`, and then attaches
-insurance with `addinsurance`. A timeout, connection reset, or unreadable
-provider response is never retried as a mutation. Patient creation is reconciled
-through patient lookup before insurance can be attached. Patient identifiers are
-captured before the write, and creation does not proceed without a complete
-baseline. After an ambiguous response, only a newly appearing exact match proves
-success. Empty, unidentifiable, or pre-existing-only results remain
-`indeterminate_write`.
-
-Request:
-
-```json
-{
-  "firstName": "John",
-  "lastName": "Smith",
-  "dob": "01/15/1990",
-  "phone": "8015551234",
-  "email": "john@example.com",
-  "street": "123 Main St",
-  "aptSuite": "",
-  "city": "Hollywood",
-  "state": "FL",
-  "zip": "33021",
-  "sex": "male",
-  "insurance": "Humana Medicare",
-  "coverageType": "medical",
-  "subscriberName": "John Smith",
-  "subscriberNum": "H12345678",
-  "office": "Hollywood"
-}
-```
-
-Required fields: `firstName`, `lastName`, `dob`, `phone`, `street`, `city`,
-`state`, `zip`, `insurance`, `subscriberName`, `subscriberNum`.
-
-Optional fields: `email`, `aptSuite`, `coverageType`, `office`.
-
-Response statuses: `created`, `partial`, `error`.
-Failure responses include a stable `outcome`, including `rejected`,
-`reconciled_failure`, and `indeterminate_write`. An
-`indeterminate_write` response must not be retried automatically.
-
-### POST /api/patient/update-insurance
-
-The Patient module end-dates the old insurance plan and attaches a new one. An
-ambiguous write is reconciled by re-reading the active demographic insurance
-state; the mutation itself is never retried.
-
-Request:
-
-```json
-{
-  "patientId": "17604634",
-  "dob": "01/15/1980",
-  "insPlanId": "12345",
-  "respPartyId": "67890",
-  "oldInsurance": "Old Carrier",
-  "insurance": "Humana Medicare",
-  "coverageType": "medical",
-  "subscriberName": "John Smith",
-  "subscriberNum": "H12345678",
-  "office": "Spring Hill"
-}
-```
-
-`dob` is optional, but it should be supplied when known so the response can
-return age-filtered `allowedProviders` and apply medical pediatric routing.
-
-Response statuses: `updated`, `error`.
-Failure responses use the same stable mutation `outcome` categories as patient
-creation.
-
-### POST /api/scheduler/availability
-
-Returns availability from AMD scheduler setup, appointments, and block holds.
-Searches forward up to 14 days when the requested date has no slots.
-
-Request:
-
-```json
-{
-  "date": "2026-05-18",
-  "provider": "Farnan",
-  "office": "Hollywood",
-  "routing": "optical_only",
-  "dob": "01/15/2019",
-  "preauthRequired": false
-}
-```
-
-Only `date` is required. `routing` defaults to `all_three`, which means medical
-columns only. Routine vision must send `routing: "optical_only"`. `dob` is
-optional for unrestricted columns; age-restricted provider columns are excluded
-when DOB is missing, malformed DOB returns an error, and under-18 DOBs apply the
-office's pediatric routing for medical availability.
-
-Availability rules:
-
-1. Same-day appointment searches are rejected.
-2. `preauthRequired: true` enforces a 14-day minimum lead time.
-3. Columns must belong to the resolved office and facility.
-4. Routing controls which medical or routine-vision columns are considered.
-5. DOB applies medical pediatric routing and filters provider age rules.
-6. Recurring block holds use the daily hold window, not the recurrence end date.
-7. Different-start appointments block overlapping appointment durations.
-8. Same-start appointment count is checked against per-column capacity.
-9. Configured double-book columns allow one existing same-start appointment per
-   column; those slots include `sameStartBooked`, `sameStartCapacity`, and
-   `requiresForce`. Hollywood and Sweetwater routine-vision columns double-book
-   only for start times 8:30-10:45 AM and 1:30-2:30 PM Monday-Thursday, and
-   8:30-11:45 AM on Friday. Spring Hill routine vision, North Miami Beach
-   Optical, and Crystal River remain single-booked.
-
-Response:
-
-```json
-{
-  "status": "success",
-  "outcome": "availability_found",
-  "availabilityFound": true,
-  "requestedDate": "2026-05-18",
-  "shouldRetrySameSearch": false,
-  "nextAction": "offer_slots",
-  "actualDate": "2026-05-18",
-  "slots": [
-    {
-      "provider": "Dr. Kyler Farnan",
-      "time": "8:30 AM",
-      "datetime": "2026-05-18T08:30",
-      "bookingToken": "signed-slot-token",
-      "columnId": 1555,
-      "profileId": 2075,
-      "duration": 15
-    }
-  ]
-}
-```
-
-When no slots exist in the full search window, the endpoint returns a completed
-tool result, not an execution error. The agent should treat
-`outcome: "no_availability"` and `shouldRetrySameSearch: false`
-as the control fields:
-
-```json
-{
-  "status": "success",
-  "outcome": "no_availability",
-  "availabilityFound": false,
-  "requestedDate": "2026-05-18",
-  "shouldRetrySameSearch": false,
-  "nextAction": "ask_for_different_preferences",
-  "searchedFrom": "2026-05-18",
-  "searchedThrough": "2026-06-01",
-  "message": "No availability was found from 2026-05-18 through 2026-06-01. Do not search this same window again unless the patient changes date, provider, office, or appointment type.",
-  "slots": []
-}
-```
-
-If AMD appointment data is unavailable for any searched provider/date and no
-slots are found from the remaining data, the response is
-`outcome: "availability_search_incomplete"` with `shouldRetrySameSearch: true`.
-The agent should retry once; if it still cannot check availability, it should
-ask for different preferences.
-
-### POST /api/appointment/book
-
-Books an appointment in AdvancedMD. The preferred path is to pass the signed
-`bookingToken` from the selected availability slot. The middleware expands that
-token into the raw AMD slot identifiers, then supplies facility ID, appointment
-color, episode ID, AMD type wrapping, and the numeric AMD appointment type.
-
-Request:
-
-```json
-{
-  "patientId": "17604634",
-  "patientName": "Jane Smith",
-  "dob": "01/15/2019",
-  "bookingToken": "signed-slot-token",
-  "visitCategory": "routine_vision",
-  "visitKind": "routine_vision",
-  "patientStatus": "established",
-  "office": "Hollywood"
-}
-```
-
-Legacy raw-slot request, disabled by default and intended only as a temporary
-compatibility escape hatch with `ALLOW_RAW_SLOT_BOOKING=true`. Legacy callers
-may still send `appointmentTypeId`; otherwise the same intent fields are used:
-
-```json
-{
-  "patientId": "17604634",
-  "patientName": "Jane Smith",
-  "dob": "01/15/2019",
-  "columnId": 1555,
-  "profileId": 2075,
-  "startDatetime": "2026-05-18T08:30",
-  "duration": 15,
-  "visitCategory": "routine_vision",
-  "visitKind": "routine_vision",
-  "patientStatus": "established",
-  "appointmentReason": "blurry vision",
-  "referringDoctor": "Dr. Smith",
-  "routing": "optical_only",
-  "office": "Hollywood"
-}
-```
-
-Required fields: `patientId`, appointment intent (`visitCategory`/`visitKind`,
-`patientStatus`, and `dob` or `ageBand` when age matters), and either
-`bookingToken` or the legacy raw slot fields `columnId`, `profileId`,
-`startDatetime`, and `duration`. `appointmentTypeId` is accepted only as a
-legacy override; new callers should not send it.
-
-Optional fields: `patientName`, `dob`, `ageBand`, `routing`, `office`,
-`isPostOp`, `visitReason`, `appointmentReason`, and `referringDoctor`. When
-`appointmentReason` or `referringDoctor` is present, booking sends AMD
-appointment `comments` in the booking payload:
-
-```text
-Appointment reason: <appointmentReason or none>
-Referring doctor: <referringDoctor or none>
-- AI
-```
-
-`dob` is required when booking an age-restricted provider column, and under-18
-DOBs apply the office's pediatric routing for medical bookings. When
-`bookingToken` is used, the token owns the office, selected `columnId`,
-`profileId`, `startDatetime`, `duration`, and routing lane.
-
-Booking validation:
-
-- `patientId` must be numeric.
-- `bookingToken`, when present, must be signed and unexpired. If `office` is
-  supplied, it must match the token's office.
-- `columnId` must belong to the resolved office.
-- `columnId` must be valid for the requested routing lane.
-- Resolved appointment type must be valid for the office and routing lane.
-- If the appointment type cannot be resolved, the response uses
-  `outcome: "appointment_type_unresolved"` with `missing` facts such as
-  `patientStatus`, `dob`, or `routeToSpringHill`.
-- DOB must be valid and satisfy provider age rules for age-restricted columns.
-- DOB applies medical pediatric routing when the patient is under 18.
-- Before writing, Scheduling reloads the patient context, current scheduler
-  setup, appointments, and block holds. The signed office, appointment type,
-  provider, capacity, and `requiresForce` decision must still match current
-  state.
-- Slots that still require force are booked with AMD `force: 1` only when that
-  decision matches the signed token. Changed capacity or force state returns
-  `outcome: "slot_unavailable"` without writing.
-- Appointment comments must be 1000 characters or fewer.
-- AMD 409 conflicts return a clear slot-no-longer-available message.
-
-An ambiguous provider result is never retried automatically. Scheduling reloads
-the patient's appointments and matches patient, date, time, office, provider,
-and appointment type. A match returns the normal `booked` receipt; a complete
-non-match returns `outcome: "write_failed"`; an unprovable result returns
-`outcome: "indeterminate_write"`.
-
-Response statuses: `booked`, `error`.
-
-### POST /api/appointment/cancel
-
-Cancels an appointment after validating that the requested `appointmentId`
-belongs to the verified `patientId` in the relevant office lookup group.
-
-Request:
-
-```json
-{
-  "appointmentId": 9570263,
-  "patientId": "17604634",
-  "office": "Sweetwater"
-}
-```
-
-Response statuses: `cancelled`, `error`.
-
-Cancellation first reloads the patient's appointments and writes only after the
-appointment is proven to belong to that patient. An ambiguous cancellation is
-never repeated automatically: Scheduling reloads current appointment state,
-returns the normal `cancelled` receipt when the appointment is gone,
-`outcome: "write_failed"` when it remains, or
-`outcome: "indeterminate_write"` when current state cannot be read.
-
-### LiveKit Agent Contract
-
-The LiveKit agent no longer needs `/api/token`; that endpoint has been removed.
-The agent should call middleware endpoints directly with `AMD_API_URL` and
-`AMD_API_TOKEN`.
-
-For cancellation, appointment lookup should keep loaded appointment details in
-session state. `cancel_appt` should send:
-
-```json
-{
-  "appointmentId": 9570263,
-  "patientId": "17604634",
-  "office": "Sweetwater"
-}
-```
-
-## Development Notes
-
-- Keep office data in `internal/domain/office.go`.
-- Keep medical and vision insurance logic in `internal/domain/insurance.go`.
-- Prefer endpoint tests in `internal/http/handlers_test.go` for user-visible
-  behavior.
-- Prefer domain tests in `internal/domain/*_test.go` for office, insurance, DOB,
-  and appointment-type rules.
-
-## License
-
-MIT
+`.env` is excluded from Git and the Docker build context. Never commit
+credentials or bake them into an image.
+
+## Runtime model
+
+Production runs one Cloud Run instance because Session and the scheduler setup
+cache are process-local. Authentication correctness does not depend on
+background CPU: Cloud Scheduler requests maintenance, while `Get` retains
+bounded request-time recovery.
+
+Deployment configuration, smoke checks, and rollback live in
+[the Cloud Run deployment contract](docs/cloud-run-deployment.md).
+
+## Where the details live
+
+The README explains the system. Detailed provider and policy data stay close to
+their owners:
+
+- [AdvancedMD interface notes](docs/advancedmd-api.md) — provider operations,
+  transport families, and normalization
+- [Multi-office registry](MULTI_OFFICE.md) — office identifiers, scheduler
+  columns, and routing lanes
+- [Insurance crosswalk](INSURANCE_CROSSWALK.md) — accepted plans, carrier
+  mappings, and routing outcomes
+- [Patient resolution specification](docs/patient-resolve-and-appointments-spec.md)
+  — identity and appointment-loading semantics
+- [Cloud Run deployment contract](docs/cloud-run-deployment.md) — production
+  pipeline, maintenance identity, smoke checks, and rollback
+- [Release automation](docs/release-automation.md) — version and release flow
+- [Contributing](CONTRIBUTING.md) — pull request and merge conventions
+
+The executable source of truth is the owning module and its interface-level
+tests. Provider reference documents explain the adapter; they do not define
+workflow policy.
