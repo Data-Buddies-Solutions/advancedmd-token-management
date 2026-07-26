@@ -387,8 +387,11 @@ func TestCancelReturnsReceiptAfterProvingOwnership(t *testing.T) {
 		receipt.Message != "Appointment cancelled successfully" {
 		t.Fatalf("receipt = %#v", receipt)
 	}
-	if len(records.Cancellations) != 1 || records.Cancellations[0] != 33333 {
-		t.Fatalf("provider cancellations = %v, want [33333]", records.Cancellations)
+	if len(records.Cancellations) != 1 ||
+		records.Cancellations[0].PatientID != "12345" ||
+		records.Cancellations[0].AppointmentID != 33333 ||
+		records.Cancellations[0].OfficeID != "spring_hill" {
+		t.Fatalf("provider cancellations = %#v", records.Cancellations)
 	}
 }
 

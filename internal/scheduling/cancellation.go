@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"advancedmd-token-management/internal/advancedmd"
 	"advancedmd-token-management/internal/domain"
@@ -14,9 +15,10 @@ import (
 // CancelCommand preserves the public cancellation request while Scheduling
 // owns patient ownership and reconciliation.
 type CancelCommand struct {
-	AppointmentID int    `json:"appointmentId"`
-	PatientID     string `json:"patientId,omitempty"`
-	Office        string `json:"office,omitempty"`
+	AppointmentID     int
+	PatientID         string
+	Office            string
+	CancellationToken *string
 }
 
 // CancelReceipt is the stable cancellation result returned to HTTP callers.
@@ -27,7 +29,64 @@ type CancelReceipt struct {
 	Message       string `json:"message"`
 }
 
-func (s *service) Cancel(ctx context.Context, command CancelCommand) (CancelReceipt, error) {
+type cancellationTelemetry struct {
+	path              string
+	scheduleReads     int
+	providerMutations int
+	startedAt         time.Time
+}
+
+// CancellationObservation is the PHI-free operation budget for one
+// cancellation request.
+type CancellationObservation struct {
+	Path              string
+	Outcome           string
+	ScheduleReads     int
+	ProviderMutations int
+	DurationMS        int64
+}
+
+type cancellationObserverKey struct{}
+
+// WithCancellationObserver attaches a request-scoped telemetry sink.
+func WithCancellationObserver(
+	ctx context.Context,
+	observer func(CancellationObservation),
+) context.Context {
+	return context.WithValue(ctx, cancellationObserverKey{}, observer)
+}
+
+func (t cancellationTelemetry) record(ctx context.Context, err error) {
+	observer, ok := ctx.Value(cancellationObserverKey{}).(func(CancellationObservation))
+	if !ok {
+		return
+	}
+	outcome := "success"
+	if err != nil {
+		outcome = string(CategoryOf(err))
+	}
+	observer(CancellationObservation{
+		Path:              t.path,
+		Outcome:           outcome,
+		ScheduleReads:     t.scheduleReads,
+		ProviderMutations: t.providerMutations,
+		DurationMS:        time.Since(t.startedAt).Milliseconds(),
+	})
+}
+
+func (s *service) Cancel(ctx context.Context, command CancelCommand) (receipt CancelReceipt, err error) {
+	tokenProvided := command.CancellationToken != nil
+	telemetry := cancellationTelemetry{path: "legacy", startedAt: time.Now()}
+	if tokenProvided {
+		telemetry.path = "token"
+	}
+	defer func() {
+		telemetry.record(ctx, err)
+	}()
+
+	if tokenProvided {
+		return s.cancelWithToken(ctx, command, &telemetry)
+	}
 	if command.AppointmentID == 0 {
 		return CancelReceipt{}, schedulingError("appointmentId is required")
 	}
@@ -50,6 +109,7 @@ func (s *service) Cancel(ctx context.Context, command CancelCommand) (CancelRece
 		PatientID: command.PatientID,
 		OfficeIDs: appointmentOfficeIDs(office),
 	})
+	telemetry.scheduleReads += read.ProviderReads
 	if err != nil {
 		return CancelReceipt{}, ownershipCheckError()
 	}
@@ -71,41 +131,130 @@ func (s *service) Cancel(ctx context.Context, command CancelCommand) (CancelRece
 		)
 	}
 
-	err = s.records.CancelAppointment(ctx, command.AppointmentID)
-	if err == nil {
-		return cancellationReceipt(command.AppointmentID), nil
+	return s.cancelVerifiedAppointment(
+		ctx,
+		advancedmd.Cancellation{
+			PatientID:     command.PatientID,
+			AppointmentID: command.AppointmentID,
+			OfficeID:      owningOffice.ID,
+		},
+		appointment,
+		owningOffice,
+		&telemetry,
+	)
+}
+
+func (s *service) cancelWithToken(
+	ctx context.Context,
+	command CancelCommand,
+	telemetry *cancellationTelemetry,
+) (CancelReceipt, error) {
+	policy, err := s.cancellationTokens.verify(*command.CancellationToken, s.now().UTC())
+	if err != nil {
+		return CancelReceipt{}, invalidCancellationTokenError()
 	}
-	if advancedmd.IsAmbiguousWrite(err) {
-		return s.reconcileCancellation(ctx, command.AppointmentID, appointment, owningOffice)
+	if command.PatientID != "" {
+		patientID := domain.StripPatientPrefix(strings.TrimSpace(command.PatientID))
+		if patientID != policy.PatientID {
+			return CancelReceipt{}, invalidCancellationTokenError()
+		}
+	}
+	if command.AppointmentID != 0 && command.AppointmentID != policy.AppointmentID {
+		return CancelReceipt{}, invalidCancellationTokenError()
+	}
+	office, ok := domain.LookupOfficeByID(policy.OfficeID)
+	if !ok {
+		return CancelReceipt{}, invalidCancellationTokenError()
+	}
+	if command.Office != "" {
+		requestedOffice, err := domain.ResolveOffice(command.Office)
+		if err != nil || requestedOffice.ID != office.ID {
+			return CancelReceipt{}, invalidCancellationTokenError()
+		}
+	}
+	if s.records == nil {
+		return CancelReceipt{}, categorizedError(
+			CategoryWriteFailed,
+			"Appointment scheduling is temporarily unavailable. Please try again.",
+		)
 	}
 
+	return s.cancelVerifiedAppointment(
+		ctx,
+		advancedmd.Cancellation{
+			PatientID:     policy.PatientID,
+			AppointmentID: policy.AppointmentID,
+			OfficeID:      policy.OfficeID,
+		},
+		domain.PatientAppointment{
+			ID:       policy.AppointmentID,
+			Start:    policy.start,
+			OfficeID: policy.OfficeID,
+		},
+		office,
+		telemetry,
+	)
+}
+
+func (s *service) cancelVerifiedAppointment(
+	ctx context.Context,
+	cancellation advancedmd.Cancellation,
+	appointment domain.PatientAppointment,
+	office *domain.OfficeConfig,
+	telemetry *cancellationTelemetry,
+) (CancelReceipt, error) {
+	telemetry.providerMutations++
+	err := s.records.CancelAppointment(ctx, cancellation)
+	if err == nil {
+		return cancellationReceipt(cancellation.AppointmentID), nil
+	}
+	if advancedmd.IsAmbiguousWrite(err) {
+		telemetry.scheduleReads++
+		return s.reconcileCancellation(
+			ctx,
+			cancellation.AppointmentID,
+			appointment,
+			office,
+		)
+	}
+	return CancelReceipt{}, cancellationProviderError(err)
+}
+
+func cancellationProviderError(err error) error {
 	providerFailure := providerCategory(err)
 	switch providerFailure {
 	case safeerrors.CategoryConflict:
-		return CancelReceipt{}, categorizedProviderError(
+		return categorizedProviderError(
 			CategoryProviderConflict,
 			providerFailure,
 			"AdvancedMD could not cancel the appointment because its state changed. Please load appointments again.",
 		)
 	case safeerrors.CategoryRejected:
-		return CancelReceipt{}, categorizedProviderError(
+		return categorizedProviderError(
 			CategoryProviderRejected,
 			providerFailure,
 			"AdvancedMD rejected the cancellation. Please load appointments again or contact the office.",
 		)
 	case safeerrors.CategoryAuthentication, safeerrors.CategoryUnavailable:
-		return CancelReceipt{}, categorizedProviderError(
+		return categorizedProviderError(
 			CategoryWriteFailed,
 			providerFailure,
 			"Service authentication is temporarily unavailable. Please try again.",
 		)
 	default:
-		return CancelReceipt{}, categorizedProviderError(
+		return categorizedProviderError(
 			CategoryWriteFailed,
 			providerFailure,
 			"Failed to cancel appointment in AdvancedMD. Please try again or contact the office.",
 		)
 	}
+}
+
+func invalidCancellationTokenError() error {
+	return categorizedError(
+		CategoryInvalidCancellationToken,
+		"cancellationToken is invalid or expired. Please load appointments again and choose the appointment to cancel.",
+	)
 }
 
 func (s *service) reconcileCancellation(

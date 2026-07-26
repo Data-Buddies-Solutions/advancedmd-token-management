@@ -221,7 +221,7 @@ func (h *Handlers) HandleAddPatient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PatientApptDetail is a single appointment formatted for LLM consumption.
+// PatientApptDetail is one appointment returned to the Voice Agent.
 type PatientApptDetail struct {
 	ID                int    `json:"id"`                          // AMD appointment ID — for cancel_appt
 	Date              string `json:"date"`                        // Human-readable (e.g., "Wednesday, March 18, 2026")
@@ -232,6 +232,7 @@ type PatientApptDetail struct {
 	Facility          string `json:"facility,omitempty"`          // e.g., "Abita Eye Group Spring Hill"
 	OfficeID          string `json:"officeId,omitempty"`          // Stable office ID that owns the appointment column
 	Office            string `json:"office,omitempty"`            // Display name for the owning office
+	CancellationToken string `json:"cancellationToken,omitempty"` // Private agent-owned cancellation authorization
 }
 
 // HandlePatientResolve resolves a patient and, by default, loads appointments.
@@ -317,6 +318,7 @@ func patientResolveResponse(result patientmodule.ResolveResult) PatientResolveRe
 			Facility:          appointment.Facility,
 			OfficeID:          appointment.OfficeID,
 			Office:            appointment.Office,
+			CancellationToken: appointment.CancellationToken,
 		}
 	}
 	matches := make([]PatientResolveResponse, len(result.Matches))
@@ -487,7 +489,43 @@ func appointmentFacilityName(amdName string, office *domain.OfficeConfig) string
 	return office.DisplayName
 }
 
-type CancelAppointmentRequest = schedulingmodule.CancelCommand
+type CancelAppointmentRequest struct {
+	AppointmentID     int    `json:"appointmentId,omitempty"`
+	PatientID         string `json:"patientId,omitempty"`
+	Office            string `json:"office,omitempty"`
+	CancellationToken string `json:"cancellationToken,omitempty"`
+
+	cancellationTokenProvided bool
+}
+
+func (r *CancelAppointmentRequest) UnmarshalJSON(data []byte) error {
+	type request CancelAppointmentRequest
+	var decoded request
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*r = CancelAppointmentRequest(decoded)
+	_, r.cancellationTokenProvided = fields["cancellationToken"]
+	return nil
+}
+
+func (r CancelAppointmentRequest) command() schedulingmodule.CancelCommand {
+	var cancellationToken *string
+	if r.cancellationTokenProvided {
+		cancellationToken = &r.CancellationToken
+	}
+	return schedulingmodule.CancelCommand{
+		AppointmentID:     r.AppointmentID,
+		PatientID:         r.PatientID,
+		Office:            r.Office,
+		CancellationToken: cancellationToken,
+	}
+}
+
 type CancelAppointmentResponse = schedulingmodule.CancelReceipt
 
 // HandleCancelAppointment delegates cancellation behavior to Scheduling.
@@ -512,7 +550,13 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
-	response, err := h.scheduling.Cancel(r.Context(), req)
+	ctx := schedulingmodule.WithCancellationObserver(
+		r.Context(),
+		func(observation schedulingmodule.CancellationObservation) {
+			recordCancellationObservation(r.Context(), observation)
+		},
+	)
+	response, err := h.scheduling.Cancel(ctx, req.command())
 	if err != nil {
 		recordSchedulingError(r.Context(), err)
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{

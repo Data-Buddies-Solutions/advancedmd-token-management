@@ -81,6 +81,7 @@ type Appointment struct {
 	Facility          string
 	OfficeID          string
 	Office            string
+	CancellationToken string
 }
 
 // ResolveResult is one complete Acuity patient resolution outcome.
@@ -179,7 +180,12 @@ type Patient interface {
 }
 
 type patient struct {
-	advancedMD advancedmd.PatientRecords
+	advancedMD         advancedmd.PatientRecords
+	cancellationTokens CancellationTokenIssuer
+}
+
+type CancellationTokenIssuer interface {
+	IssueCancellationToken(string, domain.PatientAppointment) (string, error)
 }
 
 type MutationMetric struct {
@@ -207,6 +213,16 @@ var mutationMetrics = struct {
 
 func New(advancedMD advancedmd.PatientRecords) Patient {
 	return &patient{advancedMD: advancedMD}
+}
+
+func NewWithCancellationTokens(
+	advancedMD advancedmd.PatientRecords,
+	cancellationTokens CancellationTokenIssuer,
+) Patient {
+	return &patient{
+		advancedMD:         advancedMD,
+		cancellationTokens: cancellationTokens,
+	}
 }
 
 func (p *patient) Create(ctx context.Context, command CreateCommand) (result CreateResult) {
@@ -857,6 +873,17 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 	}
 
 	for _, appointment := range appointments {
+		cancellationToken := ""
+		if p.cancellationTokens != nil {
+			cancellationToken, err = p.cancellationTokens.IssueCancellationToken(candidate.ID, appointment)
+			if err != nil {
+				result.Appointments = []Appointment{}
+				result.AppointmentsStatus = AppointmentsError
+				result.AppointmentsMessage = "Failed to prepare appointments for cancellation. Please try again."
+				result.Message = "Patient verified, appointment lookup unavailable"
+				return result, nil
+			}
+		}
 		result.Appointments = append(result.Appointments, Appointment{
 			ID:                appointment.ID,
 			Date:              appointment.Start.Format("Monday, January 2, 2006"),
@@ -867,6 +894,7 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 			Facility:          appointment.Facility,
 			OfficeID:          appointment.OfficeID,
 			Office:            appointment.Office,
+			CancellationToken: cancellationToken,
 		})
 	}
 	if len(result.Appointments) == 0 {

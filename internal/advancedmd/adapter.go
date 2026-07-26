@@ -199,7 +199,7 @@ func (a *Adapter) ReadPatientAppointmentsForMonth(
 	for _, officeID := range query.OfficeIDs {
 		office, ok := domain.LookupOfficeByID(officeID)
 		if !ok {
-			return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+			return read, NewError(safeerrors.CategoryInternal)
 		}
 		officeRead, err := a.patientAppointmentsForOfficeMonth(
 			ctx,
@@ -208,8 +208,9 @@ func (a *Adapter) ReadPatientAppointmentsForMonth(
 			office,
 			query.Month,
 		)
+		read.ProviderReads += officeRead.ProviderReads
 		if err != nil {
-			return AppointmentRead{}, err
+			return read, err
 		}
 		read.Appointments = append(read.Appointments, officeRead.Appointments...)
 		read.Complete = read.Complete && officeRead.Complete
@@ -237,11 +238,12 @@ func (a *Adapter) readPatientAppointments(ctx context.Context, query domain.Pati
 	for _, officeID := range query.OfficeIDs {
 		office, ok := domain.LookupOfficeByID(officeID)
 		if !ok {
-			return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+			return read, NewError(safeerrors.CategoryInternal)
 		}
 		officeRead, err := a.upcomingAppointmentsForOffice(ctx, token, patientIDNumber, office)
+		read.ProviderReads += officeRead.ProviderReads
 		if err != nil {
-			return AppointmentRead{}, err
+			return read, err
 		}
 		read.Appointments = append(read.Appointments, officeRead.Appointments...)
 		read.Complete = read.Complete && officeRead.Complete
@@ -281,12 +283,14 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 	for range 6 {
 		result := <-results
 		if result.err != nil {
-			return AppointmentRead{}, classify(result.err)
+			return AppointmentRead{ProviderReads: 6}, classify(result.err)
 		}
 		rawAppointments = append(rawAppointments, result.appointments...)
 	}
 
-	return patientAppointmentRead(rawAppointments, patientID, office, &cutoff), nil
+	read := patientAppointmentRead(rawAppointments, patientID, office, &cutoff)
+	read.ProviderReads = 6
+	return read, nil
 }
 
 func (a *Adapter) patientAppointmentsForOfficeMonth(
@@ -306,9 +310,11 @@ func (a *Adapter) patientAppointmentsForOfficeMonth(
 		firstOfMonth(month),
 	)
 	if err != nil {
-		return AppointmentRead{}, classify(err)
+		return AppointmentRead{ProviderReads: 1}, classify(err)
 	}
-	return patientAppointmentRead(rawAppointments, patientID, office, nil), nil
+	read := patientAppointmentRead(rawAppointments, patientID, office, nil)
+	read.ProviderReads = 1
+	return read, nil
 }
 
 func patientAppointmentRead(
@@ -543,7 +549,7 @@ func (a *Adapter) BookAppointment(ctx context.Context, booking Booking) (int, er
 	return appointmentID, nil
 }
 
-func (a *Adapter) CancelAppointment(ctx context.Context, appointmentID int) error {
+func (a *Adapter) CancelAppointment(ctx context.Context, cancellation Cancellation) error {
 	token, err := a.token(ctx)
 	if err != nil {
 		return err
@@ -551,7 +557,7 @@ func (a *Adapter) CancelAppointment(ctx context.Context, appointmentID int) erro
 	if a.restClient == nil {
 		return NewError(safeerrors.CategoryInternal)
 	}
-	if err := a.restClient.CancelAppointment(ctx, token, appointmentID); err != nil {
+	if err := a.restClient.CancelAppointment(ctx, token, cancellation.AppointmentID); err != nil {
 		return classifyMutation(err)
 	}
 	return nil

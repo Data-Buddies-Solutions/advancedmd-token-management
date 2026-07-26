@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"advancedmd-token-management/internal/safeerrors"
+	schedulingmodule "advancedmd-token-management/internal/scheduling"
 	"advancedmd-token-management/internal/session"
 
 	"github.com/go-chi/chi/v5"
@@ -44,15 +45,25 @@ const (
 type requestLogState struct {
 	outcome         outcomeCategory
 	providerFailure safeerrors.Category
+	cancellation    *cancellationLogEntry
+}
+
+type cancellationLogEntry struct {
+	Path              string `json:"path"`
+	Outcome           string `json:"outcome"`
+	ScheduleReads     int    `json:"schedule_reads"`
+	ProviderMutations int    `json:"provider_mutations"`
+	DurationMS        int64  `json:"duration_ms"`
 }
 
 type requestLogEntry struct {
-	RequestID       string               `json:"request_id"`
-	RouteTemplate   string               `json:"route_template"`
-	Outcome         outcomeCategory      `json:"outcome_category"`
-	LatencyMS       int64                `json:"latency_ms"`
-	SessionState    session.SessionState `json:"session_state"`
-	ProviderFailure safeerrors.Category  `json:"provider_failure_category"`
+	RequestID       string                `json:"request_id"`
+	RouteTemplate   string                `json:"route_template"`
+	Outcome         outcomeCategory       `json:"outcome_category"`
+	LatencyMS       int64                 `json:"latency_ms"`
+	SessionState    session.SessionState  `json:"session_state"`
+	ProviderFailure safeerrors.Category   `json:"provider_failure_category"`
+	Cancellation    *cancellationLogEntry `json:"cancellation,omitempty"`
 }
 
 var requestLogMu sync.Mutex
@@ -128,6 +139,7 @@ func LoggingMiddleware(amdSession session.Session) func(http.Handler) http.Handl
 				LatencyMS:       time.Since(start).Milliseconds(),
 				SessionState:    requestSessionState(amdSession),
 				ProviderFailure: state.providerFailure,
+				Cancellation:    state.cancellation,
 			})
 		})
 	}
@@ -160,6 +172,23 @@ func recordRequestOutcome(ctx context.Context, outcome outcomeCategory, provider
 	}
 	state.outcome = outcome
 	state.providerFailure = providerFailure
+}
+
+func recordCancellationObservation(
+	ctx context.Context,
+	observation schedulingmodule.CancellationObservation,
+) {
+	state, ok := ctx.Value(requestLogKey).(*requestLogState)
+	if !ok {
+		return
+	}
+	state.cancellation = &cancellationLogEntry{
+		Path:              observation.Path,
+		Outcome:           observation.Outcome,
+		ScheduleReads:     observation.ScheduleReads,
+		ProviderMutations: observation.ProviderMutations,
+		DurationMS:        observation.DurationMS,
+	}
 }
 
 func outcomeForStatus(status int) outcomeCategory {
