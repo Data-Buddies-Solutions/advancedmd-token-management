@@ -297,7 +297,7 @@ func (h *Handlers) HandlePatientResolve(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
-	if result.ProviderFailure != safeerrors.CategoryNone {
+	if result.ProviderFailure != "" && result.ProviderFailure != safeerrors.CategoryNone {
 		recordRequestOutcome(r.Context(), outcomeProviderFailure, result.ProviderFailure)
 	}
 
