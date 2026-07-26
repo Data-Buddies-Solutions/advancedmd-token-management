@@ -99,6 +99,47 @@ func (a *Adapter) ReadPatientAppointments(ctx context.Context, query domain.Pati
 	return a.readPatientAppointments(ctx, query)
 }
 
+func (a *Adapter) ReadPatientAppointmentsForMonth(
+	ctx context.Context,
+	query AppointmentMonthQuery,
+) (AppointmentRead, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return AppointmentRead{}, err
+	}
+	if a.restClient == nil || query.Month.IsZero() {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+	}
+	patientID, err := strconv.Atoi(query.PatientID)
+	if err != nil {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+	}
+
+	read := AppointmentRead{
+		Appointments: make([]domain.PatientAppointment, 0),
+		Complete:     true,
+	}
+	for _, officeID := range query.OfficeIDs {
+		office, ok := domain.LookupOfficeByID(officeID)
+		if !ok {
+			return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+		}
+		officeRead, err := a.patientAppointmentsForOfficeMonth(
+			ctx,
+			token,
+			patientID,
+			office,
+			query.Month,
+		)
+		if err != nil {
+			return AppointmentRead{}, err
+		}
+		read.Appointments = append(read.Appointments, officeRead.Appointments...)
+		read.Complete = read.Complete && officeRead.Complete
+	}
+	return read, nil
+}
+
 func (a *Adapter) readPatientAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) (AppointmentRead, error) {
 	token, err := a.token(ctx)
 	if err != nil {
@@ -168,11 +209,46 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 		rawAppointments = append(rawAppointments, result.appointments...)
 	}
 
+	return patientAppointmentRead(rawAppointments, patientID, office, &cutoff), nil
+}
+
+func (a *Adapter) patientAppointmentsForOfficeMonth(
+	ctx context.Context,
+	token *domain.TokenData,
+	patientID int,
+	office *domain.OfficeConfig,
+	month time.Time,
+) (AppointmentRead, error) {
+	if office == nil || month.IsZero() {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+	}
+	rawAppointments, err := a.restClient.GetAppointmentsByMonth(
+		ctx,
+		token,
+		strings.Join(office.AllowedColumnIDs(), "-"),
+		firstOfMonth(month),
+	)
+	if err != nil {
+		return AppointmentRead{}, classify(err)
+	}
+	return patientAppointmentRead(rawAppointments, patientID, office, nil), nil
+}
+
+func patientAppointmentRead(
+	rawAppointments []clients.AMDAppointmentResponse,
+	patientID int,
+	office *domain.OfficeConfig,
+	cutoff *time.Time,
+) AppointmentRead {
 	read := AppointmentRead{
 		Appointments: make([]domain.PatientAppointment, 0),
 		Complete:     true,
 	}
 	for _, raw := range rawAppointments {
+		if raw.PatientID <= 0 {
+			read.Complete = false
+			continue
+		}
 		if raw.PatientID != patientID {
 			continue
 		}
@@ -185,7 +261,7 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 			read.Complete = false
 			continue
 		}
-		if !start.After(cutoff) {
+		if cutoff != nil && !start.After(*cutoff) {
 			continue
 		}
 
@@ -227,7 +303,7 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 			Office:            office.DisplayName,
 		})
 	}
-	return read, nil
+	return read
 }
 
 func (a *Adapter) ReadAppointmentState(
@@ -246,21 +322,11 @@ func (a *Adapter) ReadAppointmentState(
 		return AppointmentState{}, NewError(safeerrors.CategoryInternal)
 	}
 
-	startDate := time.Date(
-		query.Start.Year(),
-		query.Start.Month(),
-		1,
-		0,
-		0,
-		0,
-		0,
-		query.Start.Location(),
-	).Format("2006-01-02")
 	rawAppointments, err := a.restClient.GetAppointmentsByMonth(
 		ctx,
 		token,
 		strings.Join(office.AllowedColumnIDs(), "-"),
-		startDate,
+		firstOfMonth(query.Start),
 	)
 	if err != nil {
 		return AppointmentState{}, classify(err)
@@ -277,6 +343,19 @@ func (a *Adapter) ReadAppointmentState(
 		}
 	}
 	return state, nil
+}
+
+func firstOfMonth(value time.Time) string {
+	return time.Date(
+		value.Year(),
+		value.Month(),
+		1,
+		0,
+		0,
+		0,
+		0,
+		value.Location(),
+	).Format("2006-01-02")
 }
 
 func (a *Adapter) GetSchedulerSetup(ctx context.Context) (domain.SchedulerSetup, error) {
@@ -424,6 +503,8 @@ func classify(err error) error {
 
 func classifyMutation(err error) error {
 	switch clients.MutationDispositionOf(err) {
+	case clients.MutationDispositionAuthentication:
+		return NewError(safeerrors.CategoryAuthentication)
 	case clients.MutationDispositionConflict:
 		return NewError(safeerrors.CategoryConflict)
 	case clients.MutationDispositionRejected:

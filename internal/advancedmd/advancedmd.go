@@ -64,6 +64,7 @@ type SchedulingRecords interface {
 	ReadSchedule(ctx context.Context, query domain.ScheduleReadQuery) (domain.ScheduleReadResult, error)
 	GetPatientDemographics(ctx context.Context, patientID string) (domain.PatientDemographics, error)
 	ReadPatientAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) (AppointmentRead, error)
+	ReadPatientAppointmentsForMonth(ctx context.Context, query AppointmentMonthQuery) (AppointmentRead, error)
 	ReadAppointmentState(ctx context.Context, query AppointmentStateQuery) (AppointmentState, error)
 	BookAppointment(ctx context.Context, booking Booking) (int, error)
 	CancelAppointment(ctx context.Context, appointmentID int) error
@@ -74,6 +75,14 @@ type SchedulingRecords interface {
 type AppointmentRead struct {
 	Appointments []domain.PatientAppointment
 	Complete     bool
+}
+
+// AppointmentMonthQuery selects the provider month containing an intended
+// booking so reconciliation does not depend on a rolling upcoming window.
+type AppointmentMonthQuery struct {
+	PatientID string
+	OfficeIDs []string
+	Month     time.Time
 }
 
 // AppointmentStateQuery identifies the provider month that owns an appointment.

@@ -422,6 +422,83 @@ func TestAdapterMarksPatientAppointmentReadIncompleteWhenRowsCannotBeReconciled(
 	}
 }
 
+func TestAdapterReadsIntendedAppointmentMonth(t *testing.T) {
+	domain.InitRegistry("")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("startDate") != "2027-01-01" {
+			t.Fatalf("startDate = %q, want intended appointment month", r.URL.Query().Get("startDate"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{
+			"id": 30004,
+			"startdatetime": "2027-01-03T09:00:00",
+			"patientid": 12345,
+			"provider": "BACH, AUSTIN",
+			"facility": "ABITA EYE GROUP SPRING HILL",
+			"appointmenttypeids": [1007]
+		}]`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+		func() time.Time {
+			return time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
+		},
+	)
+	read, err := adapter.ReadPatientAppointmentsForMonth(context.Background(), AppointmentMonthQuery{
+		PatientID: "12345",
+		OfficeIDs: []string{"spring_hill"},
+		Month:     time.Date(2027, time.January, 3, 9, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ReadPatientAppointmentsForMonth() error = %v", err)
+	}
+	if !read.Complete || len(read.Appointments) != 1 || read.Appointments[0].ID != 30004 {
+		t.Fatalf("ReadPatientAppointmentsForMonth() = %#v, want exact complete match", read)
+	}
+}
+
+func TestAdapterMarksMissingPatientIDIncomplete(t *testing.T) {
+	domain.InitRegistry("")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{
+			"id": 30005,
+			"startdatetime": "2027-01-03T09:00:00",
+			"provider": "BACH, AUSTIN",
+			"facility": "ABITA EYE GROUP SPRING HILL",
+			"appointmenttypeids": [1007]
+		}]`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+	)
+	read, err := adapter.ReadPatientAppointmentsForMonth(context.Background(), AppointmentMonthQuery{
+		PatientID: "12345",
+		OfficeIDs: []string{"spring_hill"},
+		Month:     time.Date(2027, time.January, 3, 9, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ReadPatientAppointmentsForMonth() error = %v", err)
+	}
+	if read.Complete || len(read.Appointments) != 0 {
+		t.Fatalf("ReadPatientAppointmentsForMonth() = %#v, want incomplete empty read", read)
+	}
+}
+
 func TestAdapterReadsCurrentAppointmentStateAfterStartTime(t *testing.T) {
 	domain.InitRegistry("")
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -650,6 +727,7 @@ func TestAdapterClassifiesProviderMutationOutcomes(t *testing.T) {
 		ambiguous bool
 	}{
 		{name: "conflict", status: http.StatusConflict, category: safeerrors.CategoryConflict},
+		{name: "authentication", status: http.StatusUnauthorized, category: safeerrors.CategoryAuthentication},
 		{name: "rejection", status: http.StatusUnprocessableEntity, category: safeerrors.CategoryRejected},
 		{name: "ambiguous server failure", status: http.StatusInternalServerError, category: safeerrors.CategoryUpstreamStatus, ambiguous: true},
 	}

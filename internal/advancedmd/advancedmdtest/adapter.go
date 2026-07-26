@@ -26,6 +26,7 @@ type Adapter struct {
 	Demographics            map[string]domain.PatientDemographics
 	DemographicErrors       map[string]error
 	AppointmentResults      map[string]AppointmentResult
+	AppointmentMonthQueries []advancedmd.AppointmentMonthQuery
 	AppointmentStateResults map[int]AppointmentStateResult
 	AppointmentStateQueries []advancedmd.AppointmentStateQuery
 	SchedulerSetup          domain.SchedulerSetup
@@ -74,6 +75,12 @@ func (a *Adapter) GetUpcomingAppointments(_ context.Context, query domain.Patien
 }
 
 func (a *Adapter) ReadPatientAppointments(_ context.Context, query domain.PatientAppointmentsQuery) (advancedmd.AppointmentRead, error) {
+	return a.nextAppointmentRead(query.PatientID)
+}
+
+func (a *Adapter) ReadPatientAppointmentsForMonth(_ context.Context, query advancedmd.AppointmentMonthQuery) (advancedmd.AppointmentRead, error) {
+	query.OfficeIDs = append([]string(nil), query.OfficeIDs...)
+	a.AppointmentMonthQueries = append(a.AppointmentMonthQueries, query)
 	return a.nextAppointmentRead(query.PatientID)
 }
 

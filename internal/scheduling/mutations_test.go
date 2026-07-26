@@ -235,6 +235,31 @@ func TestBookReconcilesAmbiguousWriteToSuccess(t *testing.T) {
 	}
 }
 
+func TestBookReconcilesAmbiguousWriteInIntendedMonth(t *testing.T) {
+	now := mutationTestNow()
+	start := time.Date(2027, time.January, 3, 9, 0, 0, 0, time.UTC)
+	records := bookingRecords()
+	records.ScheduleReads[start.Format("2006-01-02")] = completeRead("1513", nil, nil)
+	records.BookAppointmentErr = advancedmd.NewAmbiguousWriteError(safeerrors.CategoryNetwork)
+	records.AppointmentResults["12345"] = appointmentResult(
+		[]domain.PatientAppointment{matchingAppointmentAt(98766, start)},
+		true,
+	)
+
+	receipt, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Book(context.Background(), signedBookCommandAt(t, now, start))
+	if err != nil {
+		t.Fatalf("Book error = %v", err)
+	}
+	if receipt.AppointmentID != 98766 {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	if len(records.AppointmentMonthQueries) != 1 ||
+		!records.AppointmentMonthQueries[0].Month.Equal(start) {
+		t.Fatalf("appointment month queries = %#v, want %v", records.AppointmentMonthQueries, start)
+	}
+}
+
 func TestBookReconciliationRequiresEveryIntendedField(t *testing.T) {
 	now := mutationTestNow()
 	records := bookingRecords()
@@ -499,13 +524,17 @@ func bookingRecords() *advancedmdtest.Adapter {
 }
 
 func signedBookCommand(t *testing.T, now time.Time) scheduling.BookCommand {
+	return signedBookCommandAt(t, now, time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC))
+}
+
+func signedBookCommandAt(t *testing.T, now, start time.Time) scheduling.BookCommand {
 	t.Helper()
 	token, err := scheduling.SignSlotToken("test-booking-secret", scheduling.SlotPolicy{
 		OfficeID:           "spring_hill",
 		Routing:            string(domain.RoutingBachOnly),
 		ColumnID:           1513,
 		ProfileID:          620,
-		StartDatetime:      "2026-06-03T09:00",
+		StartDatetime:      start.Format("2006-01-02T15:04"),
 		Duration:           15,
 		DOB:                "01/15/1980",
 		AppointmentTypeIDs: []int{1007},
@@ -530,9 +559,13 @@ func signedBookCommand(t *testing.T, now time.Time) scheduling.BookCommand {
 }
 
 func matchingAppointment(id int) domain.PatientAppointment {
+	return matchingAppointmentAt(id, time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC))
+}
+
+func matchingAppointmentAt(id int, start time.Time) domain.PatientAppointment {
 	return domain.PatientAppointment{
 		ID:                id,
-		Start:             time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+		Start:             start,
 		Provider:          "Dr. Austin Bach",
 		AppointmentTypeID: 1007,
 		OfficeID:          "spring_hill",

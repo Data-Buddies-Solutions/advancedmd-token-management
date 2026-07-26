@@ -348,17 +348,9 @@ func (c *AdvancedMDRestClient) BookAppointment(ctx context.Context, tokenData *d
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return 0, newMutationError(MutationDispositionConflict, fmt.Errorf("provider conflict"))
-	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		disposition := MutationDispositionAmbiguous
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			disposition = MutationDispositionRejected
-		}
 		return 0, newMutationError(
-			disposition,
+			mutationDispositionForStatus(resp.StatusCode),
 			fmt.Errorf("unexpected status %d from AMD booking API", resp.StatusCode),
 		)
 	}
@@ -419,16 +411,9 @@ func (c *AdvancedMDRestClient) CancelAppointment(ctx context.Context, tokenData 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return newMutationError(MutationDispositionConflict, fmt.Errorf("provider conflict"))
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		disposition := MutationDispositionAmbiguous
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			disposition = MutationDispositionRejected
-		}
 		return newMutationError(
-			disposition,
+			mutationDispositionForStatus(resp.StatusCode),
 			fmt.Errorf("unexpected status %d from AMD cancellation API", resp.StatusCode),
 		)
 	}
