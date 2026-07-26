@@ -341,26 +341,40 @@ func (c *AdvancedMDRestClient) BookAppointment(ctx context.Context, tokenData *d
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("request failed: %w", err)
+		return 0, newMutationError(
+			MutationDispositionAmbiguous,
+			fmt.Errorf("request failed: %w", err),
+		)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return 0, fmt.Errorf("conflict")
-	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("unexpected status %d from AMD booking API", resp.StatusCode)
+		return 0, newMutationError(
+			mutationDispositionForStatus(resp.StatusCode),
+			fmt.Errorf("unexpected status %d from AMD booking API", resp.StatusCode),
+		)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read response: %w", err)
+		return 0, newMutationError(
+			MutationDispositionAmbiguous,
+			fmt.Errorf("failed to read response: %w", err),
+		)
 	}
 
 	var result BookAppointmentResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return 0, fmt.Errorf("failed to parse response: %w", err)
+		return 0, newMutationError(
+			MutationDispositionAmbiguous,
+			fmt.Errorf("failed to parse response: %w", err),
+		)
+	}
+	if result.ID <= 0 {
+		return 0, newMutationError(
+			MutationDispositionAmbiguous,
+			fmt.Errorf("invalid booking response"),
+		)
 	}
 
 	return result.ID, nil
@@ -390,12 +404,18 @@ func (c *AdvancedMDRestClient) CancelAppointment(ctx context.Context, tokenData 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return newMutationError(
+			MutationDispositionAmbiguous,
+			fmt.Errorf("request failed: %w", err),
+		)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status %d from AMD cancellation API", resp.StatusCode)
+		return newMutationError(
+			mutationDispositionForStatus(resp.StatusCode),
+			fmt.Errorf("unexpected status %d from AMD cancellation API", resp.StatusCode),
+		)
 	}
 
 	return nil

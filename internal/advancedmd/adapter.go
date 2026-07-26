@@ -91,31 +91,85 @@ func (a *Adapter) GetPatientDemographics(ctx context.Context, patientID string) 
 }
 
 func (a *Adapter) GetUpcomingAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) ([]domain.PatientAppointment, error) {
+	read, err := a.readPatientAppointments(ctx, query)
+	return read.Appointments, err
+}
+
+func (a *Adapter) ReadPatientAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) (AppointmentRead, error) {
+	return a.readPatientAppointments(ctx, query)
+}
+
+func (a *Adapter) ReadPatientAppointmentsForMonth(
+	ctx context.Context,
+	query AppointmentMonthQuery,
+) (AppointmentRead, error) {
 	token, err := a.token(ctx)
 	if err != nil {
-		return nil, err
+		return AppointmentRead{}, err
 	}
-	if a.restClient == nil {
-		return nil, NewError(safeerrors.CategoryInternal)
+	if a.restClient == nil || query.Month.IsZero() {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
 	}
-	patientIDNumber, err := strconv.Atoi(query.PatientID)
+	patientID, err := strconv.Atoi(query.PatientID)
 	if err != nil {
-		return nil, NewError(safeerrors.CategoryInternal)
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
 	}
 
-	appointments := make([]domain.PatientAppointment, 0)
+	read := AppointmentRead{
+		Appointments: make([]domain.PatientAppointment, 0),
+		Complete:     true,
+	}
 	for _, officeID := range query.OfficeIDs {
 		office, ok := domain.LookupOfficeByID(officeID)
 		if !ok {
-			return nil, NewError(safeerrors.CategoryInternal)
+			return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
 		}
-		officeAppointments, err := a.upcomingAppointmentsForOffice(ctx, token, patientIDNumber, office)
+		officeRead, err := a.patientAppointmentsForOfficeMonth(
+			ctx,
+			token,
+			patientID,
+			office,
+			query.Month,
+		)
 		if err != nil {
-			return nil, err
+			return AppointmentRead{}, err
 		}
-		appointments = append(appointments, officeAppointments...)
+		read.Appointments = append(read.Appointments, officeRead.Appointments...)
+		read.Complete = read.Complete && officeRead.Complete
 	}
-	return appointments, nil
+	return read, nil
+}
+
+func (a *Adapter) readPatientAppointments(ctx context.Context, query domain.PatientAppointmentsQuery) (AppointmentRead, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return AppointmentRead{}, err
+	}
+	if a.restClient == nil {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+	}
+	patientIDNumber, err := strconv.Atoi(query.PatientID)
+	if err != nil {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+	}
+
+	read := AppointmentRead{
+		Appointments: make([]domain.PatientAppointment, 0),
+		Complete:     true,
+	}
+	for _, officeID := range query.OfficeIDs {
+		office, ok := domain.LookupOfficeByID(officeID)
+		if !ok {
+			return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+		}
+		officeRead, err := a.upcomingAppointmentsForOffice(ctx, token, patientIDNumber, office)
+		if err != nil {
+			return AppointmentRead{}, err
+		}
+		read.Appointments = append(read.Appointments, officeRead.Appointments...)
+		read.Complete = read.Complete && officeRead.Complete
+	}
+	return read, nil
 }
 
 func (a *Adapter) upcomingAppointmentsForOffice(
@@ -123,9 +177,9 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 	token *domain.TokenData,
 	patientID int,
 	office *domain.OfficeConfig,
-) ([]domain.PatientAppointment, error) {
+) (AppointmentRead, error) {
 	if office == nil {
-		return nil, NewError(safeerrors.CategoryInternal)
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
 	}
 
 	now := a.now().In(eastern)
@@ -150,39 +204,98 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 	for range 6 {
 		result := <-results
 		if result.err != nil {
-			return nil, classify(result.err)
+			return AppointmentRead{}, classify(result.err)
 		}
 		rawAppointments = append(rawAppointments, result.appointments...)
 	}
 
-	appointments := make([]domain.PatientAppointment, 0)
+	return patientAppointmentRead(rawAppointments, patientID, office, &cutoff), nil
+}
+
+func (a *Adapter) patientAppointmentsForOfficeMonth(
+	ctx context.Context,
+	token *domain.TokenData,
+	patientID int,
+	office *domain.OfficeConfig,
+	month time.Time,
+) (AppointmentRead, error) {
+	if office == nil || month.IsZero() {
+		return AppointmentRead{}, NewError(safeerrors.CategoryInternal)
+	}
+	rawAppointments, err := a.restClient.GetAppointmentsByMonth(
+		ctx,
+		token,
+		strings.Join(office.AllowedColumnIDs(), "-"),
+		firstOfMonth(month),
+	)
+	if err != nil {
+		return AppointmentRead{}, classify(err)
+	}
+	return patientAppointmentRead(rawAppointments, patientID, office, nil), nil
+}
+
+func patientAppointmentRead(
+	rawAppointments []clients.AMDAppointmentResponse,
+	patientID int,
+	office *domain.OfficeConfig,
+	cutoff *time.Time,
+) AppointmentRead {
+	read := AppointmentRead{
+		Appointments: make([]domain.PatientAppointment, 0),
+		Complete:     true,
+	}
 	for _, raw := range rawAppointments {
+		if raw.PatientID <= 0 {
+			read.Complete = false
+			continue
+		}
 		if raw.PatientID != patientID {
 			continue
 		}
+		if raw.ID <= 0 {
+			read.Complete = false
+			continue
+		}
 		start, err := clients.ParseDateTime(raw.StartDateTime)
-		if err != nil || !start.After(cutoff) {
+		if err != nil {
+			read.Complete = false
+			continue
+		}
+		if cutoff != nil && !start.After(*cutoff) {
 			continue
 		}
 
 		typeID := 0
 		typeName := ""
 		if len(raw.AppointmentTypes) > 0 {
-			typeID = raw.AppointmentTypes[0]
-			if canonicalID, ok := domain.CanonicalAppointmentTypeID(typeID); ok {
+			providerTypeID := raw.AppointmentTypes[0]
+			canonicalID, ok := domain.CanonicalAppointmentTypeID(providerTypeID)
+			if !ok {
+				read.Complete = false
+			} else {
 				typeID = canonicalID
+				var named bool
+				typeName, named = office.AppointmentTypeName(typeID)
+				if !named {
+					read.Complete = false
+				}
 			}
-			typeName, _ = office.AppointmentTypeName(typeID)
+		} else {
+			read.Complete = false
+		}
+		provider := office.FriendlyProviderName(raw.Provider)
+		if strings.TrimSpace(raw.Provider) == "" || provider == "" {
+			read.Complete = false
 		}
 		facility := friendlyFacilityName(raw.Facility)
 		if facility == "" {
 			facility = office.DisplayName
 		}
 
-		appointments = append(appointments, domain.PatientAppointment{
+		read.Appointments = append(read.Appointments, domain.PatientAppointment{
 			ID:                raw.ID,
 			Start:             start,
-			Provider:          office.FriendlyProviderName(raw.Provider),
+			Provider:          provider,
 			Type:              typeName,
 			AppointmentTypeID: typeID,
 			Facility:          facility,
@@ -190,7 +303,59 @@ func (a *Adapter) upcomingAppointmentsForOffice(
 			Office:            office.DisplayName,
 		})
 	}
-	return appointments, nil
+	return read
+}
+
+func (a *Adapter) ReadAppointmentState(
+	ctx context.Context,
+	query AppointmentStateQuery,
+) (AppointmentState, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return AppointmentState{}, err
+	}
+	if a.restClient == nil || query.AppointmentID <= 0 || query.Start.IsZero() {
+		return AppointmentState{}, NewError(safeerrors.CategoryInternal)
+	}
+	office, ok := domain.LookupOfficeByID(query.OfficeID)
+	if !ok {
+		return AppointmentState{}, NewError(safeerrors.CategoryInternal)
+	}
+
+	rawAppointments, err := a.restClient.GetAppointmentsByMonth(
+		ctx,
+		token,
+		strings.Join(office.AllowedColumnIDs(), "-"),
+		firstOfMonth(query.Start),
+	)
+	if err != nil {
+		return AppointmentState{}, classify(err)
+	}
+
+	state := AppointmentState{Complete: true}
+	for _, raw := range rawAppointments {
+		if raw.ID == query.AppointmentID {
+			state.Exists = true
+			return state, nil
+		}
+		if raw.ID <= 0 {
+			state.Complete = false
+		}
+	}
+	return state, nil
+}
+
+func firstOfMonth(value time.Time) string {
+	return time.Date(
+		value.Year(),
+		value.Month(),
+		1,
+		0,
+		0,
+		0,
+		0,
+		value.Location(),
+	).Format("2006-01-02")
 }
 
 func (a *Adapter) GetSchedulerSetup(ctx context.Context) (domain.SchedulerSetup, error) {
@@ -251,6 +416,70 @@ func (a *Adapter) ReadSchedule(ctx context.Context, query domain.ScheduleReadQue
 	return result, nil
 }
 
+func (a *Adapter) BookAppointment(ctx context.Context, booking Booking) (int, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if a.restClient == nil {
+		return 0, NewError(safeerrors.CategoryInternal)
+	}
+	office, ok := domain.LookupOfficeByID(booking.OfficeID)
+	if !ok {
+		return 0, NewError(safeerrors.CategoryInternal)
+	}
+	facilityID, err := strconv.Atoi(office.FacilityID)
+	if err != nil {
+		return 0, NewError(safeerrors.CategoryInternal)
+	}
+	providerTypeID, ok := domain.ResolveAppointmentTypeID(booking.AppointmentTypeID)
+	if !ok {
+		return 0, NewError(safeerrors.CategoryInternal)
+	}
+	color, ok := office.AppointmentColor(booking.AppointmentTypeID)
+	if !ok {
+		return 0, NewError(safeerrors.CategoryInternal)
+	}
+	force := 0
+	if booking.Force {
+		force = 1
+	}
+
+	appointmentID, err := a.restClient.BookAppointment(ctx, token, clients.BookAppointmentParams{
+		PatientID:     booking.PatientID,
+		ColumnID:      booking.ColumnID,
+		ProfileID:     booking.ProfileID,
+		StartDatetime: domain.FormatSlotDateTime(booking.Start),
+		Duration:      booking.Duration,
+		AppointmentType: []struct {
+			ID int `json:"id"`
+		}{{ID: providerTypeID}},
+		EpisodeID:  1,
+		FacilityID: facilityID,
+		Color:      color,
+		Force:      force,
+		Comments:   booking.Comments,
+	})
+	if err != nil {
+		return 0, classifyMutation(err)
+	}
+	return appointmentID, nil
+}
+
+func (a *Adapter) CancelAppointment(ctx context.Context, appointmentID int) error {
+	token, err := a.token(ctx)
+	if err != nil {
+		return err
+	}
+	if a.restClient == nil {
+		return NewError(safeerrors.CategoryInternal)
+	}
+	if err := a.restClient.CancelAppointment(ctx, token, appointmentID); err != nil {
+		return classifyMutation(err)
+	}
+	return nil
+}
+
 func (a *Adapter) token(ctx context.Context) (*domain.TokenData, error) {
 	if a.session == nil {
 		return nil, NewError(safeerrors.CategoryUnavailable)
@@ -270,6 +499,21 @@ func classify(err error) error {
 		return nil
 	}
 	return NewError(safeerrors.Classify(err))
+}
+
+func classifyMutation(err error) error {
+	switch clients.MutationDispositionOf(err) {
+	case clients.MutationDispositionAuthentication:
+		return NewError(safeerrors.CategoryAuthentication)
+	case clients.MutationDispositionConflict:
+		return NewError(safeerrors.CategoryConflict)
+	case clients.MutationDispositionRejected:
+		return NewError(safeerrors.CategoryRejected)
+	case clients.MutationDispositionAmbiguous:
+		return NewAmbiguousWriteError(safeerrors.Classify(err))
+	default:
+		return classify(err)
+	}
 }
 
 func friendlyFacilityName(name string) string {

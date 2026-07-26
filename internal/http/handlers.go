@@ -67,12 +67,11 @@ type PatientResolveResponse struct {
 
 // Handlers holds the dependencies for HTTP handlers.
 type Handlers struct {
-	session            session.Session
-	amdClient          *clients.AdvancedMDClient
-	amdRestClient      *clients.AdvancedMDRestClient
-	patient            patientmodule.Patient
-	scheduling         schedulingmodule.Scheduling
-	schedulingWorkflow *schedulingWorkflow
+	session       session.Session
+	amdClient     *clients.AdvancedMDClient
+	amdRestClient *clients.AdvancedMDRestClient
+	patient       patientmodule.Patient
+	scheduling    schedulingmodule.Scheduling
 }
 
 // NewHandlers creates a new Handlers instance.
@@ -82,33 +81,14 @@ func NewHandlers(
 	amdRestClient *clients.AdvancedMDRestClient,
 	patient patientmodule.Patient,
 	scheduling schedulingmodule.Scheduling,
-	bookingTokenSecret ...string,
 ) *Handlers {
-	secret := ""
-	if len(bookingTokenSecret) > 0 {
-		secret = bookingTokenSecret[0]
-	}
-	handlers := &Handlers{
+	return &Handlers{
 		session:       amdSession,
 		amdClient:     amdClient,
 		amdRestClient: amdRestClient,
 		patient:       patient,
 		scheduling:    scheduling,
 	}
-	handlers.schedulingWorkflow = newSchedulingWorkflow(amdSession, amdRestClient, secret)
-	return handlers
-}
-
-// SetAllowRawSlotBooking enables the legacy raw scheduler field booking path.
-func (h *Handlers) SetAllowRawSlotBooking(allow bool) {
-	h.workflow().allowRawBooking = allow
-}
-
-func (h *Handlers) workflow() *schedulingWorkflow {
-	if h.schedulingWorkflow == nil {
-		h.schedulingWorkflow = newSchedulingWorkflow(h.session, h.amdRestClient, "")
-	}
-	return h.schedulingWorkflow
 }
 
 // HandleLive reports process liveness without calling AdvancedMD.
@@ -634,21 +614,10 @@ func appointmentFacilityName(amdName string, office *domain.OfficeConfig) string
 	return office.DisplayName
 }
 
-// CancelAppointmentRequest is the expected JSON body for cancelling an appointment.
-type CancelAppointmentRequest struct {
-	AppointmentID int    `json:"appointmentId"`
-	PatientID     string `json:"patientId,omitempty"`
-	Office        string `json:"office,omitempty"`
-}
+type CancelAppointmentRequest = schedulingmodule.CancelCommand
+type CancelAppointmentResponse = schedulingmodule.CancelReceipt
 
-// CancelAppointmentResponse is returned after cancelling an appointment.
-type CancelAppointmentResponse struct {
-	Status        string `json:"status"`
-	AppointmentID int    `json:"appointmentId,omitempty"`
-	Message       string `json:"message"`
-}
-
-// HandleCancelAppointment cancels an appointment in AdvancedMD.
+// HandleCancelAppointment delegates cancellation behavior to Scheduling.
 func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -660,153 +629,30 @@ func (h *Handlers) HandleCancelAppointment(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
-
-	if req.AppointmentID == 0 {
+	if h.scheduling == nil {
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{
 			Status:  "error",
-			Message: "appointmentId is required",
+			Outcome: string(schedulingmodule.CategoryWriteFailed),
+			Message: "Appointment scheduling is temporarily unavailable. Please try again.",
 		})
 		return
 	}
-	req.PatientID = domain.StripPatientPrefix(strings.TrimSpace(req.PatientID))
-	if req.PatientID == "" {
-		json.NewEncoder(w).Encode(CancelAppointmentResponse{
-			Status:  "error",
-			Message: "patientId is required",
-		})
-		return
-	}
-	if _, err := strconv.Atoi(req.PatientID); err != nil {
-		json.NewEncoder(w).Encode(CancelAppointmentResponse{
-			Status:  "error",
-			Message: "patientId must be numeric",
-		})
-		return
-	}
-	office, err := domain.ResolveOffice(req.Office)
+	response, err := h.scheduling.Cancel(r.Context(), req)
 	if err != nil {
 		json.NewEncoder(w).Encode(CancelAppointmentResponse{
 			Status:  "error",
+			Outcome: schedulingOutcome(err),
 			Message: err.Error(),
 		})
 		return
 	}
-
-	// Get auth token
-	tokenData, err := h.session.Get(r.Context())
-	if err != nil {
-		log.Printf("cancel-appointment: authentication failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(CancelAppointmentResponse{
-			Status:  "error",
-			Message: "Service authentication is temporarily unavailable. Please try again.",
-		})
-		return
-	}
-
-	owningOffice, err := h.cancelableAppointmentOffice(r.Context(), tokenData, req.PatientID, req.AppointmentID, office)
-	if err != nil {
-		log.Printf("cancel-appointment: appointment ownership check failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(CancelAppointmentResponse{
-			Status:  "error",
-			Message: "Unable to verify appointment before cancellation. Please load appointments again and choose the appointment to cancel.",
-		})
-		return
-	}
-	if owningOffice == nil {
-		json.NewEncoder(w).Encode(CancelAppointmentResponse{
-			Status:  "error",
-			Message: "No upcoming appointment matches that patient and appointment ID. Please load appointments again and choose the appointment to cancel.",
-		})
-		return
-	}
-
-	log.Printf("cancel-appointment: request office=%s", owningOffice.ID)
-
-	// Cancel via AMD REST API
-	if err := h.amdRestClient.CancelAppointment(r.Context(), tokenData, req.AppointmentID); err != nil {
-		log.Printf("cancel-appointment: provider request failed category=%s", safeerrors.Classify(err))
-		json.NewEncoder(w).Encode(CancelAppointmentResponse{
-			Status:  "error",
-			Message: "Failed to cancel appointment in AdvancedMD. Please try again or contact the office.",
-		})
-		return
-	}
-
-	json.NewEncoder(w).Encode(CancelAppointmentResponse{
-		Status:        "cancelled",
-		AppointmentID: req.AppointmentID,
-		Message:       "Appointment cancelled successfully",
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
-func (h *Handlers) cancelableAppointmentOffice(ctx context.Context, tokenData *domain.TokenData, patientID string, appointmentID int, office *domain.OfficeConfig) (*domain.OfficeConfig, error) {
-	if h.amdRestClient == nil {
-		return nil, fmt.Errorf("AdvancedMD appointment client is not configured")
-	}
-	appointments, err := h.fetchUpcomingAppointments(ctx, tokenData, patientID, office)
-	if err != nil {
-		return nil, err
-	}
-	for _, appointment := range appointments {
-		if appointment.ID != appointmentID {
-			continue
-		}
-		if appointment.OfficeID == "" {
-			return office, nil
-		}
-		owningOffice, ok := lookupOfficeByID(appointment.OfficeID)
-		if !ok {
-			return nil, fmt.Errorf("unknown appointment office ID %q", appointment.OfficeID)
-		}
-		return owningOffice, nil
-	}
-	return nil, nil
-}
+type BookAppointmentRequest = schedulingmodule.BookCommand
+type BookAppointmentResponse = schedulingmodule.BookReceipt
 
-// BookAppointmentRequest is the expected JSON body for booking an appointment.
-type BookAppointmentRequest struct {
-	PatientID         string `json:"patientId"`
-	PatientName       string `json:"patientName,omitempty"`
-	DOB               string `json:"dob,omitempty"`
-	BookingToken      string `json:"bookingToken,omitempty"`
-	ColumnID          int    `json:"columnId"`
-	ProfileID         int    `json:"profileId"`
-	StartDatetime     string `json:"startDatetime"`
-	Duration          int    `json:"duration"`
-	AppointmentTypeID int    `json:"appointmentTypeId"`
-	Routing           string `json:"routing,omitempty"`
-	Office            string `json:"office,omitempty"`
-	VisitCategory     string `json:"visitCategory,omitempty"`
-	VisitKind         string `json:"visitKind,omitempty"`
-	PatientStatus     string `json:"patientStatus,omitempty"`
-	AgeBand           string `json:"ageBand,omitempty"`
-	IsPostOp          bool   `json:"isPostOp,omitempty"`
-	VisitReason       string `json:"visitReason,omitempty"`
-	AppointmentReason string `json:"appointmentReason,omitempty"`
-	ReferringDoctor   string `json:"referringDoctor,omitempty"`
-
-	bookingRequiresForce      bool
-	bookingAppointmentTypeIDs []int
-}
-
-// BookAppointmentResponse is returned after booking an appointment.
-type BookAppointmentResponse struct {
-	Status              string   `json:"status"`
-	Outcome             string   `json:"outcome,omitempty"`
-	AppointmentID       int      `json:"appointmentId,omitempty"`
-	PatientID           string   `json:"patientId,omitempty"`
-	PatientName         string   `json:"patientName,omitempty"`
-	ProviderName        string   `json:"providerName,omitempty"`
-	LocationName        string   `json:"locationName,omitempty"`
-	StartDatetime       string   `json:"startDatetime,omitempty"`
-	Duration            int      `json:"duration,omitempty"`
-	AppointmentTypeID   int      `json:"appointmentTypeId,omitempty"`
-	AppointmentTypeName string   `json:"appointmentTypeName,omitempty"`
-	Message             string   `json:"message"`
-	Missing             []string `json:"missing,omitempty"`
-}
-
-// HandleBookAppointment books an appointment through the Scheduling Workflow.
+// HandleBookAppointment delegates booking behavior to Scheduling.
 func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -815,18 +661,33 @@ func (h *Handlers) HandleBookAppointment(w http.ResponseWriter, r *http.Request)
 		json.NewEncoder(w).Encode(BookAppointmentResponse{Status: "error", Message: "Invalid JSON body"})
 		return
 	}
-
-	response, workflowErr := h.workflow().Book(r.Context(), req, time.Now())
-	if workflowErr != nil {
+	if h.scheduling == nil {
 		json.NewEncoder(w).Encode(BookAppointmentResponse{
 			Status:  "error",
-			Outcome: workflowErr.outcome,
-			Message: workflowErr.message,
-			Missing: workflowErr.missing,
+			Outcome: string(schedulingmodule.CategoryWriteFailed),
+			Message: "Appointment scheduling is temporarily unavailable. Please try again.",
+		})
+		return
+	}
+	response, err := h.scheduling.Book(r.Context(), req)
+	if err != nil {
+		json.NewEncoder(w).Encode(BookAppointmentResponse{
+			Status:  "error",
+			Outcome: schedulingOutcome(err),
+			Message: err.Error(),
+			Missing: schedulingmodule.MissingOf(err),
 		})
 		return
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+func schedulingOutcome(err error) string {
+	category := schedulingmodule.CategoryOf(err)
+	if category == schedulingmodule.CategoryValidation {
+		return ""
+	}
+	return string(category)
 }
 
 // AvailabilityRequest preserves the authenticated HTTP request shape while the

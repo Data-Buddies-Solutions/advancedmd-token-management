@@ -39,16 +39,21 @@ func TestResolveReturnsCompletePatientForPhoneLookup(t *testing.T) {
 		RespPartyID: "resp456",
 		DOB:         "01/15/1980",
 	}
-	amd.Appointments["123"] = []domain.PatientAppointment{{
-		ID:                9570263,
-		Start:             time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
-		Provider:          "Dr. Austin Bach",
-		Type:              "Established Adult Medical (Follow Up)",
-		AppointmentTypeID: 1007,
-		Facility:          "Abita Eye Group Spring Hill",
-		OfficeID:          "spring_hill",
-		Office:            "Spring Hill",
-	}}
+	amd.AppointmentResults["123"] = advancedmdtest.AppointmentResult{
+		Read: advancedmd.AppointmentRead{
+			Appointments: []domain.PatientAppointment{{
+				ID:                9570263,
+				Start:             time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
+				Provider:          "Dr. Austin Bach",
+				Type:              "Established Adult Medical (Follow Up)",
+				AppointmentTypeID: 1007,
+				Facility:          "Abita Eye Group Spring Hill",
+				OfficeID:          "spring_hill",
+				Office:            "Spring Hill",
+			}},
+			Complete: true,
+		},
+	}
 
 	resolver := patient.New(amd)
 	got, err := resolver.Resolve(context.Background(), patient.ResolveCommand{
@@ -102,12 +107,17 @@ func TestResolveReturnsCompleteResultsForMultipleMatches(t *testing.T) {
 	}
 	amd.Demographics["123"] = domain.PatientDemographics{CarrierName: "HUMANA MEDICARE", CarrierID: "car40906"}
 	amd.Demographics["456"] = domain.PatientDemographics{CarrierName: "AETNA", CarrierID: "car40887"}
-	amd.Appointments["123"] = []domain.PatientAppointment{{
-		ID:       9570263,
-		Start:    time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
-		OfficeID: "spring_hill",
-		Office:   "Spring Hill",
-	}}
+	amd.AppointmentResults["123"] = advancedmdtest.AppointmentResult{
+		Read: advancedmd.AppointmentRead{
+			Appointments: []domain.PatientAppointment{{
+				ID:       9570263,
+				Start:    time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
+				OfficeID: "spring_hill",
+				Office:   "Spring Hill",
+			}},
+			Complete: true,
+		},
+	}
 
 	got, err := patient.New(amd).Resolve(context.Background(), patient.ResolveCommand{
 		Phone:    "5552223333",
@@ -231,12 +241,17 @@ func TestResolveRefreshesKnownPatientByID(t *testing.T) {
 		CarrierID:   "car40906",
 		DOB:         "01/15/1980",
 	}
-	amd.Appointments["123"] = []domain.PatientAppointment{{
-		ID:       9570263,
-		Start:    time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
-		OfficeID: "spring_hill",
-		Office:   "Spring Hill",
-	}}
+	amd.AppointmentResults["123"] = advancedmdtest.AppointmentResult{
+		Read: advancedmd.AppointmentRead{
+			Appointments: []domain.PatientAppointment{{
+				ID:       9570263,
+				Start:    time.Date(2026, time.March, 18, 12, 0, 0, 0, time.UTC),
+				OfficeID: "spring_hill",
+				Office:   "Spring Hill",
+			}},
+			Complete: true,
+		},
+	}
 
 	got, err := patient.New(amd).Resolve(context.Background(), patient.ResolveCommand{
 		PatientID: "123",
@@ -263,7 +278,9 @@ func TestResolveKeepsVerifiedPatientWhenAppointmentsFail(t *testing.T) {
 	amd.PatientSearches[domain.PatientSearch{Phone: "9542872010"}] = []domain.Patient{{
 		ID: "123", FullName: "DOE,JANE", DOB: "01/15/1980",
 	}}
-	amd.AppointmentErrors["123"] = advancedmd.NewError(safeerrors.CategoryUpstreamStatus)
+	amd.AppointmentResults["123"] = advancedmdtest.AppointmentResult{
+		Err: advancedmd.NewError(safeerrors.CategoryUpstreamStatus),
+	}
 
 	var logs bytes.Buffer
 	previousWriter := log.Writer()

@@ -63,7 +63,12 @@ func main() {
 	// Compose the patient workflow over the domain-oriented AdvancedMD seam.
 	patientRecords := advancedmd.NewAdapter(amdSession, amdClient, amdRestClient)
 	patients := patient.New(patientRecords)
-	scheduler := scheduling.New(patientRecords, cfg.BookingTokenSecret, time.Now)
+	scheduler := scheduling.NewWithConfig(
+		patientRecords,
+		cfg.BookingTokenSecret,
+		time.Now,
+		scheduling.Config{AllowRawBooking: cfg.AllowRawSlotBooking},
+	)
 
 	// Initialize handlers
 	handlers := apphttp.NewHandlers(
@@ -72,9 +77,7 @@ func main() {
 		amdRestClient,
 		patients,
 		scheduler,
-		cfg.BookingTokenSecret,
 	)
-	handlers.SetAllowRawSlotBooking(cfg.AllowRawSlotBooking)
 
 	// Create router
 	maintenanceAuthorizer := apphttp.NewMaintenanceAuthorizer(

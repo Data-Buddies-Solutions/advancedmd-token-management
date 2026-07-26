@@ -611,12 +611,21 @@ Booking validation:
   `patientStatus`, `dob`, or `routeToSpringHill`.
 - DOB must be valid and satisfy provider age rules for age-restricted columns.
 - DOB applies medical pediatric routing when the patient is under 18.
-- Slots that availability marked `requiresForce` are booked with AMD `force: 1`
-  from the signed `bookingToken`; booking does not re-fetch appointments or block
-  holds for those force-required slots. If AMD reports a conflict, the response
-  asks the caller to choose another slot.
+- Before writing, Scheduling reloads the patient context, current scheduler
+  setup, appointments, and block holds. The signed office, appointment type,
+  provider, capacity, and `requiresForce` decision must still match current
+  state.
+- Slots that still require force are booked with AMD `force: 1` only when that
+  decision matches the signed token. Changed capacity or force state returns
+  `outcome: "slot_unavailable"` without writing.
 - Appointment comments must be 1000 characters or fewer.
 - AMD 409 conflicts return a clear slot-no-longer-available message.
+
+An ambiguous provider result is never retried automatically. Scheduling reloads
+the patient's appointments and matches patient, date, time, office, provider,
+and appointment type. A match returns the normal `booked` receipt; a complete
+non-match returns `outcome: "write_failed"`; an unprovable result returns
+`outcome: "indeterminate_write"`.
 
 Response statuses: `booked`, `error`.
 
@@ -636,6 +645,13 @@ Request:
 ```
 
 Response statuses: `cancelled`, `error`.
+
+Cancellation first reloads the patient's appointments and writes only after the
+appointment is proven to belong to that patient. An ambiguous cancellation is
+never repeated automatically: Scheduling reloads current appointment state,
+returns the normal `cancelled` receipt when the appointment is gone,
+`outcome: "write_failed"` when it remains, or
+`outcome: "indeterminate_write"` when current state cannot be read.
 
 ### LiveKit Agent Contract
 

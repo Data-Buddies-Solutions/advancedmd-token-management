@@ -485,3 +485,24 @@ func TestCancelAppointment_ServerError(t *testing.T) {
 		t.Fatal("Expected error on server 500, got nil")
 	}
 }
+
+func TestMutationAuthenticationResponses(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			})
+			client, tokenData, cleanup := newTestRestClient(t, handler)
+			defer cleanup()
+
+			_, bookingErr := client.BookAppointment(context.Background(), tokenData, BookAppointmentParams{})
+			if got := MutationDispositionOf(bookingErr); got != MutationDispositionAuthentication {
+				t.Fatalf("booking disposition = %v, want authentication", got)
+			}
+			cancellationErr := client.CancelAppointment(context.Background(), tokenData, 9570263)
+			if got := MutationDispositionOf(cancellationErr); got != MutationDispositionAuthentication {
+				t.Fatalf("cancellation disposition = %v, want authentication", got)
+			}
+		})
+	}
+}
