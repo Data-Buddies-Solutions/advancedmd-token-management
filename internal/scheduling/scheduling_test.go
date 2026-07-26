@@ -265,7 +265,7 @@ func TestSearchBlocksSlotsOverlappedByMultiSlotAppointments(t *testing.T) {
 	}
 }
 
-func TestSearchOwnsRoutingPreauthAndBalancedSlotSelection(t *testing.T) {
+func TestSearchOwnsRoutingPreauthAndReturnsCompleteFirstAvailableDay(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	records := recordsWithSetup(
 		testColumn("1513", "620", "1568", "08:00", "17:00", 30),
@@ -287,8 +287,9 @@ func TestSearchOwnsRoutingPreauthAndBalancedSlotSelection(t *testing.T) {
 	if result.RequestedDate != "2026-06-03" ||
 		result.ActualDate != "2026-06-15" ||
 		result.SearchedFrom != "2026-06-15" ||
+		result.BookingTokenExpiresAt != "2026-06-01T12:15:00Z" ||
 		!result.DateShifted ||
-		len(result.Slots) != 5 {
+		len(result.Slots) != 18 {
 		t.Fatalf("result = %#v", result)
 	}
 	gotTimes := make([]string, 0, len(result.Slots))
@@ -296,18 +297,40 @@ func TestSearchOwnsRoutingPreauthAndBalancedSlotSelection(t *testing.T) {
 		if slot.ColumnID != 1600 {
 			t.Fatalf("slot = %#v, want optical routing column 1600", slot)
 		}
+		policy, err := scheduling.VerifySlotToken(
+			"test-booking-secret",
+			slot.BookingToken,
+			now.Add(time.Minute),
+		)
+		if err != nil ||
+			policy.Routing != string(domain.RoutingOpticalOnly) ||
+			policy.StartDatetime != slot.DateTime ||
+			policy.ExpiresAt != now.Add(15*time.Minute).Unix() {
+			t.Fatalf("signed policy for %s = %#v, err = %v", slot.Time, policy, err)
+		}
 		gotTimes = append(gotTimes, slot.Time)
 	}
-	if !slices.Equal(gotTimes, []string{"8:00 AM", "10:00 AM", "12:30 PM", "2:30 PM", "4:30 PM"}) {
-		t.Fatalf("balanced slot times = %v", gotTimes)
-	}
-	policy, err := scheduling.VerifySlotToken(
-		"test-booking-secret",
-		result.Slots[0].BookingToken,
-		now.Add(time.Minute),
-	)
-	if err != nil || policy.Routing != string(domain.RoutingOpticalOnly) {
-		t.Fatalf("signed routing policy = %#v, err = %v", policy, err)
+	if !slices.Equal(gotTimes, []string{
+		"8:00 AM",
+		"8:30 AM",
+		"9:00 AM",
+		"9:30 AM",
+		"10:00 AM",
+		"10:30 AM",
+		"11:00 AM",
+		"11:30 AM",
+		"12:00 PM",
+		"12:30 PM",
+		"1:00 PM",
+		"1:30 PM",
+		"2:00 PM",
+		"2:30 PM",
+		"3:00 PM",
+		"3:30 PM",
+		"4:00 PM",
+		"4:30 PM",
+	}) {
+		t.Fatalf("slot times = %v, want every bookable slot on first available day", gotTimes)
 	}
 	if len(records.ScheduleReadQueries) != 1 ||
 		records.ScheduleReadQueries[0].Date != "2026-06-15" ||

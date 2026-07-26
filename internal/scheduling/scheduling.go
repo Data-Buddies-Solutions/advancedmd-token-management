@@ -272,7 +272,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 			}
 			columnID, _ := strconv.Atoi(column.ID)
 			profileID, _ := strconv.Atoi(column.ProfileID)
-			for _, slot := range balancedSlots(allSlots, 5) {
+			for _, slot := range allSlots {
 				slots = append(slots, domain.AvailabilitySlotOption{
 					Provider:          displayName,
 					Time:              slot.Time,
@@ -301,7 +301,8 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	}
 
 	actualDate := searchDate.Format("2006-01-02")
-	slots, err = s.signSlots(slots, office, routing, command.DOB, now.UTC())
+	tokenIssuedAt := now.UTC()
+	slots, tokenExpiresAt, err := s.signSlots(slots, office, routing, command.DOB, tokenIssuedAt)
 	if err != nil {
 		return empty, schedulingError("Failed to create booking tokens: " + err.Error())
 	}
@@ -316,6 +317,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		DateShifted:           availabilityDateShifted(originalRequestedDate, searchStartDate, actualDate),
 		SearchedFrom:          searchStartDate,
 		SearchedThrough:       actualDate,
+		BookingTokenExpiresAt: tokenExpiresAt.Format(time.RFC3339),
 		Slots:                 slots,
 	}, nil
 }
@@ -388,7 +390,7 @@ func (s *service) signSlots(
 	routing domain.RoutingRule,
 	dob string,
 	now time.Time,
-) ([]domain.AvailabilitySlotOption, error) {
+) ([]domain.AvailabilitySlotOption, time.Time, error) {
 	issuedAt := now.Unix()
 	expiresAt := now.Add(slotTokenTTL).Unix()
 	appointmentTypeIDs := domain.NewSchedulingPolicy(office).AllowedAppointmentTypeIDs(routing, dob)
@@ -410,34 +412,14 @@ func (s *service) signSlots(
 			ExpiresAt:          expiresAt,
 		})
 		if err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		slots[i].BookingToken = token
 		if slots[i].SameStartBooked == 0 {
 			slots[i].SameStartCapacity = 0
 		}
 	}
-	return slots, nil
-}
-
-func balancedSlots(slots []domain.AvailableSlot, limit int) []domain.AvailableSlot {
-	if limit <= 0 || len(slots) == 0 {
-		return []domain.AvailableSlot{}
-	}
-	if len(slots) <= limit {
-		return slots
-	}
-	if limit == 1 {
-		return slots[:1]
-	}
-
-	selected := make([]domain.AvailableSlot, 0, limit)
-	lastIndex := len(slots) - 1
-	for i := 0; i < limit; i++ {
-		index := (i*lastIndex + (limit-1)/2) / (limit - 1)
-		selected = append(selected, slots[index])
-	}
-	return selected
+	return slots, time.Unix(expiresAt, 0).UTC(), nil
 }
 
 func availableSlots(
