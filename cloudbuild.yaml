@@ -1,6 +1,6 @@
 steps:
   - id: test
-    name: golang:1.26.4-alpine
+    name: golang:1.26.5-alpine
     entrypoint: /bin/sh
     args:
       - -c
