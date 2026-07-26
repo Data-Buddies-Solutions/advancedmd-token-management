@@ -4,6 +4,27 @@ Release Please owns new versioned sections at the top of this file. The dated
 `[Unreleased]` sections below predate the automation and remain as historical
 records.
 
+## [2.2.0](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.1.0...v2.2.0) (2026-07-26)
+
+
+### Features
+
+* **observability:** add minimal production signals ([#148](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/148)) ([25e570b](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/25e570b98dd64b6f56df2ecdd4749905ab7b0d74))
+* **patient:** make mutations reconciliation-safe ([#144](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/144)) ([f092e31](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/f092e31e8b09498dbe02f96ae7b3d203ca7adc8b)), closes [#125](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/125) [#130](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/130)
+* **scheduling:** make booking and cancellation reconciliation-safe ([#145](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/145)) ([4d8352f](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/4d8352f0ac8369e294140498793c18bfe62e69b3)), closes [#125](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/125) [#132](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/132)
+* **scheduling:** search availability through module ([#142](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/142)) ([2c2f1e4](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/2c2f1e4e30b087df4eab622de34280dc46931fa3)), closes [#125](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/125) [#131](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/131)
+
+
+### Bug Fixes
+
+* **observability:** classify successful patient logs ([#149](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/149)) ([43f9491](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/43f9491a0f3c95d89a750d6a179fdcee3c3afc28))
+
+
+### Performance Improvements
+
+* **patient:** batch patient resolution reads ([#152](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/152)) ([31ebcdf](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/31ebcdfb8b3d2355a20845410681d422ccc3445a))
+* **scheduling:** cancel appointments with signed tokens ([#151](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/151)) ([0361a69](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/0361a6988e05e38ebfaedb9eb048923993e96da3)), closes [#124](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/124)
+
 ## [2.1.0](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.0.0...v2.1.0) (2026-07-25)
 
 
