@@ -25,8 +25,6 @@ var eastern = domain.EasternLocation()
 
 // SearchCommand is the domain input for one availability search.
 type SearchCommand struct {
-	// LegacyDate preserves the deployed "date" field during middleware-first rollout.
-	LegacyDate      string                      `json:"date,omitempty"`
 	RequestedDate   string                      `json:"requestedDate,omitempty"`
 	PreferredTime   *AvailabilityTimePreference `json:"preferredTime,omitempty"`
 	Provider        string                      `json:"provider"`
@@ -163,18 +161,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	empty := domain.AvailabilityResponse{}
 	now := s.now()
 	nowEastern := now.In(eastern)
-	if command.LegacyDate != "" &&
-		command.RequestedDate != "" &&
-		command.LegacyDate != command.RequestedDate {
-		return empty, schedulingError("date and requestedDate must match when both are provided")
-	}
-	legacySelection := command.LegacyDate != "" &&
-		command.RequestedDate == "" &&
-		command.PreferredTime == nil
 	requestedDate := command.RequestedDate
-	if requestedDate == "" {
-		requestedDate = command.LegacyDate
-	}
 	if requestedDate == "" {
 		requestedDate = nowEastern.AddDate(0, 0, 1).Format("2006-01-02")
 	}
@@ -324,12 +311,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		}
 
 		sortAvailabilitySlots(daySlots)
-		if legacySelection {
-			if len(daySlots) > 0 {
-				slots = daySlots
-				break
-			}
-		} else if !hasPreference {
+		if !hasPreference {
 			if len(daySlots) > 0 {
 				slots = selectBroadAvailabilitySlots(daySlots)
 				break

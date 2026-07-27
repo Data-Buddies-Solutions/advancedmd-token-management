@@ -144,7 +144,7 @@ func (unavailableSession) Status() session.SessionStatus {
 func TestHandleGetAvailability_InvalidDOB(t *testing.T) {
 	handlers := &Handlers{scheduling: schedulingStub{err: errors.New("dob must be a valid date")}}
 	date := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
-	body := fmt.Sprintf(`{"date":%q,"office":"Hollywood","routing":"optical_only","dob":"not-a-date"}`, date)
+	body := fmt.Sprintf(`{"requestedDate":%q,"office":"Hollywood","routing":"optical_only","dob":"not-a-date"}`, date)
 	req := httptest.NewRequest("POST", "/api/scheduler/availability", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -188,7 +188,7 @@ func TestHandleGetAvailabilityMapsSchedulingResult(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/scheduler/availability",
-		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only","dob":"01/15/1980"}`),
+		strings.NewReader(`{"requestedDate":"2026-06-03","office":"Spring Hill","routing":"bach_only","dob":"01/15/1980"}`),
 	)
 	w := httptest.NewRecorder()
 
@@ -220,7 +220,7 @@ func TestAvailabilityRouteRetainsAuthenticationAndResponseContract(t *testing.T)
 		},
 	}}
 	router := NewRouter(handlers, "agent-secret", nil)
-	body := `{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only"}`
+	body := `{"requestedDate":"2026-06-03","office":"Spring Hill","routing":"bach_only"}`
 
 	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/scheduler/availability", strings.NewReader(body))
 	unauthenticatedResponse := httptest.NewRecorder()
