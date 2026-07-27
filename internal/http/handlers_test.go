@@ -162,7 +162,9 @@ func TestHandleGetAvailability_InvalidDOB(t *testing.T) {
 }
 
 func TestHandleGetAvailabilityMapsSchedulingResult(t *testing.T) {
+	var command schedulingmodule.SearchCommand
 	scheduler := schedulingStub{
+		searchCommand: &command,
 		result: domain.AvailabilityResponse{
 			Status:                domain.AvailabilityStatusSuccess,
 			Outcome:               domain.AvailabilityOutcomeFound,
@@ -174,13 +176,15 @@ func TestHandleGetAvailabilityMapsSchedulingResult(t *testing.T) {
 			ShouldRetrySameSearch: false,
 			NextAction:            domain.AvailabilityNextActionOfferSlots,
 			Slots: []domain.AvailabilitySlotOption{{
-				Provider:     "Dr. Austin Bach",
-				Time:         "9:00 AM",
-				DateTime:     "2026-06-03T09:00",
-				BookingToken: "signed-slot",
-				ColumnID:     1513,
-				ProfileID:    620,
-				Duration:     15,
+				Provider:              "Dr. Austin Bach",
+				Time:                  "9:00 AM",
+				DateTime:              "2026-06-03T09:00",
+				BookingToken:          "signed-slot",
+				ColumnID:              1513,
+				ProfileID:             620,
+				Duration:              15,
+				PreferenceMatch:       "fallback",
+				PreferenceDifferences: []domain.AvailabilityPreferenceDifference{"time"},
 			}},
 		},
 	}
@@ -188,7 +192,7 @@ func TestHandleGetAvailabilityMapsSchedulingResult(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/scheduler/availability",
-		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only","dob":"01/15/1980"}`),
+		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only","dob":"01/15/1980","preferences":[{"weekday":"monday","time":{"kind":"after","minuteOfDay":810}},{"weekday":"thursday"}]}`),
 	)
 	w := httptest.NewRecorder()
 
@@ -200,8 +204,22 @@ func TestHandleGetAvailabilityMapsSchedulingResult(t *testing.T) {
 	}
 	if response.Outcome != domain.AvailabilityOutcomeFound ||
 		len(response.Slots) != 1 ||
-		response.Slots[0].BookingToken != "signed-slot" {
+		response.Slots[0].BookingToken != "signed-slot" ||
+		response.Slots[0].PreferenceMatch != "fallback" ||
+		!reflect.DeepEqual(
+			response.Slots[0].PreferenceDifferences,
+			[]domain.AvailabilityPreferenceDifference{"time"},
+		) {
 		t.Fatalf("response = %#v", response)
+	}
+	if len(command.Preferences) != 2 ||
+		command.Preferences[0].Weekday != "monday" ||
+		command.Preferences[0].Time == nil ||
+		command.Preferences[0].Time.Kind != "after" ||
+		command.Preferences[0].Time.MinuteOfDay == nil ||
+		*command.Preferences[0].Time.MinuteOfDay != 810 ||
+		command.Preferences[1].Weekday != "thursday" {
+		t.Fatalf("search command = %#v", command)
 	}
 }
 
@@ -246,15 +264,19 @@ func TestAvailabilityRouteRetainsAuthenticationAndResponseContract(t *testing.T)
 }
 
 type schedulingStub struct {
-	result       domain.AvailabilityResponse
-	err          error
-	bookResult   schedulingmodule.BookReceipt
-	bookErr      error
-	cancelResult schedulingmodule.CancelReceipt
-	cancelErr    error
+	result        domain.AvailabilityResponse
+	err           error
+	searchCommand *schedulingmodule.SearchCommand
+	bookResult    schedulingmodule.BookReceipt
+	bookErr       error
+	cancelResult  schedulingmodule.CancelReceipt
+	cancelErr     error
 }
 
-func (s schedulingStub) Search(context.Context, schedulingmodule.SearchCommand) (domain.AvailabilityResponse, error) {
+func (s schedulingStub) Search(_ context.Context, command schedulingmodule.SearchCommand) (domain.AvailabilityResponse, error) {
+	if s.searchCommand != nil {
+		*s.searchCommand = command
+	}
 	return s.result, s.err
 }
 

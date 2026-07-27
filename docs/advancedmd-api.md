@@ -45,6 +45,29 @@ All `/api/*` routes require `Authorization: Bearer <API_SECRET>`.
 | `POST /api/appointment/book` | Book appointment with server-side defaults |
 | `POST /api/appointment/cancel` | Cancel appointment |
 
+Availability accepts an optional canonical `preferences` list alongside its
+existing `date`, office, routing, DOB, and preauthorization fields:
+
+```json
+{
+  "date": "2026-06-03",
+  "preferences": [
+    {
+      "weekday": "monday",
+      "time": {"kind": "after", "minuteOfDay": 810}
+    },
+    {"weekday": "thursday"}
+  ]
+}
+```
+
+`date` remains the policy-aware start of the 15-date scan. Within one
+preference branch, optional `date`, `weekday`, and `time` facts are ANDed;
+branches are ORed. Weekdays are lowercase full English names. Time kinds are
+`morning`, `afternoon`, `exact`, `around`, `before`, or `after`, with
+`minuteOfDay` used by the last four. Omitted or empty preferences mean broad
+earliest availability. Middleware never receives or parses caller wording.
+
 ## XMLRPC APIs Used
 
 ### `lookuppatient`
@@ -188,7 +211,11 @@ the agent does not infer scheduling state from free-form message text. Each
 returned slot includes a signed `bookingToken` that binds office, routing,
 normalized DOB, provider column and profile, allowed appointment types, start
 datetime, duration, same-start capacity, and force behavior for the later
-booking call.
+booking call. The response contains at most two real slots. Preferred searches
+mark each slot as `exact` or `fallback`; fallback slots also identify which of
+`date`, `weekday`, or `time` differed from the closest branch. These sanitized
+facts let the agent explain a tradeoff without reimplementing middleware
+ranking.
 A fully exhausted search window returns `outcome: "no_availability"` with
 `slots: []` and `shouldRetrySameSearch: false`. If appointment or block-hold
 data is unavailable during the search and no slots are found from complete
@@ -313,8 +340,14 @@ Candidate slots are filtered in this order:
    8:30-11:45 AM on Friday. Spring Hill routine vision, North Miami Beach
    Optical, and Crystal River remain single-booked.
 
-The response includes at most five displayed slots per provider, while
-`totalAvailable` reports the full count.
+Scheduling scans chronologically through the existing start-plus-14-day
+window. It returns the two earliest exact preference matches when possible and
+may stop once both are proven. Otherwise it completes the window, ranks only
+eligible real inventory by the fewest and smallest preference differences,
+then by earlier date and time, and preserves different date/time tradeoffs in
+the pair when inventory permits. With no preferences, it keeps the first
+available day and returns the earliest slot plus time-of-day contrast when
+available.
 
 ## Routing And Appointment Types
 

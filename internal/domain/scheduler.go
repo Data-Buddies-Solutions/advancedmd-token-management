@@ -126,16 +126,18 @@ const (
 
 // AvailabilitySlotOption is a single bookable slot returned to the agent.
 type AvailabilitySlotOption struct {
-	Provider          string `json:"provider"`
-	Time              string `json:"time"`
-	DateTime          string `json:"datetime"`
-	BookingToken      string `json:"bookingToken,omitempty"`
-	ColumnID          int    `json:"columnId"`
-	ProfileID         int    `json:"profileId"`
-	Duration          int    `json:"duration"`
-	SameStartBooked   int    `json:"sameStartBooked,omitempty"`
-	SameStartCapacity int    `json:"sameStartCapacity,omitempty"`
-	RequiresForce     bool   `json:"requiresForce,omitempty"`
+	Provider              string                             `json:"provider"`
+	Time                  string                             `json:"time"`
+	DateTime              string                             `json:"datetime"`
+	BookingToken          string                             `json:"bookingToken,omitempty"`
+	ColumnID              int                                `json:"columnId"`
+	ProfileID             int                                `json:"profileId"`
+	Duration              int                                `json:"duration"`
+	SameStartBooked       int                                `json:"sameStartBooked,omitempty"`
+	SameStartCapacity     int                                `json:"sameStartCapacity,omitempty"`
+	RequiresForce         bool                               `json:"requiresForce,omitempty"`
+	PreferenceMatch       AvailabilityPreferenceMatch        `json:"preferenceMatch,omitempty"`
+	PreferenceDifferences []AvailabilityPreferenceDifference `json:"preferenceDifferences,omitempty"`
 }
 
 // AvailabilityResponse is the response structure for the availability endpoint.

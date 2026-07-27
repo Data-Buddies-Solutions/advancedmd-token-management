@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,12 +25,13 @@ var eastern = domain.EasternLocation()
 
 // SearchCommand is the domain input for one availability search.
 type SearchCommand struct {
-	Date            string `json:"date"`
-	Provider        string `json:"provider"`
-	Office          string `json:"office"`
-	Routing         string `json:"routing"`
-	DOB             string `json:"dob,omitempty"`
-	PreauthRequired bool   `json:"preauthRequired"`
+	Date            string                          `json:"date"`
+	Provider        string                          `json:"provider"`
+	Office          string                          `json:"office"`
+	Routing         string                          `json:"routing"`
+	DOB             string                          `json:"dob,omitempty"`
+	PreauthRequired bool                            `json:"preauthRequired"`
+	Preferences     []domain.AvailabilityPreference `json:"preferences,omitempty"`
 }
 
 // Scheduling is the complete scheduling boundary used by HTTP.
@@ -153,6 +155,13 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	if err != nil {
 		return empty, schedulingError("Invalid date format. Use YYYY-MM-DD.")
 	}
+	if err := domain.ValidateAvailabilityPreferences(command.Preferences); err != nil {
+		return empty, schedulingError(err.Error())
+	}
+	preferences := command.Preferences
+	if domain.AvailabilityPreferencesAreBroad(preferences) {
+		preferences = nil
+	}
 	if err := domain.ValidateOptionalDOB(command.DOB); err != nil {
 		return empty, schedulingError(err.Error())
 	}
@@ -214,9 +223,14 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	var slots []domain.AvailabilitySlotOption
 	searchIncomplete := false
 	unavailableDataChecks := 0
+	var exactSlots []domain.AvailabilitySlotOption
+	var fallbackSlots []rankedAvailabilitySlot
+	var broadSlots []domain.AvailabilitySlotOption
+	searchedThrough := searchStartDate
 
 	for !searchDate.After(maxDate) {
 		date := searchDate.Format("2006-01-02")
+		searchedThrough = date
 		workingColumnIDs := make([]string, 0, len(allowedColumns))
 		workingColumnSet := make(map[string]bool, len(allowedColumns))
 		for _, column := range allowedColumns {
@@ -242,7 +256,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 			)
 		}
 
-		slots = nil
+		daySlots := make([]domain.AvailabilitySlotOption, 0)
 		for _, column := range allowedColumns {
 			if !workingColumnSet[column.ID] {
 				continue
@@ -273,7 +287,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 			columnID, _ := strconv.Atoi(column.ID)
 			profileID, _ := strconv.Atoi(column.ProfileID)
 			for _, slot := range allSlots {
-				slots = append(slots, domain.AvailabilitySlotOption{
+				daySlots = append(daySlots, domain.AvailabilitySlotOption{
 					Provider:          displayName,
 					Time:              slot.Time,
 					DateTime:          slot.DateTime,
@@ -287,12 +301,41 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 			}
 		}
 
-		if len(slots) > 0 {
-			break
+		sort.SliceStable(daySlots, func(i, j int) bool {
+			return availabilitySlotLess(daySlots[i], daySlots[j])
+		})
+		if len(preferences) == 0 {
+			broadSlots = append(broadSlots, daySlots...)
+			if len(broadSlots) >= 2 {
+				break
+			}
+		} else {
+			for _, slot := range daySlots {
+				start, _ := time.Parse("2006-01-02T15:04", slot.DateTime)
+				evaluation := domain.EvaluateAvailabilityPreferences(start, preferences)
+				if evaluation.Exact() {
+					slot.PreferenceMatch = domain.AvailabilityPreferenceExact
+					exactSlots = append(exactSlots, slot)
+					continue
+				}
+				fallbackSlots = append(fallbackSlots, rankedAvailabilitySlot{
+					slot:       slot,
+					evaluation: evaluation,
+				})
+			}
+			if len(exactSlots) >= 2 && !searchIncomplete {
+				slots = exactSlots[:2]
+				break
+			}
 		}
 		searchDate = searchDate.AddDate(0, 0, 1)
 	}
 
+	if len(preferences) == 0 {
+		slots = selectBroadAvailabilitySlots(broadSlots)
+	} else {
+		slots = selectPreferredAvailabilitySlots(exactSlots, fallbackSlots)
+	}
 	if len(slots) == 0 {
 		if searchIncomplete {
 			return incompleteResponse(originalRequestedDate, searchStartDate, searchEndDate, unavailableDataChecks), nil
@@ -300,7 +343,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		return noneResponse(originalRequestedDate, searchStartDate, searchEndDate), nil
 	}
 
-	actualDate := searchDate.Format("2006-01-02")
+	actualDate := slots[0].DateTime[:len("2006-01-02")]
 	tokenIssuedAt := now.UTC()
 	slots, tokenExpiresAt, err := s.signSlots(slots, office, routing, command.DOB, tokenIssuedAt)
 	if err != nil {
@@ -316,10 +359,114 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		ActualDate:            actualDate,
 		DateShifted:           availabilityDateShifted(originalRequestedDate, searchStartDate, actualDate),
 		SearchedFrom:          searchStartDate,
-		SearchedThrough:       actualDate,
+		SearchedThrough:       searchedThrough,
 		BookingTokenExpiresAt: tokenExpiresAt.Format(time.RFC3339),
 		Slots:                 slots,
 	}, nil
+}
+
+type rankedAvailabilitySlot struct {
+	slot       domain.AvailabilitySlotOption
+	evaluation domain.AvailabilityPreferenceEvaluation
+}
+
+func selectPreferredAvailabilitySlots(
+	exact []domain.AvailabilitySlotOption,
+	fallback []rankedAvailabilitySlot,
+) []domain.AvailabilitySlotOption {
+	if len(exact) >= 2 {
+		return exact[:2]
+	}
+	sort.SliceStable(fallback, func(i, j int) bool {
+		left := fallback[i]
+		right := fallback[j]
+		if left.evaluation.Less(right.evaluation) {
+			return true
+		}
+		if right.evaluation.Less(left.evaluation) {
+			return false
+		}
+		return availabilitySlotLess(left.slot, right.slot)
+	})
+
+	selected := append([]domain.AvailabilitySlotOption(nil), exact...)
+	if len(exact) == 0 {
+		if dayPreserving, timePreserving, ok := contrastingFallbacks(fallback); ok {
+			return []domain.AvailabilitySlotOption{
+				fallbackSlot(dayPreserving),
+				fallbackSlot(timePreserving),
+			}
+		}
+	}
+	for _, candidate := range fallback {
+		selected = append(selected, fallbackSlot(candidate))
+		if len(selected) == 2 {
+			break
+		}
+	}
+	return selected
+}
+
+func selectBroadAvailabilitySlots(
+	slots []domain.AvailabilitySlotOption,
+) []domain.AvailabilitySlotOption {
+	if len(slots) <= 2 {
+		return slots
+	}
+	selected := []domain.AvailabilitySlotOption{slots[0]}
+	firstStart, _ := time.Parse("2006-01-02T15:04", slots[0].DateTime)
+	firstIsMorning := firstStart.Hour() < 12
+	for _, slot := range slots[1:] {
+		start, _ := time.Parse("2006-01-02T15:04", slot.DateTime)
+		if start.Hour() < 12 != firstIsMorning {
+			return append(selected, slot)
+		}
+	}
+	return append(selected, slots[1])
+}
+
+func contrastingFallbacks(
+	candidates []rankedAvailabilitySlot,
+) (rankedAvailabilitySlot, rankedAvailabilitySlot, bool) {
+	var dayPreserving rankedAvailabilitySlot
+	var timePreserving rankedAvailabilitySlot
+	hasDayPreserving := false
+	hasTimePreserving := false
+	for _, candidate := range candidates {
+		evaluation := candidate.evaluation
+		if evaluation.PreservesDayOnly() && !hasDayPreserving {
+			dayPreserving = candidate
+			hasDayPreserving = true
+		}
+		if evaluation.PreservesTimeOnly() && !hasTimePreserving {
+			timePreserving = candidate
+			hasTimePreserving = true
+		}
+	}
+	return dayPreserving, timePreserving, hasDayPreserving && hasTimePreserving
+}
+
+func fallbackSlot(candidate rankedAvailabilitySlot) domain.AvailabilitySlotOption {
+	slot := candidate.slot
+	slot.PreferenceMatch = domain.AvailabilityPreferenceFallback
+	slot.PreferenceDifferences = append(
+		[]domain.AvailabilityPreferenceDifference(nil),
+		candidate.evaluation.Differences...,
+	)
+	return slot
+}
+
+func availabilitySlotLess(left, right domain.AvailabilitySlotOption) bool {
+	if left.DateTime != right.DateTime {
+		return left.DateTime < right.DateTime
+	}
+	if left.Provider != right.Provider {
+		return left.Provider < right.Provider
+	}
+	if left.ColumnID != right.ColumnID {
+		return left.ColumnID < right.ColumnID
+	}
+	return left.ProfileID < right.ProfileID
 }
 
 func schedulingError(message string) error {
