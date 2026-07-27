@@ -4,6 +4,13 @@ Release Please owns new versioned sections at the top of this file. The dated
 `[Unreleased]` sections below predate the automation and remain as historical
 records.
 
+## [2.3.0](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.2.1...v2.3.0) (2026-07-27)
+
+
+### Features
+
+* **scheduling:** rank requested availability ([#156](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/156)) ([259963f](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/259963f5e39e185aced21cebded49f700269a7fa))
+
 ## [2.2.1](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.2.0...v2.2.1) (2026-07-26)
 
 
