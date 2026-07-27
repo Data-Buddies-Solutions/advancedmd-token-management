@@ -25,19 +25,15 @@ var eastern = domain.EasternLocation()
 
 // SearchCommand is the domain input for one availability search.
 type SearchCommand struct {
-	Date            string                   `json:"date"`
-	Provider        string                   `json:"provider"`
-	Office          string                   `json:"office"`
-	Routing         string                   `json:"routing"`
-	DOB             string                   `json:"dob,omitempty"`
-	PreauthRequired bool                     `json:"preauthRequired"`
-	Preferences     []AvailabilityPreference `json:"preferences,omitempty"`
-}
-
-// AvailabilityPreference is the caller's one canonical scheduling preference.
-type AvailabilityPreference struct {
-	Date string                      `json:"date,omitempty"`
-	Time *AvailabilityTimePreference `json:"time,omitempty"`
+	// LegacyDate preserves the deployed "date" field during middleware-first rollout.
+	LegacyDate      string                      `json:"date,omitempty"`
+	RequestedDate   string                      `json:"requestedDate,omitempty"`
+	PreferredTime   *AvailabilityTimePreference `json:"preferredTime,omitempty"`
+	Provider        string                      `json:"provider"`
+	Office          string                      `json:"office"`
+	Routing         string                      `json:"routing"`
+	DOB             string                      `json:"dob,omitempty"`
+	PreauthRequired bool                        `json:"preauthRequired"`
 }
 
 type AvailabilityTimeKind string
@@ -165,29 +161,37 @@ func NewWithConfig(
 
 func (s *service) Search(ctx context.Context, command SearchCommand) (domain.AvailabilityResponse, error) {
 	empty := domain.AvailabilityResponse{}
-	selectionPolicy := ""
-	if command.Preferences != nil {
-		selectionPolicy = domain.AvailabilitySelectionPolicyPreferenceRankedV1
+	now := s.now()
+	nowEastern := now.In(eastern)
+	if command.LegacyDate != "" &&
+		command.RequestedDate != "" &&
+		command.LegacyDate != command.RequestedDate {
+		return empty, schedulingError("date and requestedDate must match when both are provided")
 	}
-	if command.Date == "" {
-		return empty, schedulingError("date is required (YYYY-MM-DD format)")
+	legacySelection := command.LegacyDate != "" &&
+		command.RequestedDate == "" &&
+		command.PreferredTime == nil
+	requestedDate := command.RequestedDate
+	if requestedDate == "" {
+		requestedDate = command.LegacyDate
 	}
-	originalRequestedDate := command.Date
+	if requestedDate == "" {
+		requestedDate = nowEastern.AddDate(0, 0, 1).Format("2006-01-02")
+	}
+	originalRequestedDate := requestedDate
 
-	startDate, err := time.Parse("2006-01-02", command.Date)
+	startDate, err := time.Parse("2006-01-02", requestedDate)
 	if err != nil {
 		return empty, schedulingError("Invalid date format. Use YYYY-MM-DD.")
 	}
-	preference, err := availabilityPreference(command.Preferences)
-	if err != nil {
+	if err := validatePreferredTime(command.PreferredTime); err != nil {
 		return empty, schedulingError(err.Error())
 	}
+	hasPreference := command.RequestedDate != "" || command.PreferredTime != nil
 	if err := domain.ValidateOptionalDOB(command.DOB); err != nil {
 		return empty, schedulingError(err.Error())
 	}
 
-	now := s.now()
-	nowEastern := now.In(eastern)
 	if startDate.Format("2006-01-02") <= nowEastern.Format("2006-01-02") {
 		return empty, schedulingError("Same-day and past-date appointments are not available. Please search for tomorrow or later.")
 	}
@@ -230,7 +234,6 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		return domain.AvailabilityResponse{
 			Status:                domain.AvailabilityStatusSuccess,
 			Outcome:               domain.AvailabilityOutcomeNoEligibleProviders,
-			SelectionPolicy:       selectionPolicy,
 			AvailabilityFound:     false,
 			RequestedDate:         originalRequestedDate,
 			ShouldRetrySameSearch: false,
@@ -321,19 +324,23 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		}
 
 		sortAvailabilitySlots(daySlots)
-		if command.Preferences == nil {
+		if legacySelection {
 			if len(daySlots) > 0 {
 				slots = daySlots
 				break
 			}
-		} else if preference == nil {
+		} else if !hasPreference {
 			if len(daySlots) > 0 {
 				slots = selectBroadAvailabilitySlots(daySlots)
 				break
 			}
 		} else {
 			for _, slot := range daySlots {
-				ranked, err := rankedSlot(slot, *preference)
+				ranked, err := rankedSlot(
+					slot,
+					command.RequestedDate,
+					command.PreferredTime,
+				)
 				if err != nil {
 					return empty, schedulingError("Failed to rank availability: " + err.Error())
 				}
@@ -346,7 +353,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		searchDate = searchDate.AddDate(0, 0, 1)
 	}
 
-	if preference != nil {
+	if hasPreference {
 		slots = selectPreferredAvailabilitySlots(candidates)
 	}
 	if len(slots) == 0 {
@@ -356,10 +363,9 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 				searchStartDate,
 				searchEndDate,
 				unavailableDataChecks,
-				selectionPolicy,
 			), nil
 		}
-		return noneResponse(originalRequestedDate, searchStartDate, searchEndDate, selectionPolicy), nil
+		return noneResponse(originalRequestedDate, searchStartDate, searchEndDate), nil
 	}
 
 	actualDate := slots[0].DateTime[:len("2006-01-02")]
@@ -371,7 +377,6 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	return domain.AvailabilityResponse{
 		Status:                domain.AvailabilityStatusSuccess,
 		Outcome:               domain.AvailabilityOutcomeFound,
-		SelectionPolicy:       selectionPolicy,
 		AvailabilityFound:     true,
 		RequestedDate:         originalRequestedDate,
 		ShouldRetrySameSearch: false,
@@ -391,41 +396,25 @@ type rankedAvailabilitySlot struct {
 	distanceMinutes int
 }
 
-func availabilityPreference(input []AvailabilityPreference) (*AvailabilityPreference, error) {
-	if len(input) > 1 {
-		return nil, errors.New("preferences must include at most one entry")
+func validatePreferredTime(preferredTime *AvailabilityTimePreference) error {
+	if preferredTime == nil {
+		return nil
 	}
-	if len(input) == 0 {
-		return nil, nil
-	}
-
-	preference := input[0]
-	if preference.Date == "" && preference.Time == nil {
-		return nil, errors.New("preferences[0] must include date or time")
-	}
-	if preference.Date != "" {
-		if _, err := time.Parse("2006-01-02", preference.Date); err != nil {
-			return nil, errors.New("preferences[0].date must use YYYY-MM-DD format")
-		}
-	}
-	if preference.Time == nil {
-		return &preference, nil
-	}
-	switch preference.Time.Kind {
+	switch preferredTime.Kind {
 	case AvailabilityTimeMorning, AvailabilityTimeAfternoon:
-		if preference.Time.MinuteOfDay != nil {
-			return nil, errors.New("preferences[0].time.minuteOfDay is not allowed")
+		if preferredTime.MinuteOfDay != nil {
+			return errors.New("preferredTime.minuteOfDay is not allowed")
 		}
 	case "":
-		if preference.Time.MinuteOfDay == nil ||
-			*preference.Time.MinuteOfDay < 0 ||
-			*preference.Time.MinuteOfDay >= 24*60 {
-			return nil, errors.New("preferences[0].time.minuteOfDay must be between 0 and 1439")
+		if preferredTime.MinuteOfDay == nil ||
+			*preferredTime.MinuteOfDay < 0 ||
+			*preferredTime.MinuteOfDay >= 24*60 {
+			return errors.New("preferredTime.minuteOfDay must be between 0 and 1439")
 		}
 	default:
-		return nil, errors.New("preferences[0].time.kind is invalid")
+		return errors.New("preferredTime.kind is invalid")
 	}
-	return &preference, nil
+	return nil
 }
 
 func hasTwoExactAvailabilityMatches(
@@ -447,17 +436,18 @@ func hasTwoExactAvailabilityMatches(
 
 func rankedSlot(
 	slot domain.AvailabilitySlotOption,
-	preference AvailabilityPreference,
+	requestedDate string,
+	preferredTime *AvailabilityTimePreference,
 ) (rankedAvailabilitySlot, error) {
 	start, err := time.Parse("2006-01-02T15:04", slot.DateTime)
 	if err != nil {
 		return rankedAvailabilitySlot{}, fmt.Errorf("invalid slot datetime %q", slot.DateTime)
 	}
 	candidate := rankedAvailabilitySlot{slot: slot}
-	if preference.Date != "" {
-		date, err := time.Parse("2006-01-02", preference.Date)
+	if requestedDate != "" {
+		date, err := time.Parse("2006-01-02", requestedDate)
 		if err != nil {
-			return rankedAvailabilitySlot{}, fmt.Errorf("invalid preference date %q", preference.Date)
+			return rankedAvailabilitySlot{}, fmt.Errorf("invalid requested date %q", requestedDate)
 		}
 		slotDate := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
 		days := absoluteInt(int(slotDate.Sub(date).Hours() / 24))
@@ -466,8 +456,8 @@ func rankedSlot(
 			candidate.distanceMinutes += days * 24 * 60
 		}
 	}
-	if preference.Time != nil {
-		matches, distance := evaluateTimePreference(start, *preference.Time)
+	if preferredTime != nil {
+		matches, distance := evaluateTimePreference(start, *preferredTime)
 		if !matches {
 			candidate.mismatchCount++
 		}
@@ -761,11 +751,10 @@ func availabilityDateShifted(requestedDate, searchStartDate, actualDate string) 
 	return searchStartDate != requestedDate
 }
 
-func noneResponse(requestedDate, searchStartDate, searchEndDate, selectionPolicy string) domain.AvailabilityResponse {
+func noneResponse(requestedDate, searchStartDate, searchEndDate string) domain.AvailabilityResponse {
 	return domain.AvailabilityResponse{
 		Status:                domain.AvailabilityStatusSuccess,
 		Outcome:               domain.AvailabilityOutcomeNoAvailability,
-		SelectionPolicy:       selectionPolicy,
 		AvailabilityFound:     false,
 		RequestedDate:         requestedDate,
 		ShouldRetrySameSearch: false,
@@ -786,12 +775,10 @@ func incompleteResponse(
 	searchStartDate,
 	searchEndDate string,
 	unavailableDataChecks int,
-	selectionPolicy string,
 ) domain.AvailabilityResponse {
 	return domain.AvailabilityResponse{
 		Status:                domain.AvailabilityStatusError,
 		Outcome:               domain.AvailabilityOutcomeSearchIncomplete,
-		SelectionPolicy:       selectionPolicy,
 		AvailabilityFound:     false,
 		RequestedDate:         requestedDate,
 		ShouldRetrySameSearch: true,

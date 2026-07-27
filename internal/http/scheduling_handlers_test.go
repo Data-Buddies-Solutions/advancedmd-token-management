@@ -74,20 +74,19 @@ func TestBookingAndCancellationHandlersDelegateToScheduling(t *testing.T) {
 	}
 }
 
-func TestAvailabilityHandlerPreservesRankedPreferenceContract(t *testing.T) {
+func TestAvailabilityHandlerPreservesRequestedDateAndPreferredTime(t *testing.T) {
 	scheduler := &recordingScheduling{
 		searchResponse: domain.AvailabilityResponse{
-			Status:          domain.AvailabilityStatusSuccess,
-			Outcome:         domain.AvailabilityOutcomeNoAvailability,
-			SelectionPolicy: domain.AvailabilitySelectionPolicyPreferenceRankedV1,
-			Slots:           []domain.AvailabilitySlotOption{},
+			Status:  domain.AvailabilityStatusSuccess,
+			Outcome: domain.AvailabilityOutcomeNoAvailability,
+			Slots:   []domain.AvailabilitySlotOption{},
 		},
 	}
 	handlers := &Handlers{scheduling: scheduler}
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/api/scheduler/availability",
-		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","preferences":[{"date":"2026-06-03","time":{"minuteOfDay":900}}]}`),
+		strings.NewReader(`{"requestedDate":"2026-06-03","office":"Spring Hill","preferredTime":{"minuteOfDay":900}}`),
 	)
 	response := httptest.NewRecorder()
 
@@ -97,35 +96,12 @@ func TestAvailabilityHandlerPreservesRankedPreferenceContract(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode availability response: %v", err)
 	}
-	if len(scheduler.searchCommand.Preferences) != 1 {
-		t.Fatalf("search command = %#v", scheduler.searchCommand)
-	}
-	preference := scheduler.searchCommand.Preferences[0]
-	if preference.Date != "2026-06-03" ||
-		preference.Time == nil ||
-		preference.Time.Kind != "" ||
-		preference.Time.MinuteOfDay == nil ||
-		*preference.Time.MinuteOfDay != 900 ||
-		body.SelectionPolicy != domain.AvailabilitySelectionPolicyPreferenceRankedV1 {
+	if scheduler.searchCommand.RequestedDate != "2026-06-03" ||
+		scheduler.searchCommand.PreferredTime == nil ||
+		scheduler.searchCommand.PreferredTime.Kind != "" ||
+		scheduler.searchCommand.PreferredTime.MinuteOfDay == nil ||
+		*scheduler.searchCommand.PreferredTime.MinuteOfDay != 900 {
 		t.Fatalf("search command = %#v, response = %#v", scheduler.searchCommand, body)
-	}
-}
-
-func TestAvailabilityHandlerPreservesExplicitEmptyPreferences(t *testing.T) {
-	scheduler := &recordingScheduling{}
-	handlers := &Handlers{scheduling: scheduler}
-	request := httptest.NewRequest(
-		http.MethodPost,
-		"/api/scheduler/availability",
-		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","preferences":[]}`),
-	)
-	response := httptest.NewRecorder()
-
-	handlers.HandleGetAvailability(response, request)
-
-	if scheduler.searchCommand.Preferences == nil ||
-		len(scheduler.searchCommand.Preferences) != 0 {
-		t.Fatalf("search command = %#v, want explicit empty preferences", scheduler.searchCommand)
 	}
 }
 
