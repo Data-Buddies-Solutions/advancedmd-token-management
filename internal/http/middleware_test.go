@@ -218,7 +218,7 @@ func TestRequestLogPreservesAvailabilityProviderFailureCategory(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/scheduler/availability",
-		strings.NewReader(`{"date":"2026-06-03","office":"Spring Hill","routing":"bach_only"}`),
+		strings.NewReader(`{"requestedDate":"2026-06-03","office":"Spring Hill","routing":"bach_only"}`),
 	)
 	req.Header.Set("Authorization", "Bearer test-secret")
 	w := httptest.NewRecorder()
