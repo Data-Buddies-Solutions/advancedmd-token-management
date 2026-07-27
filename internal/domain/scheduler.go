@@ -142,6 +142,7 @@ type AvailabilitySlotOption struct {
 type AvailabilityResponse struct {
 	Status                string                   `json:"status"`
 	Outcome               string                   `json:"outcome"`
+	SelectionPolicy       string                   `json:"selectionPolicy,omitempty"`
 	AvailabilityFound     bool                     `json:"availabilityFound"`
 	RequestedDate         string                   `json:"requestedDate,omitempty"`
 	ActualDate            string                   `json:"actualDate,omitempty"`
@@ -154,6 +155,8 @@ type AvailabilityResponse struct {
 	Message               string                   `json:"message,omitempty"`
 	Slots                 []AvailabilitySlotOption `json:"slots"`
 }
+
+const AvailabilitySelectionPolicyPreferenceRankedV1 = "preference_ranked_v1"
 
 // WorksOnDay checks if the column works on a given weekday.
 // Weekday: 0=Sunday, 1=Monday, ..., 6=Saturday

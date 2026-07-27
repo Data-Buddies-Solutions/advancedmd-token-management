@@ -259,83 +259,21 @@ func TestSearchReturnsClosestOfficeHourOptionsForBareClock(t *testing.T) {
 	}
 }
 
-func TestSearchPreservesSameDateDaypartAlternatives(t *testing.T) {
+func TestSearchRejectsMultiplePreferences(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	searchDate := time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC)
-	records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "16:00", 60))
-	records.ScheduleReads["2026-06-03"] = completeRead("1513", nil, nil)
-	for day := 1; day <= 14; day++ {
-		date := searchDate.AddDate(0, 0, day)
-		records.ScheduleReads[date.Format("2006-01-02")] = completeRead("1513", nil, []domain.BlockHold{{
-			StartDateTime: date.Add(9 * time.Hour),
-			EndDateTime:   date.Add(16 * time.Hour),
-		}})
-	}
 
-	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+	_, err := scheduling.New(nil, "test-booking-secret", func() time.Time { return now }).
 		Search(context.Background(), scheduling.SearchCommand{
-			Date:    searchDate.Format("2006-01-02"),
+			Date:    "2026-06-03",
 			Office:  "Spring Hill",
 			Routing: string(domain.RoutingBachOnly),
 			Preferences: []scheduling.AvailabilityPreference{
-				{
-					Date: searchDate.Format("2006-01-02"),
-					Time: &scheduling.AvailabilityTimePreference{Kind: scheduling.AvailabilityTimeMorning},
-				},
-				{
-					Date: searchDate.Format("2006-01-02"),
-					Time: &scheduling.AvailabilityTimePreference{Kind: scheduling.AvailabilityTimeAfternoon},
-				},
-			},
-		})
-	if err != nil {
-		t.Fatalf("Search error = %v", err)
-	}
-	got := []string{result.Slots[0].DateTime, result.Slots[1].DateTime}
-	if !slices.Equal(got, []string{"2026-06-03T09:00", "2026-06-03T12:00"}) {
-		t.Fatalf("slot datetimes = %v, want one real option for each daypart", got)
-	}
-}
-
-func TestSearchRepresentsSeparatePreferenceAlternatives(t *testing.T) {
-	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	searchDate := time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC)
-	records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "15:00", 60))
-	for day := 0; day <= 14; day++ {
-		date := searchDate.AddDate(0, 0, day)
-		holds := []domain.BlockHold{{
-			StartDateTime: date.Add(9 * time.Hour),
-			EndDateTime:   date.Add(15 * time.Hour),
-		}}
-		if date.Format("2006-01-02") == "2026-06-04" ||
-			date.Format("2006-01-02") == "2026-06-08" {
-			holds = nil
-		}
-		records.ScheduleReads[date.Format("2006-01-02")] = completeRead("1513", nil, holds)
-	}
-	minuteOfDay := 13*60 + 30
-
-	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
-		Search(context.Background(), scheduling.SearchCommand{
-			Date:    searchDate.Format("2006-01-02"),
-			Office:  "Spring Hill",
-			Routing: string(domain.RoutingBachOnly),
-			Preferences: []scheduling.AvailabilityPreference{
-				{
-					Date: "2026-06-08",
-					Time: &scheduling.AvailabilityTimePreference{
-						MinuteOfDay: &minuteOfDay,
-					},
-				},
+				{Date: "2026-06-03"},
 				{Date: "2026-06-04"},
 			},
 		})
-	if err != nil {
-		t.Fatalf("Search error = %v", err)
-	}
-	got := []string{result.Slots[0].DateTime, result.Slots[1].DateTime}
-	if !slices.Equal(got, []string{"2026-06-04T09:00", "2026-06-08T13:00"}) {
-		t.Fatalf("slot datetimes = %v, want one real option for each preference alternative", got)
+	if err == nil || err.Error() != "preferences must include at most one entry" {
+		t.Fatalf("Search error = %v, want preferences validation error", err)
 	}
 }
 
@@ -459,12 +397,12 @@ func TestSearchBlocksSlotsOverlappedByMultiSlotAppointments(t *testing.T) {
 	for _, slot := range result.Slots {
 		gotTimes = append(gotTimes, slot.Time)
 	}
-	if !slices.Equal(gotTimes, []string{"8:30 AM", "9:00 AM"}) {
-		t.Fatalf("slot times = %v, want two real options with multi-slot overlap excluded", gotTimes)
+	if !slices.Equal(gotTimes, []string{"8:30 AM", "9:00 AM", "10:00 AM"}) {
+		t.Fatalf("slot times = %v, want legacy inventory with multi-slot overlap excluded", gotTimes)
 	}
 }
 
-func TestSearchOwnsRoutingPreauthAndReturnsCompleteFirstAvailableDay(t *testing.T) {
+func TestSearchWithoutPreferencesPreservesCompleteFirstAvailableDay(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	records := recordsWithSetup(
 		testColumn("1513", "620", "1568", "08:00", "17:00", 30),
@@ -488,7 +426,8 @@ func TestSearchOwnsRoutingPreauthAndReturnsCompleteFirstAvailableDay(t *testing.
 		result.SearchedFrom != "2026-06-15" ||
 		result.BookingTokenExpiresAt != "2026-06-01T12:15:00Z" ||
 		!result.DateShifted ||
-		len(result.Slots) != 2 {
+		len(result.Slots) != 18 ||
+		result.SelectionPolicy != "" {
 		t.Fatalf("result = %#v", result)
 	}
 	gotTimes := make([]string, 0, len(result.Slots))
@@ -509,13 +448,44 @@ func TestSearchOwnsRoutingPreauthAndReturnsCompleteFirstAvailableDay(t *testing.
 		}
 		gotTimes = append(gotTimes, slot.Time)
 	}
-	if !slices.Equal(gotTimes, []string{"8:00 AM", "12:00 PM"}) {
-		t.Fatalf("slot times = %v, want earliest slot with useful time-of-day contrast", gotTimes)
+	if gotTimes[0] != "8:00 AM" || gotTimes[len(gotTimes)-1] != "4:30 PM" {
+		t.Fatalf("slot times = %v, want the complete legacy first-day inventory", gotTimes)
 	}
 	if len(records.ScheduleReadQueries) != 1 ||
 		records.ScheduleReadQueries[0].Date != "2026-06-15" ||
 		!slices.Equal(records.ScheduleReadQueries[0].ColumnIDs, []string{"1600"}) {
 		t.Fatalf("schedule read queries = %#v, want only eligible optical column", records.ScheduleReadQueries)
+	}
+}
+
+func TestSearchWithExplicitEmptyPreferencesReturnsRankedBroadSelection(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	records := recordsWithSetup(
+		testColumn("1513", "620", "1568", "08:00", "17:00", 30),
+		testColumn("1600", "1983", "1568", "08:00", "17:00", 30),
+	)
+	records.ScheduleReads["2026-06-15"] = completeRead("1600", nil, nil)
+
+	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Date:            "2026-06-03",
+			Office:          "Spring Hill",
+			Routing:         string(domain.RoutingOpticalOnly),
+			DOB:             "01/15/1980",
+			PreauthRequired: true,
+			Preferences:     []scheduling.AvailabilityPreference{},
+		})
+	if err != nil {
+		t.Fatalf("Search error = %v", err)
+	}
+
+	gotTimes := make([]string, 0, len(result.Slots))
+	for _, slot := range result.Slots {
+		gotTimes = append(gotTimes, slot.Time)
+	}
+	if !slices.Equal(gotTimes, []string{"8:00 AM", "12:00 PM"}) ||
+		result.SelectionPolicy != "preference_ranked_v1" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -606,6 +576,60 @@ func TestSearchRejectsInvalidAvailabilityPreference(t *testing.T) {
 	if err == nil ||
 		err.Error() != "preferences[0].time.minuteOfDay must be between 0 and 1439" {
 		t.Fatalf("invalid preference error = %v", err)
+	}
+
+	_, err = scheduling.New(nil, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Date:        "2026-06-03",
+			Office:      "Spring Hill",
+			Routing:     string(domain.RoutingBachOnly),
+			Preferences: []scheduling.AvailabilityPreference{{}},
+		})
+	if err == nil || err.Error() != "preferences[0] must include date or time" {
+		t.Fatalf("empty preference error = %v", err)
+	}
+}
+
+func TestSearchStopsAfterTwoExactBookableMatches(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	records := recordsWithSetup(
+		testColumn("1513", "620", "1568", "09:00", "09:15", 15),
+		testColumn("1551", "2064", "1568", "09:00", "09:15", 15),
+	)
+	records.ScheduleReads["2026-06-03"] = domain.ScheduleReadResult{
+		Columns: map[string]domain.ColumnSchedule{
+			"1513": {
+				AppointmentsComplete: true,
+				BlockHoldsComplete:   true,
+			},
+			"1551": {
+				AppointmentsComplete: true,
+				BlockHoldsComplete:   true,
+			},
+		},
+	}
+	minuteOfDay := 9 * 60
+
+	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Date:    "2026-06-03",
+			Office:  "Spring Hill",
+			Routing: string(domain.RoutingBachLicht),
+			Preferences: []scheduling.AvailabilityPreference{{
+				Date: "2026-06-03",
+				Time: &scheduling.AvailabilityTimePreference{
+					MinuteOfDay: &minuteOfDay,
+				},
+			}},
+		})
+	if err != nil {
+		t.Fatalf("Search error = %v", err)
+	}
+	if len(result.Slots) != 2 ||
+		result.Slots[0].Provider == result.Slots[1].Provider ||
+		len(records.ScheduleReadQueries) != 1 ||
+		result.SearchedThrough != "2026-06-03" {
+		t.Fatalf("result = %#v, schedule reads = %#v", result, records.ScheduleReadQueries)
 	}
 }
 
