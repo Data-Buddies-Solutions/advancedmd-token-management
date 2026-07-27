@@ -305,8 +305,8 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 			return availabilitySlotLess(daySlots[i], daySlots[j])
 		})
 		if len(preferences) == 0 {
-			broadSlots = append(broadSlots, daySlots...)
-			if len(broadSlots) >= 2 {
+			if len(daySlots) > 0 {
+				broadSlots = daySlots
 				break
 			}
 		} else {

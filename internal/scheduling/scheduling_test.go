@@ -481,7 +481,7 @@ func TestSearchReturnsNearestRealDatesWhenThePreferredDateHasNoInventory(t *test
 	}
 }
 
-func TestSearchReturnsTheOnlyRealSlotInTheCompleteWindow(t *testing.T) {
+func TestBroadSearchStopsAtTheFirstAvailableDayWithOneSlot(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	searchDate := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 	records := recordsWithWindowInventory(
@@ -489,6 +489,7 @@ func TestSearchReturnsTheOnlyRealSlotInTheCompleteWindow(t *testing.T) {
 		testColumn("1513", "620", "1568", "09:00", "09:30", 30),
 		map[string][]string{"2026-06-04": {"09:00"}},
 	)
+	records.ScheduleReadErrors["2026-06-05"] = errors.New("later read failed")
 
 	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
 		Search(context.Background(), scheduling.SearchCommand{
@@ -504,7 +505,8 @@ func TestSearchReturnsTheOnlyRealSlotInTheCompleteWindow(t *testing.T) {
 	}
 	if result.Slots[0].PreferenceMatch != "" ||
 		result.Outcome != domain.AvailabilityOutcomeFound ||
-		len(records.ScheduleReadQueries) != 15 {
+		result.SearchedThrough != "2026-06-04" ||
+		len(records.ScheduleReadQueries) != 3 {
 		t.Fatalf("result = %#v, reads = %d", result, len(records.ScheduleReadQueries))
 	}
 }
