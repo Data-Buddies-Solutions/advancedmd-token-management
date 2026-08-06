@@ -1188,6 +1188,30 @@ func TestHandleUpdateInsurance_SelfPayAutoSubscriberNum(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateInsurance_AetnaGovernmentVisionUsesICareCarrier(t *testing.T) {
+	handlers, writes := newUpdateInsuranceTestHandlers(t)
+	req := httptest.NewRequest("POST", "/api/patient/update-insurance", bytes.NewBufferString(`{"patientId":"123","respPartyId":"resp123","insurance":"Aetna Dual Eligible Medicare Advantage","coverageType":"routine_vision","subscriberNum":"ABC123","office":"Hollywood"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handlers.HandleUpdateInsurance(w, req)
+
+	var resp UpdateInsuranceResponse
+	json.NewDecoder(w.Result().Body).Decode(&resp)
+	if resp.Status != "updated" {
+		t.Fatalf("expected updated response, got %#v", resp)
+	}
+	if resp.Routing != string(domain.RoutingOpticalOnly) {
+		t.Fatalf("routing = %q, want %q", resp.Routing, domain.RoutingOpticalOnly)
+	}
+	if len(*writes) != 1 {
+		t.Fatalf("XMLRPC writes = %d, want 1", len(*writes))
+	}
+	if !strings.Contains((*writes)[0], "car40907") {
+		t.Fatalf("Aetna government vision payload = %s, want iCare carrier car40907", (*writes)[0])
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
