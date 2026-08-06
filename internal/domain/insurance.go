@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // RoutingRule determines which providers a patient can see based on their insurance.
 type RoutingRule string
@@ -725,6 +728,30 @@ func lookupInsuranceFromMaps(name string, entries map[string]InsuranceEntry, ali
 	return entry, ok
 }
 
+func lookupVisionInsurance(name string) (InsuranceEntry, bool) {
+	if isAetnaGovernmentVisionPlan(name) {
+		return VisionInsuranceNameMap["icare"], true
+	}
+	return lookupInsuranceFromMaps(name, VisionInsuranceNameMap, VisionInsuranceAliases)
+}
+
+func isAetnaGovernmentVisionPlan(name string) bool {
+	words := strings.FieldsFunc(NormalizeForLookup(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	hasAetna := false
+	hasGovernmentProgram := false
+	for _, word := range words {
+		switch word {
+		case "aetna":
+			hasAetna = true
+		case "medicaid", "medicare":
+			hasGovernmentProgram = true
+		}
+	}
+	return hasAetna && hasGovernmentProgram
+}
+
 // LookupInsurance looks up an insurance name and returns its entry.
 // First tries exact match in InsuranceNameMap, then checks InsuranceAliases.
 // Uses NormalizeForLookup for tolerance of punctuation, casing, and spacing.
@@ -743,7 +770,7 @@ func IsSelfPayInsurance(name string) bool {
 // LookupInsuranceForCoverage chooses the medical or routine-vision crosswalk.
 func LookupInsuranceForCoverage(name string, mode InsuranceMode) (InsuranceEntry, bool) {
 	if mode == InsuranceModeVision {
-		return lookupInsuranceFromMaps(name, VisionInsuranceNameMap, VisionInsuranceAliases)
+		return lookupVisionInsurance(name)
 	}
 	return LookupInsurance(name)
 }
@@ -812,7 +839,7 @@ func applyOfficeMedicalInsurancePolicy(entry InsuranceEntry, canonicalName strin
 // crosswalk and applies office-specific medical acceptance rules.
 func LookupInsuranceForCoverageAtOffice(name string, mode InsuranceMode, office *OfficeConfig) (InsuranceEntry, bool) {
 	if mode == InsuranceModeVision {
-		return lookupInsuranceFromMaps(name, VisionInsuranceNameMap, VisionInsuranceAliases)
+		return lookupVisionInsurance(name)
 	}
 
 	if isHollywoodSweetwaterMedicalOffice(office) {

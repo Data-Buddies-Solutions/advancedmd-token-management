@@ -189,6 +189,12 @@ func TestLookupInsuranceForCoverage_RoutineVision(t *testing.T) {
 		{"iCare spaced", "i Care", "car40907", true},
 		{"iCare speech recognition", "Eye Care", "car40907", true},
 		{"iCare alias", "Simply Medcaid", "car40907", true},
+		{"Aetna commercial stays EyeMed", "Aetna", "car280684", true},
+		{"Aetna Medicaid uses iCare", "Aetna Medicaid", "car40907", true},
+		{"Aetna Medicare uses iCare", "Aetna Medicare", "car40907", true},
+		{"Aetna government punctuation uses iCare", "Aetna Better Health (Medicaid)", "car40907", true},
+		{"Aetna government word order uses iCare", "Medicare Advantage by Aetna", "car40907", true},
+		{"Aetna government rule overrides another carrier phrase", "Aetna Medicare WellCare Medicare HMO (Vision)", "car40907", true},
 		{"Alivi exact", "Alivi", "car308796", true},
 		{"pending CarePlus routine vision", "CarePlus", "", false},
 		{"pending CarePlus Medicare routine vision", "CarePlus (Medicare) Vision", "", false},
@@ -238,6 +244,16 @@ func TestLookupInsuranceForCoverage_RoutineVision(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLookupInsuranceForCoverage_AetnaGovernmentRuleIsVisionOnly(t *testing.T) {
+	entry, found := LookupInsuranceForCoverage("Aetna Medicare", InsuranceModeMedical)
+	if !found {
+		t.Fatal("Aetna Medicare medical found = false, want true")
+	}
+	if entry.CarrierID != "car40887" {
+		t.Fatalf("Aetna Medicare medical carrierID = %q, want car40887", entry.CarrierID)
 	}
 }
 
