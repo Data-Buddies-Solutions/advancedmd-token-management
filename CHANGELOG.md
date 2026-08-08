@@ -4,6 +4,14 @@ Release Please owns new versioned sections at the top of this file. The dated
 `[Unreleased]` sections below predate the automation and remain as historical
 records.
 
+## [2.3.1](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.3.0...v2.3.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **insurance:** map Aetna government vision plans to iCare ([#158](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/158)) ([5277fef](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/5277fef49b956f9fdd4e2beaaed735287da150b4))
+* **scheduling:** preserve exact reschedule appointment types ([#160](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/160)) ([e1ac96c](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/e1ac96cab9a4ba48ce8832a30d62951aca4f1435))
+
 ## [2.3.0](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.2.1...v2.3.0) (2026-07-27)
 
 
