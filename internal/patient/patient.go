@@ -83,6 +83,7 @@ type Appointment struct {
 	OfficeID          string
 	Office            string
 	CancellationToken string
+	RescheduleToken   string
 }
 
 // Candidate contains only the private identity-selection facts available
@@ -209,12 +210,13 @@ type Patient interface {
 }
 
 type patient struct {
-	advancedMD         advancedmd.PatientRecords
-	cancellationTokens CancellationTokenIssuer
+	advancedMD        advancedmd.PatientRecords
+	appointmentTokens AppointmentTokenIssuer
 }
 
-type CancellationTokenIssuer interface {
+type AppointmentTokenIssuer interface {
 	IssueCancellationToken(string, domain.PatientAppointment) (string, error)
+	IssueRescheduleToken(string, domain.PatientAppointment) (string, error)
 }
 
 type MutationMetric struct {
@@ -244,13 +246,13 @@ func New(advancedMD advancedmd.PatientRecords) Patient {
 	return &patient{advancedMD: advancedMD}
 }
 
-func NewWithCancellationTokens(
+func NewWithAppointmentTokens(
 	advancedMD advancedmd.PatientRecords,
-	cancellationTokens CancellationTokenIssuer,
+	appointmentTokens AppointmentTokenIssuer,
 ) Patient {
 	return &patient{
-		advancedMD:         advancedMD,
-		cancellationTokens: cancellationTokens,
+		advancedMD:        advancedMD,
+		appointmentTokens: appointmentTokens,
 	}
 }
 
@@ -966,9 +968,13 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 
 	for _, appointment := range appointmentsRead.read.Appointments {
 		cancellationToken := ""
-		if p.cancellationTokens != nil {
+		rescheduleToken := ""
+		if p.appointmentTokens != nil {
 			var tokenErr error
-			cancellationToken, tokenErr = p.cancellationTokens.IssueCancellationToken(candidate.ID, appointment)
+			cancellationToken, tokenErr = p.appointmentTokens.IssueCancellationToken(candidate.ID, appointment)
+			if tokenErr == nil {
+				rescheduleToken, tokenErr = p.appointmentTokens.IssueRescheduleToken(candidate.ID, appointment)
+			}
 			if tokenErr != nil {
 				result.Appointments = []Appointment{}
 				result.AppointmentsStatus = AppointmentsError
@@ -989,6 +995,7 @@ func (p *patient) resolvePatient(ctx context.Context, candidate domain.Patient, 
 			OfficeID:          appointment.OfficeID,
 			Office:            appointment.Office,
 			CancellationToken: cancellationToken,
+			RescheduleToken:   rescheduleToken,
 		})
 	}
 	if len(result.Appointments) == 0 {

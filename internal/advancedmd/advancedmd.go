@@ -139,18 +139,21 @@ type AppointmentState struct {
 	Complete bool
 }
 
-// Booking is the Acuity scheduling decision sent through the AdvancedMD seam.
-// The production adapter owns provider-specific IDs, payloads, and transport.
+// Booking is the policy-resolved scheduling decision sent through the
+// AdvancedMD seam. Scheduling policy owns provider appointment type IDs and
+// colors; the production adapter owns payload shape and transport.
 type Booking struct {
-	PatientID         int
-	OfficeID          string
-	ColumnID          int
-	ProfileID         int
-	Start             time.Time
-	Duration          int
-	AppointmentTypeID int
-	Force             bool
-	Comments          string
+	PatientID                 int
+	OfficeID                  string
+	ColumnID                  int
+	ProfileID                 int
+	Start                     time.Time
+	Duration                  int
+	AppointmentTypeID         int
+	ProviderAppointmentTypeID int
+	AppointmentColor          string
+	Force                     bool
+	Comments                  string
 }
 
 // Cancellation is the verified Acuity context for one provider cancellation.

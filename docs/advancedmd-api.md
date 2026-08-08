@@ -211,6 +211,16 @@ only private lightweight candidates and performs no hydration until one
 inside the AdvancedMD adapter; the Patient module receives only Acuity
 appointment values.
 
+Resolved appointments include separate private signed `cancellationToken` and
+`rescheduleToken` values. Both bind the patient, appointment, owning office,
+start time, and appointment type, but use distinct purposes and HMAC domains.
+The reschedule token can be passed privately when booking a replacement slot.
+Scheduling then preserves the signed appointment type, including types outside
+the canonical new-booking set. A token without a usable type falls back to
+normal intent-based type resolution. Successful booking receipts include a new
+private `rescheduleToken` for that appointment so a subsequent move can preserve
+the same type without reloading it first.
+
 ### `GET /scheduler/blockholds`
 
 Used by `POST /api/scheduler/availability`.
@@ -232,7 +242,8 @@ slot fields directly only when `ALLOW_RAW_SLOT_BOOKING=true`.
 - `facilityid` from the resolved office.
 - `episodeid: 1`.
 - `type` wrapped as `[{ "id": <appointmentTypeId> }]`.
-- appointment color from `DefaultAppointmentTypeColors`.
+- appointment color from `DefaultAppointmentTypeColors`; a signed reschedule of
+  an unrecognized existing type uses the routine-vision fallback color.
 - `force: 1` for slots whose signed `bookingToken` carries `requiresForce` from
   the preceding availability search and whose live capacity check still proves
   the same force decision.
@@ -244,7 +255,9 @@ Validation before sending to AMD:
   supplied.
 - column ID belongs to the office.
 - column ID is valid for the requested routing lane.
-- appointment type is valid for the office and routing lane.
+- new-booking appointment type is valid for the office and routing lane.
+- a reschedule type outside that set is accepted only from a valid
+  `rescheduleToken` for the same patient.
 - DOB is valid and satisfies provider minimum age for age-restricted columns.
 - DOB applies medical pediatric routing when the patient is under 18.
 - the patient demographics still match the signed DOB context.

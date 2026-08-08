@@ -383,15 +383,18 @@ func patientAppointmentRead(
 		if len(raw.AppointmentTypes) > 0 {
 			providerTypeID := raw.AppointmentTypes[0]
 			canonicalID, ok := domain.CanonicalAppointmentTypeID(providerTypeID)
-			if !ok {
+			if !ok && providerTypeID <= 0 {
 				read.Complete = false
-			} else {
+			} else if ok {
 				typeID = canonicalID
 				var named bool
 				typeName, named = office.AppointmentTypeName(typeID)
 				if !named {
 					read.Complete = false
 				}
+			} else {
+				typeID = providerTypeID
+				typeName = "Appointment"
 			}
 		} else {
 			read.Complete = false
@@ -572,12 +575,7 @@ func (a *Adapter) BookAppointment(ctx context.Context, booking Booking) (int, er
 	if err != nil {
 		return 0, NewError(safeerrors.CategoryInternal)
 	}
-	providerTypeID, ok := domain.ResolveAppointmentTypeID(booking.AppointmentTypeID)
-	if !ok {
-		return 0, NewError(safeerrors.CategoryInternal)
-	}
-	color, ok := office.AppointmentColor(booking.AppointmentTypeID)
-	if !ok {
+	if booking.ProviderAppointmentTypeID <= 0 || booking.AppointmentColor == "" {
 		return 0, NewError(safeerrors.CategoryInternal)
 	}
 	force := 0
@@ -593,10 +591,10 @@ func (a *Adapter) BookAppointment(ctx context.Context, booking Booking) (int, er
 		Duration:      booking.Duration,
 		AppointmentType: []struct {
 			ID int `json:"id"`
-		}{{ID: providerTypeID}},
+		}{{ID: booking.ProviderAppointmentTypeID}},
 		EpisodeID:  1,
 		FacilityID: facilityID,
-		Color:      color,
+		Color:      booking.AppointmentColor,
 		Force:      force,
 		Comments:   booking.Comments,
 	})

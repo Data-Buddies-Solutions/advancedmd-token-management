@@ -134,12 +134,13 @@ func (p SchedulingPolicy) matchesProvider(column SchedulerColumn, profile Schedu
 }
 
 type BookingPolicyRequest struct {
-	ColumnID          int
-	ProfileID         int
-	AppointmentTypeID int
-	Routing           RoutingRule
-	DOB               string
-	Intent            AppointmentIntent
+	ColumnID                   int
+	ProfileID                  int
+	AppointmentTypeID          int
+	Routing                    RoutingRule
+	DOB                        string
+	Intent                     AppointmentIntent
+	PreservedAppointmentTypeID int
 }
 
 type BookingPolicyDecision struct {
@@ -172,6 +173,10 @@ func (p SchedulingPolicy) PrepareBooking(req BookingPolicyRequest) (BookingPolic
 
 	routing := p.SchedulingRouting(req.Routing, req.DOB)
 	typeID := req.AppointmentTypeID
+	preservesExistingType := req.PreservedAppointmentTypeID > 0
+	if preservesExistingType {
+		typeID = req.PreservedAppointmentTypeID
+	}
 	if typeID == 0 {
 		resolution := ResolveAppointmentTypeForIntent(p.office, routing, req.Intent)
 		if resolution.AppointmentTypeID == 0 {
@@ -197,14 +202,20 @@ func (p SchedulingPolicy) PrepareBooking(req BookingPolicyRequest) (BookingPolic
 	}
 
 	environmentTypeID, ok := ResolveAppointmentTypeID(typeID)
-	if !ok {
+	if !ok && !preservesExistingType {
 		return BookingPolicyDecision{}, &SchedulingPolicyError{Message: fmt.Sprintf("Invalid appointment type ID: %d. Valid types: 1004, 1005, 1006, 1007, 1008, 1010, 3364, 4244, 4245, 6167, 6168, 6169", typeID)}
 	}
-	color, ok := p.office.AppointmentColor(typeID)
 	if !ok {
+		environmentTypeID = typeID
+	}
+	color, ok := p.office.AppointmentColor(typeID)
+	if !ok && !preservesExistingType {
 		return BookingPolicyDecision{}, &SchedulingPolicyError{Message: fmt.Sprintf("Invalid appointment type ID: %d", typeID)}
 	}
-	if !slices.Contains(p.AllowedAppointmentTypeIDs(routing, ""), typeID) {
+	if !ok {
+		color = PreservedAppointmentTypeFallbackColor
+	}
+	if !preservesExistingType && !slices.Contains(p.AllowedAppointmentTypeIDs(routing, ""), typeID) {
 		return BookingPolicyDecision{}, &SchedulingPolicyError{Message: fmt.Sprintf("Appointment type %d is not valid for routing %q at %s", typeID, routing, p.office.DisplayName)}
 	}
 	if !p.office.ColumnAllowsDOB(columnID, req.DOB) {
@@ -214,7 +225,7 @@ func (p SchedulingPolicy) PrepareBooking(req BookingPolicyRequest) (BookingPolic
 		}
 		return BookingPolicyDecision{}, &SchedulingPolicyError{Message: message}
 	}
-	if !slices.Contains(p.AllowedAppointmentTypeIDs(routing, req.DOB), typeID) {
+	if !preservesExistingType && !slices.Contains(p.AllowedAppointmentTypeIDs(routing, req.DOB), typeID) {
 		return BookingPolicyDecision{}, &SchedulingPolicyError{Message: fmt.Sprintf("Appointment type %d is not valid for routing %q at %s", typeID, routing, p.office.DisplayName)}
 	}
 	return BookingPolicyDecision{
