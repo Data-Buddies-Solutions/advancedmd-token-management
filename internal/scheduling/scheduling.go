@@ -61,6 +61,7 @@ const (
 	CategoryValidation               Category = "validation"
 	CategoryInvalidBookingToken      Category = "invalid_booking_token"
 	CategoryInvalidCancellationToken Category = "invalid_cancellation_token"
+	CategoryInvalidRescheduleToken   Category = "invalid_reschedule_token"
 	CategoryBookingTokenRequired     Category = "booking_token_required"
 	CategoryAppointmentTypeMissing   Category = "appointment_type_unresolved"
 	CategoryPatientContextMismatch   Category = "patient_context_mismatch"
@@ -119,7 +120,7 @@ func MissingOf(err error) []string {
 type service struct {
 	records            advancedmd.SchedulingRecords
 	bookingTokenSecret string
-	cancellationTokens *CancellationTokens
+	appointmentTokens  *AppointmentTokens
 	allowRawBooking    bool
 	now                func() time.Time
 
@@ -151,7 +152,7 @@ func NewWithConfig(
 	return &service{
 		records:            records,
 		bookingTokenSecret: bookingTokenSecret,
-		cancellationTokens: NewCancellationTokens(bookingTokenSecret, now),
+		appointmentTokens:  NewAppointmentTokens(bookingTokenSecret, now),
 		allowRawBooking:    config.AllowRawBooking,
 		now:                now,
 	}

@@ -65,8 +65,8 @@ func main() {
 
 	// Compose the patient workflow over the domain-oriented AdvancedMD seam.
 	patientRecords := advancedmd.NewAdapter(amdSession, amdClient, amdRestClient)
-	cancellationTokens := scheduling.NewCancellationTokens(cfg.BookingTokenSecret, time.Now)
-	patients := patient.NewWithCancellationTokens(patientRecords, cancellationTokens)
+	appointmentTokens := scheduling.NewAppointmentTokens(cfg.BookingTokenSecret, time.Now)
+	patients := patient.NewWithAppointmentTokens(patientRecords, appointmentTokens)
 	scheduler := scheduling.NewWithConfig(
 		patientRecords,
 		cfg.BookingTokenSecret,

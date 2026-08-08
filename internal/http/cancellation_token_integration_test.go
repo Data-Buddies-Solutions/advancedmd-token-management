@@ -33,12 +33,12 @@ func TestCancellationTokenCancelsPairedOfficeAppointmentWithoutRediscovery(t *te
 			Complete: true,
 		},
 	}
-	tokens := scheduling.NewCancellationTokens("test-scheduling-secret", func() time.Time { return now })
+	tokens := scheduling.NewAppointmentTokens("test-scheduling-secret", func() time.Time { return now })
 	handlers := NewHandlers(
 		nil,
 		nil,
 		nil,
-		patient.NewWithCancellationTokens(records, tokens),
+		patient.NewWithAppointmentTokens(records, tokens),
 		scheduling.New(records, "test-scheduling-secret", func() time.Time { return now }),
 	)
 
@@ -52,6 +52,7 @@ func TestCancellationTokenCancelsPairedOfficeAppointmentWithoutRediscovery(t *te
 			ID                int    `json:"id"`
 			OfficeID          string `json:"officeId"`
 			CancellationToken string `json:"cancellationToken"`
+			RescheduleToken   string `json:"rescheduleToken"`
 		} `json:"appointments"`
 	}
 	if err := json.NewDecoder(resolveRecorder.Body).Decode(&resolved); err != nil {
@@ -61,7 +62,11 @@ func TestCancellationTokenCancelsPairedOfficeAppointmentWithoutRediscovery(t *te
 		t.Fatalf("patient resolution = %#v", resolved)
 	}
 	appointment := resolved.Appointments[0]
-	if appointment.ID != 33333 || appointment.OfficeID != "crystal_river" || appointment.CancellationToken == "" {
+	if appointment.ID != 33333 ||
+		appointment.OfficeID != "crystal_river" ||
+		appointment.CancellationToken == "" ||
+		appointment.RescheduleToken == "" ||
+		appointment.RescheduleToken == appointment.CancellationToken {
 		t.Fatalf("resolved appointment = %#v", appointment)
 	}
 	if records.appointmentReads != 1 {
@@ -117,12 +122,12 @@ func TestPatientResolutionIssuesOneDistinctTokenPerAppointment(t *testing.T) {
 			Complete: true,
 		},
 	}
-	tokens := scheduling.NewCancellationTokens("test-scheduling-secret", func() time.Time { return now })
+	tokens := scheduling.NewAppointmentTokens("test-scheduling-secret", func() time.Time { return now })
 	handlers := NewHandlers(
 		nil,
 		nil,
 		nil,
-		patient.NewWithCancellationTokens(records, tokens),
+		patient.NewWithAppointmentTokens(records, tokens),
 		scheduling.New(records, "test-scheduling-secret", func() time.Time { return now }),
 	)
 
@@ -134,6 +139,7 @@ func TestPatientResolutionIssuesOneDistinctTokenPerAppointment(t *testing.T) {
 		Appointments []struct {
 			ID                int    `json:"id"`
 			CancellationToken string `json:"cancellationToken"`
+			RescheduleToken   string `json:"rescheduleToken"`
 		} `json:"appointments"`
 	}
 	if err := json.NewDecoder(resolveRecorder.Body).Decode(&resolved); err != nil {
@@ -142,7 +148,11 @@ func TestPatientResolutionIssuesOneDistinctTokenPerAppointment(t *testing.T) {
 	if len(resolved.Appointments) != 2 ||
 		resolved.Appointments[0].CancellationToken == "" ||
 		resolved.Appointments[1].CancellationToken == "" ||
-		resolved.Appointments[0].CancellationToken == resolved.Appointments[1].CancellationToken {
+		resolved.Appointments[0].CancellationToken == resolved.Appointments[1].CancellationToken ||
+		resolved.Appointments[0].RescheduleToken == "" ||
+		resolved.Appointments[1].RescheduleToken == "" ||
+		resolved.Appointments[0].RescheduleToken == resolved.Appointments[1].RescheduleToken ||
+		resolved.Appointments[0].RescheduleToken == resolved.Appointments[0].CancellationToken {
 		t.Fatalf("resolved appointments = %#v", resolved.Appointments)
 	}
 
@@ -623,7 +633,7 @@ func issueCancellationToken(
 	appointment domain.PatientAppointment,
 ) string {
 	t.Helper()
-	token, err := scheduling.NewCancellationTokens(secret, func() time.Time { return now }).
+	token, err := scheduling.NewAppointmentTokens(secret, func() time.Time { return now }).
 		IssueCancellationToken(patientID, appointment)
 	if err != nil {
 		t.Fatalf("issue cancellation token: %v", err)

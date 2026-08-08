@@ -556,6 +556,77 @@ func TestAdapterCanonicalizesDevelopmentAppointmentTypeIDs(t *testing.T) {
 	}
 }
 
+func TestPatientAppointmentReadPreservesUnrecognizedTypeForRescheduling(t *testing.T) {
+	domain.InitRegistry("")
+	office := domain.DefaultOffice()
+	read := patientAppointmentRead(
+		[]clients.AMDAppointmentResponse{{
+			ID:               22222,
+			StartDateTime:    "2026-08-14T12:00:00",
+			ColumnID:         1513,
+			PatientID:        12345,
+			Provider:         "BACH, AUSTIN",
+			AppointmentTypes: []int{9999},
+		}},
+		12345,
+		map[int]*domain.OfficeConfig{1513: office},
+		office,
+		nil,
+	)
+	if !read.Complete || len(read.Appointments) != 1 {
+		t.Fatalf("appointment read = %#v", read)
+	}
+	if got := read.Appointments[0]; got.AppointmentTypeID != 9999 || got.Type != "Appointment" {
+		t.Fatalf("appointment type = %d/%q", got.AppointmentTypeID, got.Type)
+	}
+}
+
+func TestAdapterPreservesUnrecognizedProductionAppointmentType(t *testing.T) {
+	domain.InitRegistry("")
+	var bookingPayload map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&bookingPayload); err != nil {
+			t.Fatalf("decode booking: %v", err)
+		}
+		w.Write([]byte(`{"id":98765}`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(
+		staticSession{token: &domain.TokenData{
+			Token:       "Bearer test-token",
+			RestApiBase: strings.TrimPrefix(server.URL, "https://"),
+		}},
+		nil,
+		clients.NewAdvancedMDRestClient(server.Client()),
+	)
+	_, err := adapter.BookAppointment(context.Background(), Booking{
+		PatientID:                 12345,
+		OfficeID:                  "spring_hill",
+		ColumnID:                  1513,
+		ProfileID:                 620,
+		Start:                     time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+		Duration:                  15,
+		AppointmentTypeID:         9999,
+		ProviderAppointmentTypeID: 9999,
+		AppointmentColor:          domain.PreservedAppointmentTypeFallbackColor,
+	})
+	if err != nil {
+		t.Fatalf("BookAppointment error = %v", err)
+	}
+	types, ok := bookingPayload["type"].([]any)
+	if !ok || len(types) != 1 {
+		t.Fatalf("booking type = %#v", bookingPayload["type"])
+	}
+	typePayload, ok := types[0].(map[string]any)
+	if !ok || typePayload["id"] != float64(9999) {
+		t.Fatalf("booking type = %#v", bookingPayload["type"])
+	}
+	if bookingPayload["color"] != domain.PreservedAppointmentTypeFallbackColor {
+		t.Fatalf("booking color = %#v", bookingPayload["color"])
+	}
+}
+
 func TestAdapterSingleOfficeUsesSixReadsAndMarksUnreconciledRowsIncomplete(t *testing.T) {
 	domain.InitRegistry("")
 	fixedNow := time.Date(2026, time.July, 25, 10, 30, 0, 0, time.FixedZone("EDT", -4*60*60))
@@ -924,15 +995,17 @@ func TestAdapterBooksAndCancelsThroughControlledRESTServer(t *testing.T) {
 		clients.NewAdvancedMDRestClient(server.Client()),
 	)
 	appointmentID, err := adapter.BookAppointment(context.Background(), Booking{
-		PatientID:         12345,
-		OfficeID:          "spring_hill",
-		ColumnID:          1513,
-		ProfileID:         620,
-		Start:             time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
-		Duration:          15,
-		AppointmentTypeID: 1007,
-		Force:             true,
-		Comments:          "Appointment reason: follow up\nReferring doctor: none\n- AI",
+		PatientID:                 12345,
+		OfficeID:                  "spring_hill",
+		ColumnID:                  1513,
+		ProfileID:                 620,
+		Start:                     time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+		Duration:                  15,
+		AppointmentTypeID:         1007,
+		ProviderAppointmentTypeID: 1007,
+		AppointmentColor:          "ORANGE",
+		Force:                     true,
+		Comments:                  "Appointment reason: follow up\nReferring doctor: none\n- AI",
 	})
 	if err != nil || appointmentID != 98765 {
 		t.Fatalf("BookAppointment ID = %d, error = %v", appointmentID, err)
@@ -986,13 +1059,15 @@ func TestAdapterClassifiesProviderMutationOutcomes(t *testing.T) {
 				clients.NewAdvancedMDRestClient(server.Client()),
 			)
 			_, err := adapter.BookAppointment(context.Background(), Booking{
-				PatientID:         12345,
-				OfficeID:          "spring_hill",
-				ColumnID:          1513,
-				ProfileID:         620,
-				Start:             time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
-				Duration:          15,
-				AppointmentTypeID: 1007,
+				PatientID:                 12345,
+				OfficeID:                  "spring_hill",
+				ColumnID:                  1513,
+				ProfileID:                 620,
+				Start:                     time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+				Duration:                  15,
+				AppointmentTypeID:         1007,
+				ProviderAppointmentTypeID: 1007,
+				AppointmentColor:          "ORANGE",
 			})
 			if CategoryOf(err) != tt.category || IsAmbiguousWrite(err) != tt.ambiguous {
 				t.Fatalf("error = %v, category = %q, ambiguous = %t", err, CategoryOf(err), IsAmbiguousWrite(err))

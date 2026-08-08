@@ -295,6 +295,10 @@ func AppointmentLookupOffices(office *OfficeConfig) []*OfficeConfig {
 	return offices
 }
 
+// PreservedAppointmentTypeFallbackColor is used when a signed existing type has
+// no configured booking color.
+const PreservedAppointmentTypeFallbackColor = "TEAL"
+
 // DefaultAppointmentTypeColors maps AMD appointment type IDs to booking colors.
 var DefaultAppointmentTypeColors = map[int]string{
 	1006: "RED",    // New Adult Medical

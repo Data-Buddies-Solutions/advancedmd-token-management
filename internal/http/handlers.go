@@ -243,6 +243,7 @@ type PatientApptDetail struct {
 	OfficeID          string `json:"officeId,omitempty"`          // Stable office ID that owns the appointment column
 	Office            string `json:"office,omitempty"`            // Display name for the owning office
 	CancellationToken string `json:"cancellationToken,omitempty"` // Private agent-owned cancellation authorization
+	RescheduleToken   string `json:"rescheduleToken,omitempty"`   // Private agent-owned reschedule authorization
 }
 
 // HandlePatientResolve resolves a patient and, by default, loads appointments.
@@ -330,6 +331,7 @@ func patientResolveResponse(result patientmodule.ResolveResult) PatientResolveRe
 			OfficeID:          appointment.OfficeID,
 			Office:            appointment.Office,
 			CancellationToken: appointment.CancellationToken,
+			RescheduleToken:   appointment.RescheduleToken,
 		}
 	}
 	matches := make([]PatientCandidateResponse, len(result.Matches))

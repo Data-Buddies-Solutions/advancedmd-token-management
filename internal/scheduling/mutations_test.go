@@ -56,6 +56,131 @@ func TestBookRejectsInvalidSignedSlotBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestBookPreservesAnyAppointmentTypeFromSignedRescheduleToken(t *testing.T) {
+	now := mutationTestNow()
+	records := bookingRecords()
+	records.BookAppointmentID = 98765
+	command := signedBookCommand(t, now)
+	command.AppointmentTypeID = 1007
+	rescheduleToken, err := scheduling.NewAppointmentTokens(
+		"test-booking-secret",
+		func() time.Time { return now },
+	).IssueRescheduleToken("12345", domain.PatientAppointment{
+		ID:                54321,
+		Start:             time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC),
+		AppointmentTypeID: 9999,
+		OfficeID:          "spring_hill",
+	})
+	if err != nil {
+		t.Fatalf("IssueCancellationToken error = %v", err)
+	}
+	command.RescheduleToken = rescheduleToken
+
+	receipt, err := scheduling.New(
+		records,
+		"test-booking-secret",
+		func() time.Time { return now },
+	).Book(context.Background(), command)
+	if err != nil {
+		t.Fatalf("Book error = %v", err)
+	}
+	if receipt.AppointmentTypeID != 9999 {
+		t.Fatalf("receipt appointment type = %d, want 9999", receipt.AppointmentTypeID)
+	}
+	if receipt.RescheduleToken == "" {
+		t.Fatal("receipt reschedule token is empty")
+	}
+	if len(records.Bookings) != 1 ||
+		records.Bookings[0].AppointmentTypeID != 9999 ||
+		records.Bookings[0].ProviderAppointmentTypeID != 9999 ||
+		records.Bookings[0].AppointmentColor != domain.PreservedAppointmentTypeFallbackColor {
+		t.Fatalf("provider bookings = %#v", records.Bookings)
+	}
+
+	corrected := signedBookCommand(t, now)
+	corrected.RescheduleToken = receipt.RescheduleToken
+	records.ScheduleReads["2026-06-03"] = completeRead("1513", nil, nil)
+	if _, err := scheduling.New(
+		records,
+		"test-booking-secret",
+		func() time.Time { return now },
+	).Book(context.Background(), corrected); err != nil {
+		t.Fatalf("corrected Book error = %v", err)
+	}
+	if len(records.Bookings) != 2 || records.Bookings[1].AppointmentTypeID != 9999 {
+		t.Fatalf("corrected provider bookings = %#v", records.Bookings)
+	}
+}
+
+func TestBookRejectsCancellationTokenAsRescheduleAuthorization(t *testing.T) {
+	now := mutationTestNow()
+	records := bookingRecords()
+	command := signedBookCommand(t, now)
+	token, err := scheduling.NewAppointmentTokens(
+		"test-booking-secret",
+		func() time.Time { return now },
+	).IssueCancellationToken("12345", domain.PatientAppointment{
+		ID:                54321,
+		Start:             time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC),
+		AppointmentTypeID: 9999,
+		OfficeID:          "spring_hill",
+	})
+	if err != nil {
+		t.Fatalf("IssueCancellationToken error = %v", err)
+	}
+	command.RescheduleToken = token
+
+	_, err = scheduling.New(
+		records,
+		"test-booking-secret",
+		func() time.Time { return now },
+	).Book(context.Background(), command)
+	if scheduling.CategoryOf(err) != scheduling.CategoryInvalidRescheduleToken {
+		t.Fatalf("Book error = %v, category = %q", err, scheduling.CategoryOf(err))
+	}
+	if len(records.Bookings) != 0 {
+		t.Fatalf("provider bookings = %d, want none", len(records.Bookings))
+	}
+}
+
+func TestBookRejectsInvalidRescheduleTokenBeforeWrite(t *testing.T) {
+	now := mutationTestNow()
+	records := bookingRecords()
+	command := signedBookCommand(t, now)
+	command.RescheduleToken = "invalid-token"
+
+	_, err := scheduling.New(
+		records,
+		"test-booking-secret",
+		func() time.Time { return now },
+	).Book(context.Background(), command)
+	if scheduling.CategoryOf(err) != scheduling.CategoryInvalidRescheduleToken {
+		t.Fatalf("Book error = %v, category = %q", err, scheduling.CategoryOf(err))
+	}
+	if len(records.Bookings) != 0 {
+		t.Fatalf("provider bookings = %d, want none", len(records.Bookings))
+	}
+}
+
+func TestBookStillRejectsUnrecognizedTypeWithoutRescheduleAuthorization(t *testing.T) {
+	now := mutationTestNow()
+	records := bookingRecords()
+	command := signedBookCommand(t, now)
+	command.AppointmentTypeID = 9999
+
+	_, err := scheduling.New(
+		records,
+		"test-booking-secret",
+		func() time.Time { return now },
+	).Book(context.Background(), command)
+	if scheduling.CategoryOf(err) != scheduling.CategoryValidation {
+		t.Fatalf("Book error = %v, category = %q", err, scheduling.CategoryOf(err))
+	}
+	if len(records.Bookings) != 0 {
+		t.Fatalf("provider bookings = %d, want none", len(records.Bookings))
+	}
+}
+
 func TestBookRevalidatesPatientOfficeTypeProviderCapacityAndForce(t *testing.T) {
 	now := mutationTestNow()
 	tests := []struct {

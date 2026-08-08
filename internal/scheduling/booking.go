@@ -26,6 +26,7 @@ type BookCommand struct {
 	PatientName       string `json:"patientName,omitempty"`
 	DOB               string `json:"dob,omitempty"`
 	BookingToken      string `json:"bookingToken,omitempty"`
+	RescheduleToken   string `json:"rescheduleToken,omitempty"`
 	ColumnID          int    `json:"columnId"`
 	ProfileID         int    `json:"profileId"`
 	StartDatetime     string `json:"startDatetime"`
@@ -56,24 +57,28 @@ type BookReceipt struct {
 	Duration            int      `json:"duration,omitempty"`
 	AppointmentTypeID   int      `json:"appointmentTypeId,omitempty"`
 	AppointmentTypeName string   `json:"appointmentTypeName,omitempty"`
+	RescheduleToken     string   `json:"rescheduleToken,omitempty"`
 	Message             string   `json:"message"`
 	Missing             []string `json:"missing,omitempty"`
 }
 
 type preparedBooking struct {
-	command   BookCommand
-	office    *domain.OfficeConfig
-	patientID int
-	start     time.Time
-	force     bool
-	comments  string
+	command                 BookCommand
+	office                  *domain.OfficeConfig
+	patientID               int
+	start                   time.Time
+	force                   bool
+	comments                string
+	providerAppointmentType int
+	appointmentColor        string
 }
 
 type bookingContext struct {
-	command BookCommand
-	office  *domain.OfficeConfig
-	token   SlotPolicy
-	signed  bool
+	command                  BookCommand
+	office                   *domain.OfficeConfig
+	token                    SlotPolicy
+	signed                   bool
+	preservedAppointmentType int
 }
 
 func (s *service) Book(ctx context.Context, command BookCommand) (BookReceipt, error) {
@@ -83,18 +88,20 @@ func (s *service) Book(ctx context.Context, command BookCommand) (BookReceipt, e
 	}
 
 	appointmentID, err := s.records.BookAppointment(ctx, advancedmd.Booking{
-		PatientID:         prepared.patientID,
-		OfficeID:          prepared.office.ID,
-		ColumnID:          prepared.command.ColumnID,
-		ProfileID:         prepared.command.ProfileID,
-		Start:             prepared.start,
-		Duration:          prepared.command.Duration,
-		AppointmentTypeID: prepared.command.AppointmentTypeID,
-		Force:             prepared.force,
-		Comments:          prepared.comments,
+		PatientID:                 prepared.patientID,
+		OfficeID:                  prepared.office.ID,
+		ColumnID:                  prepared.command.ColumnID,
+		ProfileID:                 prepared.command.ProfileID,
+		Start:                     prepared.start,
+		Duration:                  prepared.command.Duration,
+		AppointmentTypeID:         prepared.command.AppointmentTypeID,
+		ProviderAppointmentTypeID: prepared.providerAppointmentType,
+		AppointmentColor:          prepared.appointmentColor,
+		Force:                     prepared.force,
+		Comments:                  prepared.comments,
 	})
 	if err == nil {
-		return buildBookReceipt(prepared.command, prepared.office, appointmentID), nil
+		return s.buildBookReceipt(prepared, appointmentID), nil
 	}
 	if advancedmd.IsAmbiguousWrite(err) {
 		return s.reconcileBooking(ctx, prepared)
@@ -138,7 +145,7 @@ func (s *service) prepareBooking(ctx context.Context, command BookCommand) (prep
 	if err != nil {
 		return preparedBooking{}, err
 	}
-	policy, comments, err := applyBookingPolicy(&booking)
+	policy, decision, comments, err := applyBookingPolicy(&booking)
 	if err != nil {
 		return preparedBooking{}, err
 	}
@@ -147,12 +154,14 @@ func (s *service) prepareBooking(ctx context.Context, command BookCommand) (prep
 		return preparedBooking{}, err
 	}
 	return preparedBooking{
-		command:   booking.command,
-		office:    booking.office,
-		patientID: patientID,
-		start:     start,
-		force:     force,
-		comments:  comments,
+		command:                 booking.command,
+		office:                  booking.office,
+		patientID:               patientID,
+		start:                   start,
+		force:                   force,
+		comments:                comments,
+		providerAppointmentType: decision.EnvironmentTypeID,
+		appointmentColor:        decision.Color,
 	}, nil
 }
 
@@ -202,6 +211,14 @@ func (s *service) resolveBookingContext(command BookCommand) (bookingContext, er
 			return bookingContext{}, schedulingError(err.Error())
 		}
 		booking.office = office
+	}
+	if command.RescheduleToken != "" {
+		policy, err := s.appointmentTokens.verifyReschedule(command.RescheduleToken, s.now().UTC())
+		if err != nil || domain.StripPatientPrefix(strings.TrimSpace(command.PatientID)) != policy.PatientID {
+			return bookingContext{}, invalidRescheduleTokenError()
+		}
+		command.AppointmentTypeID = policy.AppointmentTypeID
+		booking.preservedAppointmentType = policy.AppointmentTypeID
 	}
 	booking.command = command
 
@@ -270,11 +287,16 @@ func (s *service) verifyBookingPatient(ctx context.Context, booking *bookingCont
 	return patientID, nil
 }
 
-func applyBookingPolicy(booking *bookingContext) (domain.SchedulingPolicy, string, error) {
+func applyBookingPolicy(booking *bookingContext) (
+	domain.SchedulingPolicy,
+	domain.BookingPolicyDecision,
+	string,
+	error,
+) {
 	command := booking.command
 	comments := buildAppointmentComment(command.AppointmentReason, command.ReferringDoctor)
 	if len([]rune(comments)) > maxAppointmentCommentLength {
-		return domain.SchedulingPolicy{}, "", schedulingError(
+		return domain.SchedulingPolicy{}, domain.BookingPolicyDecision{}, "", schedulingError(
 			fmt.Sprintf("appointment comments must be %d characters or fewer", maxAppointmentCommentLength),
 		)
 	}
@@ -295,25 +317,35 @@ func applyBookingPolicy(booking *bookingContext) (domain.SchedulingPolicy, strin
 			IsPostOp:      command.IsPostOp,
 			VisitReason:   command.VisitReason,
 		},
+		PreservedAppointmentTypeID: booking.preservedAppointmentType,
 	})
 	if policyErr != nil {
 		category := CategoryValidation
 		if policyErr.Outcome == string(CategoryAppointmentTypeMissing) {
 			category = CategoryAppointmentTypeMissing
 		}
-		return domain.SchedulingPolicy{}, "", &Error{
+		return domain.SchedulingPolicy{}, domain.BookingPolicyDecision{}, "", &Error{
 			category: category,
 			message:  policyErr.Message,
 			missing:  append([]string(nil), policyErr.Missing...),
 		}
 	}
-	if booking.signed && !slices.Contains(booking.token.AppointmentTypeIDs, decision.AppointmentTypeID) {
-		return domain.SchedulingPolicy{}, "", invalidBookingTokenError()
+	if booking.signed &&
+		booking.preservedAppointmentType == 0 &&
+		!slices.Contains(booking.token.AppointmentTypeIDs, decision.AppointmentTypeID) {
+		return domain.SchedulingPolicy{}, domain.BookingPolicyDecision{}, "", invalidBookingTokenError()
 	}
 	command.Routing = string(decision.Routing)
 	command.AppointmentTypeID = decision.AppointmentTypeID
 	booking.command = command
-	return policy, comments, nil
+	return policy, decision, comments, nil
+}
+
+func invalidRescheduleTokenError() error {
+	return categorizedError(
+		CategoryInvalidRescheduleToken,
+		"rescheduleToken is invalid or expired. Load appointments again before rescheduling.",
+	)
 }
 
 func (s *service) revalidateBookingSlot(
@@ -404,7 +436,7 @@ func (s *service) reconcileBooking(ctx context.Context, prepared preparedBooking
 			appointment.Provider == provider &&
 			appointment.AppointmentTypeID == prepared.command.AppointmentTypeID {
 			log.Printf("booking: reconciliation outcome=success")
-			return buildBookReceipt(prepared.command, prepared.office, appointment.ID), nil
+			return s.buildBookReceipt(prepared, appointment.ID), nil
 		}
 	}
 	if !read.Complete {
@@ -496,6 +528,23 @@ func buildBookReceipt(command BookCommand, office *domain.OfficeConfig, appointm
 		AppointmentTypeName: appointmentTypeName,
 		Message:             "Appointment booked successfully",
 	}
+}
+
+func (s *service) buildBookReceipt(prepared preparedBooking, appointmentID int) BookReceipt {
+	receipt := buildBookReceipt(prepared.command, prepared.office, appointmentID)
+	token, err := s.appointmentTokens.IssueRescheduleToken(
+		prepared.command.PatientID,
+		domain.PatientAppointment{
+			ID:                appointmentID,
+			Start:             prepared.start,
+			AppointmentTypeID: prepared.command.AppointmentTypeID,
+			OfficeID:          prepared.office.ID,
+		},
+	)
+	if err == nil {
+		receipt.RescheduleToken = token
+	}
+	return receipt
 }
 
 func normalizePatientName(name string) string {
