@@ -105,6 +105,32 @@ func TestAvailabilityHandlerPreservesRequestedDateAndPreferredTime(t *testing.T)
 	}
 }
 
+func TestAvailabilityHandlerAcceptsConcreteWindowsWithoutDroppingLegacySupport(t *testing.T) {
+	scheduler := &recordingScheduling{
+		searchResponse: domain.AvailabilityResponse{
+			Status:  domain.AvailabilityStatusSuccess,
+			Outcome: domain.AvailabilityOutcomeNoAvailability,
+			Slots:   []domain.AvailabilitySlotOption{},
+		},
+	}
+	handlers := &Handlers{scheduling: scheduler}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/scheduler/availability",
+		strings.NewReader(`{"timeZone":"America/New_York","windows":[{"start":"2026-06-09T00:00:00-04:00","end":"2026-06-09T15:00:00-04:00"}],"office":"Spring Hill"}`),
+	)
+	response := httptest.NewRecorder()
+
+	handlers.HandleGetAvailability(response, request)
+
+	if scheduler.searchCalls != 1 ||
+		scheduler.searchCommand.TimeZone != "America/New_York" ||
+		len(scheduler.searchCommand.Windows) != 1 ||
+		scheduler.searchCommand.Windows[0].End != "2026-06-09T15:00:00-04:00" {
+		t.Fatalf("search command = %#v, response = %s", scheduler.searchCommand, response.Body.String())
+	}
+}
+
 func TestAvailabilityHandlerRejectsLegacyDate(t *testing.T) {
 	scheduler := &recordingScheduling{}
 	handlers := &Handlers{scheduling: scheduler}

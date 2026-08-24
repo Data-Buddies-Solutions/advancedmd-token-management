@@ -27,11 +27,22 @@ var eastern = domain.EasternLocation()
 type SearchCommand struct {
 	RequestedDate   string                      `json:"requestedDate,omitempty"`
 	PreferredTime   *AvailabilityTimePreference `json:"preferredTime,omitempty"`
+	Windows         []AvailabilityWindow        `json:"windows,omitempty"`
+	TimeZone        string                      `json:"timeZone,omitempty"`
 	Provider        string                      `json:"provider"`
 	Office          string                      `json:"office"`
 	Routing         string                      `json:"routing"`
 	DOB             string                      `json:"dob,omitempty"`
 	PreauthRequired bool                        `json:"preauthRequired"`
+}
+
+// AvailabilityWindow is one concrete clinic-local branch. Windows use OR
+// semantics; a slot is an exact match when its start is inside any half-open
+// [start, end) interval.
+type AvailabilityWindow struct {
+	Start          string `json:"start"`
+	End            string `json:"end"`
+	PreferredStart string `json:"preferredStart,omitempty"`
 }
 
 type AvailabilityTimeKind string
@@ -162,7 +173,17 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	empty := domain.AvailabilityResponse{}
 	now := s.now()
 	nowEastern := now.In(eastern)
+	concreteWindows, err := validateAvailabilityWindows(command.Windows, command.TimeZone)
+	if err != nil {
+		return empty, schedulingError(err.Error())
+	}
+	if len(concreteWindows) > 0 && (command.RequestedDate != "" || command.PreferredTime != nil) {
+		return empty, schedulingError("windows cannot be combined with requestedDate or preferredTime")
+	}
 	requestedDate := command.RequestedDate
+	if len(concreteWindows) > 0 {
+		requestedDate = concreteWindows[0].start.In(eastern).Format("2006-01-02")
+	}
 	if requestedDate == "" {
 		requestedDate = nowEastern.AddDate(0, 0, 1).Format("2006-01-02")
 	}
@@ -175,7 +196,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 	if err := validatePreferredTime(command.PreferredTime); err != nil {
 		return empty, schedulingError(err.Error())
 	}
-	hasPreference := command.RequestedDate != "" || command.PreferredTime != nil
+	hasPreference := len(concreteWindows) > 0 || command.RequestedDate != "" || command.PreferredTime != nil
 	if err := domain.ValidateOptionalDOB(command.DOB); err != nil {
 		return empty, schedulingError(err.Error())
 	}
@@ -319,24 +340,38 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 			}
 		} else {
 			for _, slot := range daySlots {
-				ranked, err := rankedSlot(
-					slot,
-					command.RequestedDate,
-					command.PreferredTime,
-				)
+				var ranked rankedAvailabilitySlot
+				var err error
+				if len(concreteWindows) > 0 {
+					ranked, err = rankedSlotForWindows(slot, concreteWindows)
+				} else {
+					ranked, err = rankedSlot(slot, command.RequestedDate, command.PreferredTime)
+				}
 				if err != nil {
 					return empty, schedulingError("Failed to rank availability: " + err.Error())
 				}
 				candidates = append(candidates, ranked)
 			}
-			if !searchIncomplete && hasTwoExactAvailabilityMatches(candidates) {
+			if !searchIncomplete && ((len(concreteWindows) > 0 && hasUsefulExactWindowCoverage(candidates, len(concreteWindows))) ||
+				(len(concreteWindows) == 0 && hasTwoExactAvailabilityMatches(candidates))) {
 				break
 			}
 		}
 		searchDate = searchDate.AddDate(0, 0, 1)
 	}
 
-	if hasPreference {
+	matchStatus := ""
+	if len(concreteWindows) > 0 {
+		if searchIncomplete && !hasAnyExactAvailabilityMatch(candidates) {
+			return incompleteResponse(
+				originalRequestedDate,
+				searchStartDate,
+				searchEndDate,
+				unavailableDataChecks,
+			), nil
+		}
+		slots, matchStatus = selectWindowAvailabilitySlots(candidates)
+	} else if hasPreference {
 		slots = selectPreferredAvailabilitySlots(candidates)
 	}
 	if len(slots) == 0 {
@@ -369,14 +404,178 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		SearchedFrom:          searchStartDate,
 		SearchedThrough:       searchedThrough,
 		BookingTokenExpiresAt: tokenExpiresAt.Format(time.RFC3339),
+		MatchStatus:           matchStatus,
 		Slots:                 slots,
 	}, nil
 }
 
 type rankedAvailabilitySlot struct {
-	slot            domain.AvailabilitySlotOption
-	mismatchCount   int
-	distanceMinutes int
+	slot             domain.AvailabilitySlotOption
+	mismatchCount    int
+	distanceMinutes  int
+	branchIndex      int
+	unmetConstraints []string
+}
+
+type normalizedAvailabilityWindow struct {
+	start          time.Time
+	end            time.Time
+	preferredStart *time.Time
+}
+
+func validateAvailabilityWindows(windows []AvailabilityWindow, timeZone string) ([]normalizedAvailabilityWindow, error) {
+	if len(windows) == 0 {
+		if timeZone != "" {
+			return nil, errors.New("timeZone requires windows")
+		}
+		return nil, nil
+	}
+	if timeZone != "America/New_York" {
+		return nil, errors.New("timeZone must be America/New_York")
+	}
+	if len(windows) > searchForwardDays+1 {
+		return nil, fmt.Errorf("windows must contain at most %d branches", searchForwardDays+1)
+	}
+	normalized := make([]normalizedAvailabilityWindow, 0, len(windows))
+	for _, window := range windows {
+		start, err := time.Parse(time.RFC3339, window.Start)
+		if err != nil {
+			return nil, errors.New("windows.start must use RFC3339")
+		}
+		end, err := time.Parse(time.RFC3339, window.End)
+		if err != nil {
+			return nil, errors.New("windows.end must use RFC3339")
+		}
+		if !start.Before(end) {
+			return nil, errors.New("windows.start must be before windows.end")
+		}
+		item := normalizedAvailabilityWindow{start: start, end: end}
+		if window.PreferredStart != "" {
+			preferred, err := time.Parse(time.RFC3339, window.PreferredStart)
+			if err != nil || preferred.Before(start) || !preferred.Before(end) {
+				return nil, errors.New("windows.preferredStart must be RFC3339 inside its window")
+			}
+			item.preferredStart = &preferred
+		}
+		normalized = append(normalized, item)
+	}
+	sort.SliceStable(normalized, func(i, j int) bool { return normalized[i].start.Before(normalized[j].start) })
+	firstDate := normalized[0].start.In(eastern)
+	lastAllowed := time.Date(firstDate.Year(), firstDate.Month(), firstDate.Day(), 0, 0, 0, 0, eastern).AddDate(0, 0, searchForwardDays+1)
+	for _, window := range normalized {
+		if window.start.In(eastern).Before(time.Date(firstDate.Year(), firstDate.Month(), firstDate.Day(), 0, 0, 0, 0, eastern)) || window.end.In(eastern).After(lastAllowed) {
+			return nil, fmt.Errorf("windows must stay inside the %d-date search horizon", searchForwardDays+1)
+		}
+	}
+	return normalized, nil
+}
+
+func rankedSlotForWindows(slot domain.AvailabilitySlotOption, windows []normalizedAvailabilityWindow) (rankedAvailabilitySlot, error) {
+	start, err := time.ParseInLocation("2006-01-02T15:04", slot.DateTime, eastern)
+	if err != nil {
+		return rankedAvailabilitySlot{}, fmt.Errorf("invalid slot datetime %q", slot.DateTime)
+	}
+	best := rankedAvailabilitySlot{slot: slot, mismatchCount: 3, distanceMinutes: int(^uint(0) >> 1)}
+	for index, window := range windows {
+		windowStart := window.start.In(eastern)
+		windowEnd := window.end.In(eastern)
+		exact := !start.Before(windowStart) && start.Before(windowEnd)
+		sameDate := start.Format("2006-01-02") == windowStart.Format("2006-01-02")
+		minute := start.Hour()*60 + start.Minute()
+		startMinute := windowStart.Hour()*60 + windowStart.Minute()
+		endMinute := windowEnd.Hour()*60 + windowEnd.Minute()
+		fullDay := windowEnd.Format("2006-01-02") != windowStart.Format("2006-01-02") && endMinute == 0 && startMinute == 0
+		timeMatches := fullDay || (minute >= startMinute && (endMinute == 0 || minute < endMinute))
+		unmet := make([]string, 0, 2)
+		if !sameDate {
+			unmet = append(unmet, "date")
+		}
+		if !timeMatches {
+			unmet = append(unmet, "time")
+		}
+		distance := 0
+		if window.preferredStart != nil {
+			distance = absoluteInt(int(start.Sub(window.preferredStart.In(eastern)).Minutes()))
+		} else if start.Before(windowStart) {
+			distance = int(windowStart.Sub(start).Minutes())
+		} else if !start.Before(windowEnd) {
+			distance = int(start.Sub(windowEnd).Minutes()) + 1
+		}
+		candidate := rankedAvailabilitySlot{slot: slot, mismatchCount: len(unmet), distanceMinutes: distance, branchIndex: index, unmetConstraints: unmet}
+		if exact {
+			candidate.mismatchCount = 0
+			candidate.unmetConstraints = nil
+		}
+		if rankedAvailabilitySlotLess(candidate, best) {
+			best = candidate
+		}
+	}
+	return best, nil
+}
+
+func selectWindowAvailabilitySlots(candidates []rankedAvailabilitySlot) ([]domain.AvailabilitySlotOption, string) {
+	exact := make([]rankedAvailabilitySlot, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.mismatchCount == 0 {
+			exact = append(exact, candidate)
+		}
+	}
+	selected := candidates
+	match := domain.AvailabilityMatchAlternatives
+	if len(exact) > 0 {
+		selected = exact
+		match = domain.AvailabilityMatchExact
+	}
+	sort.SliceStable(selected, func(i, j int) bool { return rankedAvailabilitySlotLess(selected[i], selected[j]) })
+	result := make([]domain.AvailabilitySlotOption, 0, min(2, len(selected)))
+	seen := make(map[string]bool, 2)
+	selectedBranches := make(map[int]bool, 2)
+	if match == domain.AvailabilityMatchExact {
+		for _, candidate := range selected {
+			key := availabilitySlotKey(candidate.slot)
+			if seen[key] || selectedBranches[candidate.branchIndex] {
+				continue
+			}
+			result = append(result, candidate.slot)
+			seen[key] = true
+			selectedBranches[candidate.branchIndex] = true
+			if len(result) == 2 {
+				return result, match
+			}
+		}
+	}
+	if match == domain.AvailabilityMatchAlternatives && len(selected) > 0 {
+		firstSignature := strings.Join(selected[0].unmetConstraints, "|")
+		for _, candidate := range selected {
+			key := availabilitySlotKey(candidate.slot)
+			if seen[key] {
+				continue
+			}
+			if len(result) == 0 || strings.Join(candidate.unmetConstraints, "|") != firstSignature {
+				slot := candidate.slot
+				slot.UnmetConstraints = append([]string(nil), candidate.unmetConstraints...)
+				result = append(result, slot)
+				seen[key] = true
+			}
+			if len(result) == 2 {
+				return result, match
+			}
+		}
+	}
+	for _, candidate := range selected {
+		key := availabilitySlotKey(candidate.slot)
+		if seen[key] {
+			continue
+		}
+		slot := candidate.slot
+		slot.UnmetConstraints = append([]string(nil), candidate.unmetConstraints...)
+		result = append(result, slot)
+		seen[key] = true
+		if len(result) == 2 {
+			break
+		}
+	}
+	return result, match
 }
 
 func validatePreferredTime(preferredTime *AvailabilityTimePreference) error {
@@ -413,6 +612,31 @@ func hasTwoExactAvailabilityMatches(
 			return true
 		}
 		firstSlotKey = slotKey
+	}
+	return false
+}
+
+func hasUsefulExactWindowCoverage(candidates []rankedAvailabilitySlot, windowCount int) bool {
+	branches := make(map[int]bool, min(2, windowCount))
+	slots := make(map[string]bool, 2)
+	for _, candidate := range candidates {
+		if candidate.mismatchCount != 0 {
+			continue
+		}
+		slots[availabilitySlotKey(candidate.slot)] = true
+		branches[candidate.branchIndex] = true
+	}
+	if windowCount > 1 {
+		return len(branches) >= 2
+	}
+	return len(slots) >= 2
+}
+
+func hasAnyExactAvailabilityMatch(candidates []rankedAvailabilitySlot) bool {
+	for _, candidate := range candidates {
+		if candidate.mismatchCount == 0 {
+			return true
+		}
 	}
 	return false
 }

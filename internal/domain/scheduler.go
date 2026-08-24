@@ -119,6 +119,9 @@ const (
 	AvailabilityOutcomeNoEligibleProviders = "no_eligible_providers"
 	AvailabilityOutcomeSearchIncomplete    = "availability_search_incomplete"
 
+	AvailabilityMatchExact        = "exact"
+	AvailabilityMatchAlternatives = "alternatives"
+
 	AvailabilityNextActionOfferSlots                  = "offer_slots"
 	AvailabilityNextActionAskDifferentPreferences     = "ask_for_different_preferences"
 	AvailabilityNextActionRetryOnceThenAskPreferences = "retry_once_then_ask_preferences"
@@ -126,16 +129,17 @@ const (
 
 // AvailabilitySlotOption is a single bookable slot returned to the agent.
 type AvailabilitySlotOption struct {
-	Provider          string `json:"provider"`
-	Time              string `json:"time"`
-	DateTime          string `json:"datetime"`
-	BookingToken      string `json:"bookingToken,omitempty"`
-	ColumnID          int    `json:"columnId"`
-	ProfileID         int    `json:"profileId"`
-	Duration          int    `json:"duration"`
-	SameStartBooked   int    `json:"sameStartBooked,omitempty"`
-	SameStartCapacity int    `json:"sameStartCapacity,omitempty"`
-	RequiresForce     bool   `json:"requiresForce,omitempty"`
+	Provider          string   `json:"provider"`
+	Time              string   `json:"time"`
+	DateTime          string   `json:"datetime"`
+	BookingToken      string   `json:"bookingToken,omitempty"`
+	ColumnID          int      `json:"columnId"`
+	ProfileID         int      `json:"profileId"`
+	Duration          int      `json:"duration"`
+	SameStartBooked   int      `json:"sameStartBooked,omitempty"`
+	SameStartCapacity int      `json:"sameStartCapacity,omitempty"`
+	RequiresForce     bool     `json:"requiresForce,omitempty"`
+	UnmetConstraints  []string `json:"unmetConstraints,omitempty"`
 }
 
 // AvailabilityResponse is the response structure for the availability endpoint.
@@ -149,6 +153,7 @@ type AvailabilityResponse struct {
 	SearchedFrom          string                   `json:"searchedFrom,omitempty"`
 	SearchedThrough       string                   `json:"searchedThrough,omitempty"`
 	BookingTokenExpiresAt string                   `json:"bookingTokenExpiresAt,omitempty"`
+	MatchStatus           string                   `json:"matchStatus,omitempty"`
 	ShouldRetrySameSearch bool                     `json:"shouldRetrySameSearch"`
 	NextAction            string                   `json:"nextAction"`
 	Message               string                   `json:"message,omitempty"`

@@ -244,7 +244,7 @@ All `/api/*` routes require `Authorization: Bearer <API_SECRET>`.
 | `POST /api/patient/resolve` | Resolve identity, demographics, routing, and upcoming appointments |
 | `POST /api/add-patient` | Create a patient and attach primary insurance |
 | `POST /api/patient/update-insurance` | Replace primary insurance |
-| `POST /api/scheduler/availability` | Find policy-valid slots and sign them |
+| `POST /api/scheduler/availability` | Match concrete clinic-local windows, label alternatives, and sign policy-valid slots |
 | `POST /api/appointment/book` | Revalidate and book a signed slot |
 | `POST /api/appointment/cancel` | Verify ownership and cancel an appointment |
 
@@ -257,6 +257,11 @@ without falling back or mutating the provider. Requests without the field keep
 the legacy ownership-read path during the mixed-version rollout. The token is
 an agent-to-middleware value and must not enter model prompts, speech, logs, or
 analytics.
+
+Availability accepts `timeZone: "America/New_York"` plus up to 15 concrete
+half-open `windows`. It returns at most two exact matches, or labeled real
+alternatives with `unmetConstraints`. The prior `requestedDate` and
+`preferredTime` request remains accepted during coordinated agent delivery.
 
 The structured request log adds a PHI-free `cancellation` object for this route
 with path, semantic outcome, actual provider schedule-read count, cancellation
