@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -352,6 +353,11 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 				}
 				candidates = append(candidates, ranked)
 			}
+			if len(concreteWindows) > 0 &&
+				hasAnyExactAvailabilityMatch(candidates) &&
+				availabilityWindowsExhaustedThrough(searchDate, concreteWindows) {
+				break
+			}
 			if !searchIncomplete && ((len(concreteWindows) > 0 && hasUsefulExactWindowCoverage(candidates, len(concreteWindows))) ||
 				(len(concreteWindows) == 0 && hasTwoExactAvailabilityMatches(candidates))) {
 				break
@@ -360,7 +366,7 @@ func (s *service) Search(ctx context.Context, command SearchCommand) (domain.Ava
 		searchDate = searchDate.AddDate(0, 0, 1)
 	}
 
-	matchStatus := ""
+	var matchStatus domain.AvailabilityMatchStatus
 	if len(concreteWindows) > 0 {
 		if searchIncomplete && !hasAnyExactAvailabilityMatch(candidates) {
 			return incompleteResponse(
@@ -414,7 +420,7 @@ type rankedAvailabilitySlot struct {
 	mismatchCount    int
 	distanceMinutes  int
 	branchIndex      int
-	unmetConstraints []string
+	unmetConstraints []domain.AvailabilityConstraint
 }
 
 type normalizedAvailabilityWindow struct {
@@ -432,9 +438,6 @@ func validateAvailabilityWindows(windows []AvailabilityWindow, timeZone string) 
 	}
 	if timeZone != "America/New_York" {
 		return nil, errors.New("timeZone must be America/New_York")
-	}
-	if len(windows) > searchForwardDays+1 {
-		return nil, fmt.Errorf("windows must contain at most %d branches", searchForwardDays+1)
 	}
 	normalized := make([]normalizedAvailabilityWindow, 0, len(windows))
 	for _, window := range windows {
@@ -486,12 +489,12 @@ func rankedSlotForWindows(slot domain.AvailabilitySlotOption, windows []normaliz
 		endMinute := windowEnd.Hour()*60 + windowEnd.Minute()
 		fullDay := windowEnd.Format("2006-01-02") != windowStart.Format("2006-01-02") && endMinute == 0 && startMinute == 0
 		timeMatches := fullDay || (minute >= startMinute && (endMinute == 0 || minute < endMinute))
-		unmet := make([]string, 0, 2)
+		unmet := make([]domain.AvailabilityConstraint, 0, 2)
 		if !sameDate {
-			unmet = append(unmet, "date")
+			unmet = append(unmet, domain.AvailabilityConstraintDate)
 		}
 		if !timeMatches {
-			unmet = append(unmet, "time")
+			unmet = append(unmet, domain.AvailabilityConstraintTime)
 		}
 		distance := 0
 		if window.preferredStart != nil {
@@ -513,7 +516,7 @@ func rankedSlotForWindows(slot domain.AvailabilitySlotOption, windows []normaliz
 	return best, nil
 }
 
-func selectWindowAvailabilitySlots(candidates []rankedAvailabilitySlot) ([]domain.AvailabilitySlotOption, string) {
+func selectWindowAvailabilitySlots(candidates []rankedAvailabilitySlot) ([]domain.AvailabilitySlotOption, domain.AvailabilityMatchStatus) {
 	exact := make([]rankedAvailabilitySlot, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.mismatchCount == 0 {
@@ -545,15 +548,15 @@ func selectWindowAvailabilitySlots(candidates []rankedAvailabilitySlot) ([]domai
 		}
 	}
 	if match == domain.AvailabilityMatchAlternatives && len(selected) > 0 {
-		firstSignature := strings.Join(selected[0].unmetConstraints, "|")
+		firstConstraints := selected[0].unmetConstraints
 		for _, candidate := range selected {
 			key := availabilitySlotKey(candidate.slot)
 			if seen[key] {
 				continue
 			}
-			if len(result) == 0 || strings.Join(candidate.unmetConstraints, "|") != firstSignature {
+			if len(result) == 0 || !slices.Equal(candidate.unmetConstraints, firstConstraints) {
 				slot := candidate.slot
-				slot.UnmetConstraints = append([]string(nil), candidate.unmetConstraints...)
+				slot.UnmetConstraints = append([]domain.AvailabilityConstraint(nil), candidate.unmetConstraints...)
 				result = append(result, slot)
 				seen[key] = true
 			}
@@ -568,7 +571,7 @@ func selectWindowAvailabilitySlots(candidates []rankedAvailabilitySlot) ([]domai
 			continue
 		}
 		slot := candidate.slot
-		slot.UnmetConstraints = append([]string(nil), candidate.unmetConstraints...)
+		slot.UnmetConstraints = append([]domain.AvailabilityConstraint(nil), candidate.unmetConstraints...)
 		result = append(result, slot)
 		seen[key] = true
 		if len(result) == 2 {
@@ -639,6 +642,16 @@ func hasAnyExactAvailabilityMatch(candidates []rankedAvailabilitySlot) bool {
 		}
 	}
 	return false
+}
+
+func availabilityWindowsExhaustedThrough(date time.Time, windows []normalizedAvailabilityWindow) bool {
+	nextDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, eastern).AddDate(0, 0, 1)
+	for _, window := range windows {
+		if window.end.In(eastern).After(nextDate) {
+			return false
+		}
+	}
+	return true
 }
 
 func rankedSlot(

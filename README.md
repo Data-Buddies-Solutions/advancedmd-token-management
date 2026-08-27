@@ -258,14 +258,15 @@ the legacy ownership-read path during the mixed-version rollout. The token is
 an agent-to-middleware value and must not enter model prompts, speech, logs, or
 analytics.
 
-Availability accepts `timeZone: "America/New_York"` plus up to 15 concrete
-half-open `windows`. It returns at most two exact matches, or labeled real
-alternatives with `unmetConstraints`. The prior `requestedDate` and
-`preferredTime` request remains accepted during coordinated agent delivery.
+The cancellation route's structured request log adds a PHI-free `cancellation`
+object with path, semantic outcome, actual provider schedule-read count,
+cancellation mutation count, and duration.
 
-The structured request log adds a PHI-free `cancellation` object for this route
-with path, semantic outcome, actual provider schedule-read count, cancellation
-mutation count, and duration.
+Availability accepts `timeZone: "America/New_York"` plus concrete half-open
+`windows` inside the existing 15-date search horizon. It returns at most two
+exact matches, or labeled real alternatives with `unmetConstraints`. The prior
+`requestedDate` and `preferredTime` request remains accepted during coordinated
+agent delivery.
 
 Operational routes have separate contracts:
 

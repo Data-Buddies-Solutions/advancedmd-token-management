@@ -6,9 +6,67 @@ import (
 	"testing"
 	"time"
 
+	"advancedmd-token-management/internal/advancedmd"
 	"advancedmd-token-management/internal/domain"
+	"advancedmd-token-management/internal/safeerrors"
 	"advancedmd-token-management/internal/scheduling"
 )
+
+func TestSearchReturnsSingleExactWindowMatchWithoutReadingIrrelevantDays(t *testing.T) {
+	now := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+	records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "10:00", 60))
+	records.ScheduleReads["2026-06-09"] = completeRead("1513", nil, nil)
+	records.ScheduleReadErrors["2026-06-10"] = advancedmd.NewError(safeerrors.CategoryUnavailable)
+
+	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Windows: []scheduling.AvailabilityWindow{{
+				Start:          "2026-06-09T09:00:00-04:00",
+				End:            "2026-06-09T09:01:00-04:00",
+				PreferredStart: "2026-06-09T09:00:00-04:00",
+			}},
+			TimeZone: "America/New_York",
+			Office:   "Spring Hill",
+			Routing:  string(domain.RoutingBachOnly),
+		})
+	if err != nil {
+		t.Fatalf("Search error after finding the exact requested slot = %v", err)
+	}
+	if result.MatchStatus != domain.AvailabilityMatchExact ||
+		len(result.Slots) != 1 ||
+		result.Slots[0].DateTime != "2026-06-09T09:00" {
+		t.Fatalf("result = %#v, want the one exact requested slot", result)
+	}
+}
+
+func TestSearchAcceptsMultipleTimeAlternativesWithinDateHorizon(t *testing.T) {
+	now := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+	date := time.Date(2026, 6, 9, 9, 0, 0, 0, domain.EasternLocation())
+	records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "10:00", 15))
+	records.ScheduleReads["2026-06-09"] = completeRead("1513", nil, nil)
+	windows := make([]scheduling.AvailabilityWindow, 0, 16)
+	for minute := 0; minute < 16; minute++ {
+		start := date.Add(time.Duration(minute) * time.Minute)
+		windows = append(windows, scheduling.AvailabilityWindow{
+			Start: start.Format(time.RFC3339),
+			End:   start.Add(time.Minute).Format(time.RFC3339),
+		})
+	}
+
+	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Windows:  windows,
+			TimeZone: "America/New_York",
+			Office:   "Spring Hill",
+			Routing:  string(domain.RoutingBachOnly),
+		})
+	if err != nil {
+		t.Fatalf("Search error for in-horizon alternatives = %v", err)
+	}
+	if result.MatchStatus != domain.AvailabilityMatchExact || len(result.Slots) != 2 {
+		t.Fatalf("result = %#v, want two exact in-horizon alternatives", result)
+	}
+}
 
 func TestSearchKeepsBeforeAndAfterWindowsDistinct(t *testing.T) {
 	now := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
@@ -51,6 +109,86 @@ func TestSearchKeepsBeforeAndAfterWindowsDistinct(t *testing.T) {
 	}
 	if !slices.Equal(after, []string{"2026-06-09T14:00", "2026-06-09T15:00"}) {
 		t.Fatalf("after slots = %v", after)
+	}
+}
+
+func TestSearchUsesPreferredStartToRankAroundWindowMatches(t *testing.T) {
+	now := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+	records := recordsWithSetup(testColumn("1513", "620", "1568", "14:00", "17:00", 30))
+	records.ScheduleReads["2026-06-09"] = completeRead("1513", nil, nil)
+
+	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Windows: []scheduling.AvailabilityWindow{{
+				Start:          "2026-06-09T14:00:00-04:00",
+				End:            "2026-06-09T16:01:00-04:00",
+				PreferredStart: "2026-06-09T15:00:00-04:00",
+			}},
+			TimeZone: "America/New_York",
+			Office:   "Spring Hill",
+			Routing:  string(domain.RoutingBachOnly),
+		})
+	if err != nil {
+		t.Fatalf("Search error = %v", err)
+	}
+	if result.MatchStatus != domain.AvailabilityMatchExact ||
+		len(result.Slots) != 2 ||
+		result.Slots[0].DateTime != "2026-06-09T15:00" {
+		t.Fatalf("result = %#v, want preferred start ranked first", result)
+	}
+}
+
+func TestSearchReturnsNoInventoryOnlyAfterCompleteConcreteWindowHorizon(t *testing.T) {
+	now := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 6, 9, 0, 0, 0, 0, time.UTC)
+	records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "10:00", 60))
+	for day := 0; day <= 14; day++ {
+		date := start.AddDate(0, 0, day)
+		records.ScheduleReads[date.Format("2006-01-02")] = completeRead("1513", nil, []domain.BlockHold{{
+			StartDateTime: date.Add(9 * time.Hour),
+			EndDateTime:   date.Add(10 * time.Hour),
+		}})
+	}
+
+	result, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Windows: []scheduling.AvailabilityWindow{{
+				Start: "2026-06-09T15:00:00-04:00",
+				End:   "2026-06-09T16:00:00-04:00",
+			}},
+			TimeZone: "America/New_York",
+			Office:   "Spring Hill",
+			Routing:  string(domain.RoutingBachOnly),
+		})
+	if err != nil {
+		t.Fatalf("Search error = %v", err)
+	}
+	if result.Outcome != domain.AvailabilityOutcomeNoAvailability ||
+		result.AvailabilityFound ||
+		result.SearchedFrom != "2026-06-09" ||
+		result.SearchedThrough != "2026-06-23" ||
+		len(result.Slots) != 0 {
+		t.Fatalf("result = %#v, want proven zero inventory across 15 dates", result)
+	}
+}
+
+func TestSearchPreservesProviderFailureForConcreteWindows(t *testing.T) {
+	now := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+	records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "10:00", 60))
+	records.ScheduleReadErrors["2026-06-09"] = advancedmd.NewError(safeerrors.CategoryUnavailable)
+
+	_, err := scheduling.New(records, "test-booking-secret", func() time.Time { return now }).
+		Search(context.Background(), scheduling.SearchCommand{
+			Windows: []scheduling.AvailabilityWindow{{
+				Start: "2026-06-09T09:00:00-04:00",
+				End:   "2026-06-09T10:00:00-04:00",
+			}},
+			TimeZone: "America/New_York",
+			Office:   "Spring Hill",
+			Routing:  string(domain.RoutingBachOnly),
+		})
+	if err == nil || scheduling.ProviderFailureOf(err) != safeerrors.CategoryUnavailable {
+		t.Fatalf("Search error = %v, want unavailable provider failure", err)
 	}
 }
 
@@ -120,12 +258,12 @@ func TestSearchLabelsDateAndTimePreservingAlternatives(t *testing.T) {
 	if result.MatchStatus != domain.AvailabilityMatchAlternatives || len(result.Slots) != 2 {
 		t.Fatalf("result = %#v, want two labeled alternatives", result)
 	}
-	got := map[string][]string{}
+	got := map[string][]domain.AvailabilityConstraint{}
 	for _, slot := range result.Slots {
 		got[slot.DateTime] = slot.UnmetConstraints
 	}
-	if !slices.Equal(got["2026-06-09T14:00"], []string{"time"}) ||
-		!slices.Equal(got["2026-06-10T16:00"], []string{"date"}) {
+	if !slices.Equal(got["2026-06-09T14:00"], []domain.AvailabilityConstraint{domain.AvailabilityConstraintTime}) ||
+		!slices.Equal(got["2026-06-10T16:00"], []domain.AvailabilityConstraint{domain.AvailabilityConstraintDate}) {
 		t.Fatalf("alternatives = %#v", got)
 	}
 }
