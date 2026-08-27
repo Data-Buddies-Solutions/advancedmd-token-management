@@ -354,10 +354,6 @@ their owners:
   transport families, and normalization
 - [Multi-office registry](MULTI_OFFICE.md) — office identifiers, scheduler
   columns, and routing lanes
-- [Insurance crosswalk](INSURANCE_CROSSWALK.md) — accepted plans, carrier
-  mappings, and routing outcomes
-- [Patient resolution specification](docs/patient-resolve-and-appointments-spec.md)
-  — identity and appointment-loading semantics
 - [Cloud Run deployment contract](docs/cloud-run-deployment.md) — production
   pipeline, maintenance identity, smoke checks, and rollback
 - [Release automation](docs/release-automation.md) — version and release flow
