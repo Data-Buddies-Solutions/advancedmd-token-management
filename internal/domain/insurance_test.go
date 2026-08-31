@@ -77,7 +77,6 @@ func TestLookupInsurance_SpringHillRejectedMedicalPlans(t *testing.T) {
 		"Aetna EPO",
 		"Humana Gold Plus",
 		"Miami Children's",
-		"Humana Medicaid",
 		"Fl Blue Select",
 		"Cigna",
 		"Miami Dade Doctors Health",
@@ -98,6 +97,77 @@ func TestLookupInsurance_SpringHillRejectedMedicalPlans(t *testing.T) {
 				t.Fatalf("LookupInsuranceForCoverageAtOffice(%q) routing = %q, want %q", input, entry.Routing, RoutingNotAccepted)
 			}
 		})
+	}
+}
+
+func TestLookupInsurance_SpringHillHumanaMedicalPolicy(t *testing.T) {
+	springHill := &OfficeConfig{ID: "spring_hill", DisplayName: "Spring Hill"}
+	tests := []struct {
+		name          string
+		input         string
+		wantCarrierID string
+		wantRouting   RoutingRule
+	}{
+		{"gold remains rejected", "Humana Gold", "car308175", RoutingNotAccepted},
+		{"medicare allows every provider", "Humana Medicare", "car40906", RoutingAll},
+		{"medicaid routes only to Bach", "Humana Medicaid", "car303033", RoutingBachOnly},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, found := LookupInsuranceForCoverageAtOffice(tt.input, InsuranceModeMedical, springHill)
+			if !found {
+				t.Fatalf("LookupInsuranceForCoverageAtOffice(%q) found = false, want true", tt.input)
+			}
+			if entry.CarrierID != tt.wantCarrierID {
+				t.Fatalf("LookupInsuranceForCoverageAtOffice(%q) carrier ID = %q, want %q", tt.input, entry.CarrierID, tt.wantCarrierID)
+			}
+			if entry.Routing != tt.wantRouting {
+				t.Fatalf("LookupInsuranceForCoverageAtOffice(%q) routing = %q, want %q", tt.input, entry.Routing, tt.wantRouting)
+			}
+		})
+	}
+}
+
+func TestLookupInsurance_SpringHillHumanaPolicyDoesNotChangeOtherOffices(t *testing.T) {
+	tests := []struct {
+		name        string
+		office      *OfficeConfig
+		input       string
+		wantRouting RoutingRule
+		wantPreauth bool
+	}{
+		{"crystal river medicare remains Bach only", &OfficeConfig{ID: "crystal_river", DisplayName: "Crystal River"}, "Humana Medicare", RoutingBachOnly, false},
+		{"crystal river medicaid remains rejected", &OfficeConfig{ID: "crystal_river", DisplayName: "Crystal River"}, "Humana Medicaid", RoutingNotAccepted, false},
+		{"hollywood gold remains rejected", &OfficeConfig{ID: "hollywood", DisplayName: "Hollywood"}, "Humana Gold Plus", RoutingNotAccepted, false},
+		{"hollywood medicare remains Bach only", &OfficeConfig{ID: "hollywood", DisplayName: "Hollywood"}, "Humana Medicare", RoutingBachOnly, false},
+		{"hollywood medicaid remains Bach only with preauth", &OfficeConfig{ID: "hollywood", DisplayName: "Hollywood"}, "Humana Medicaid", RoutingBachOnly, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, found := LookupInsuranceForCoverageAtOffice(tt.input, InsuranceModeMedical, tt.office)
+			if !found {
+				t.Fatalf("LookupInsuranceForCoverageAtOffice(%q) found = false, want true", tt.input)
+			}
+			if entry.Routing != tt.wantRouting || entry.PreauthRequired != tt.wantPreauth {
+				t.Fatalf("LookupInsuranceForCoverageAtOffice(%q) = %+v, want routing %q preauth %v", tt.input, entry, tt.wantRouting, tt.wantPreauth)
+			}
+		})
+	}
+}
+
+func TestRoutingForCarrierIDAtOffice_SpringHillHumanaPolicy(t *testing.T) {
+	springHill := &OfficeConfig{ID: "spring_hill", DisplayName: "Spring Hill"}
+
+	medicareRouting, medicareAmbiguous := RoutingForCarrierIDAtOffice("car40906", springHill)
+	if medicareRouting != RoutingAll || medicareAmbiguous {
+		t.Fatalf("Humana Medicare carrier routing = %q, %v; want %q, false", medicareRouting, medicareAmbiguous, RoutingAll)
+	}
+
+	medicaidRouting, medicaidAmbiguous := RoutingForCarrierIDAtOffice("car303033", springHill)
+	if medicaidRouting != RoutingBachOnly || medicaidAmbiguous {
+		t.Fatalf("Humana Medicaid carrier routing = %q, %v; want %q, false", medicaidRouting, medicaidAmbiguous, RoutingBachOnly)
 	}
 }
 

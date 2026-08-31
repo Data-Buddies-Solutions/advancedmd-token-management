@@ -119,11 +119,59 @@ func TestHandlePatientResolveMapsPatientModuleResult(t *testing.T) {
 	if body.Status != "verified" || body.PatientID != "123" || body.Phone != "850-373-3869" {
 		t.Fatalf("response = %+v", body)
 	}
-	if body.Routing != "bach_only" || len(body.AllowedProviders) != 1 {
+	if body.Routing != "all_three" || len(body.AllowedProviders) != 3 {
 		t.Fatalf("routing response = %+v", body)
 	}
 	if body.AppointmentsStatus != "none" || body.Appointments == nil {
 		t.Fatalf("appointments response = %+v", body)
+	}
+}
+
+func TestHandleInsuranceCheckUsesOfficeSpecificHumanaPolicy(t *testing.T) {
+	domain.InitRegistry("")
+	handlers := NewHandlers(nil, nil, nil, nil, nil)
+	tests := []struct {
+		name              string
+		body              string
+		wantStatus        domain.InsuranceCheckStatus
+		wantRouting       domain.RoutingRule
+		wantProviderCount int
+		wantNotice        string
+		wantMatchedPlan   string
+	}{
+		{"gold rejected", `{"plan":"Humana Gold","coverageType":"medical","office":"Spring Hill"}`, domain.InsuranceCheckNotAccepted, domain.RoutingNotAccepted, 0, "", "Humana Gold Plus"},
+		{"medicare all providers", `{"plan":"Humana Medicare","coverageType":"medical","office":"Spring Hill"}`, domain.InsuranceCheckAccepted, domain.RoutingAll, 3, "see any provider", "Humana Medicare"},
+		{"medicaid Bach only", `{"plan":"I have Humana Medicaid","coverageType":"medical","office":"Spring Hill"}`, domain.InsuranceCheckAccepted, domain.RoutingBachOnly, 1, "only see Dr. Bach", "Humana Medicaid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/insurance/check", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			handlers.HandleInsuranceCheck(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", w.Code)
+			}
+			var result domain.InsuranceCheckResult
+			if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if result.Status != tt.wantStatus || result.Routing != tt.wantRouting {
+				t.Fatalf("result = %+v, want status %q routing %q", result, tt.wantStatus, tt.wantRouting)
+			}
+			if !result.Authoritative {
+				t.Fatalf("result = %+v, want authoritative Spring Hill Humana policy", result)
+			}
+			if len(result.AllowedProviders) != tt.wantProviderCount {
+				t.Fatalf("providers = %v, want %d", result.AllowedProviders, tt.wantProviderCount)
+			}
+			if tt.wantNotice != "" && !strings.Contains(result.CallerNotice, tt.wantNotice) {
+				t.Fatalf("notice = %q, want %q", result.CallerNotice, tt.wantNotice)
+			}
+			if result.MatchedPlan != tt.wantMatchedPlan {
+				t.Fatalf("matched plan = %q, want %q", result.MatchedPlan, tt.wantMatchedPlan)
+			}
+		})
 	}
 }
 

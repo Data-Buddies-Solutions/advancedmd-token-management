@@ -256,6 +256,46 @@ func medicalBachOnlyPreauth(carrierID string) InsuranceEntry {
 	return InsuranceEntry{CarrierID: carrierID, Routing: RoutingBachOnly, PreauthRequired: true}
 }
 
+var springHillHumanaMedicalInsuranceNameMap = map[string]InsuranceEntry{
+	"humana gold plus": {CarrierID: "car308175", Routing: RoutingNotAccepted},
+	"humana medicaid":  {CarrierID: "car303033", Routing: RoutingBachOnly},
+	"humana medicare":  {CarrierID: "car40906", Routing: RoutingAll},
+}
+
+var springHillHumanaMedicalInsuranceAliases = map[string]string{
+	"humana gold": "humana gold plus",
+}
+
+func springHillHumanaMedicalCanonicalName(name string, office *OfficeConfig) (string, bool) {
+	if office == nil || office.ID != "spring_hill" {
+		return "", false
+	}
+	normalized := NormalizeForLookup(name)
+	bestMatch := ""
+	canonical := ""
+	consider := func(match, candidate string) {
+		if (normalized == match || strings.Contains(normalized, match)) && len(match) > len(bestMatch) {
+			bestMatch = match
+			canonical = candidate
+		}
+	}
+	for plan := range springHillHumanaMedicalInsuranceNameMap {
+		consider(plan, plan)
+	}
+	for alias, plan := range springHillHumanaMedicalInsuranceAliases {
+		consider(alias, plan)
+	}
+	return canonical, canonical != ""
+}
+
+func lookupSpringHillHumanaMedicalInsurance(name string, office *OfficeConfig) (InsuranceEntry, bool) {
+	canonical, ok := springHillHumanaMedicalCanonicalName(name, office)
+	if !ok {
+		return InsuranceEntry{}, false
+	}
+	return lookupInsuranceFromMaps(canonical, springHillHumanaMedicalInsuranceNameMap, springHillHumanaMedicalInsuranceAliases)
+}
+
 // hollywoodSweetwaterMedicalInsuranceNameMap is sourced from the Abita Eye Group
 // 7/7/2026 insurance list using the A.Bach medical column. These offices only
 // schedule medical visits on Dr. Austin Bach's columns.
@@ -841,6 +881,9 @@ func LookupInsuranceForCoverageAtOffice(name string, mode InsuranceMode, office 
 	if mode == InsuranceModeVision {
 		return lookupVisionInsurance(name)
 	}
+	if entry, ok := lookupSpringHillHumanaMedicalInsurance(name, office); ok {
+		return entry, true
+	}
 
 	if isHollywoodSweetwaterMedicalOffice(office) {
 		if entry, _, ok := lookupInsuranceEntry(name, hollywoodSweetwaterMedicalInsuranceNameMap, hollywoodSweetwaterMedicalInsuranceAliases); ok {
@@ -868,6 +911,91 @@ func LookupInsuranceForCoverageAtOffice(name string, mode InsuranceMode, office 
 	}
 
 	return applyOfficeMedicalInsurancePolicy(entry, canonicalName, office), true
+}
+
+type InsuranceCheckStatus string
+
+const (
+	InsuranceCheckAccepted           InsuranceCheckStatus = "accepted"
+	InsuranceCheckNotAccepted        InsuranceCheckStatus = "not_accepted"
+	InsuranceCheckNeedsClarification InsuranceCheckStatus = "needs_clarification"
+	InsuranceCheckNeedsStaffTask     InsuranceCheckStatus = "needs_staff_task"
+)
+
+type InsuranceCheckResult struct {
+	Status              InsuranceCheckStatus `json:"status"`
+	Query               string               `json:"query"`
+	MatchedPlan         string               `json:"matchedPlan,omitempty"`
+	MatchedAlias        string               `json:"matchedAlias,omitempty"`
+	MatchedFamily       string               `json:"matchedFamily,omitempty"`
+	CallerFacingPlan    string               `json:"callerFacingPlan,omitempty"`
+	CanProceed          bool                 `json:"canProceed"`
+	NeedsExactPlanName  bool                 `json:"needsExactPlanName"`
+	ClarificationNeeded string               `json:"clarificationNeeded,omitempty"`
+	CallerNotice        string               `json:"callerNotice,omitempty"`
+	PreauthRequired     bool                 `json:"preauthRequired"`
+	Routing             RoutingRule          `json:"routing,omitempty"`
+	AllowedProviders    []string             `json:"allowedProviders"`
+	Authoritative       bool                 `json:"authoritative"`
+}
+
+func CheckInsuranceForCoverageAtOffice(name string, mode InsuranceMode, office *OfficeConfig) InsuranceCheckResult {
+	query := strings.TrimSpace(name)
+	canonicalSpringHillHumanaPlan, springHillHumanaPolicy := springHillHumanaMedicalCanonicalName(query, office)
+	authoritative := mode == InsuranceModeMedical && springHillHumanaPolicy
+	entry, found := LookupInsuranceForCoverageAtOffice(query, mode, office)
+	if !found {
+		return InsuranceCheckResult{
+			Status:              InsuranceCheckNeedsClarification,
+			Query:               query,
+			ClarificationNeeded: "the exact plan name from the insurance card",
+			AllowedProviders:    []string{},
+			Authoritative:       authoritative,
+		}
+	}
+
+	matchedPlan := query
+	if authoritative {
+		matchedPlan = titleInsurancePlan(canonicalSpringHillHumanaPlan)
+	}
+	result := InsuranceCheckResult{
+		Query:            query,
+		MatchedPlan:      matchedPlan,
+		CallerFacingPlan: matchedPlan,
+		PreauthRequired:  entry.PreauthRequired,
+		Routing:          entry.Routing,
+		AllowedProviders: office.ProvidersForRouting(entry.Routing),
+		Authoritative:    authoritative,
+	}
+	if entry.Routing == RoutingNotAccepted {
+		result.Status = InsuranceCheckNotAccepted
+		result.AllowedProviders = []string{}
+		return result
+	}
+	if entry.PreauthRequired {
+		result.Status = InsuranceCheckNeedsStaffTask
+		return result
+	}
+
+	result.Status = InsuranceCheckAccepted
+	result.CanProceed = true
+	if office != nil && office.ID == "spring_hill" {
+		switch entry.CarrierID {
+		case "car40906":
+			result.CallerNotice = "At Spring Hill, patients with this plan can see any provider."
+		case "car303033":
+			result.CallerNotice = "At Spring Hill, patients with this plan can only see Dr. Bach."
+		}
+	}
+	return result
+}
+
+func titleInsurancePlan(plan string) string {
+	words := strings.Fields(plan)
+	for index, word := range words {
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
 }
 
 // InsuranceModeForCoverage converts an agent-supplied coverage type to a middleware insurance mode.
@@ -902,6 +1030,9 @@ func RoutingForCarrierID(carrierID string) (RoutingRule, bool) {
 // RoutingForCarrierIDAtOffice applies office-specific medical acceptance rules
 // to the demographics carrier-ID fallback used for existing patients.
 func RoutingForCarrierIDAtOffice(carrierID string, office *OfficeConfig) (RoutingRule, bool) {
+	if office != nil && office.ID == "spring_hill" && carrierID == "car40906" {
+		return RoutingAll, false
+	}
 	if office != nil && office.ID == "crystal_river" && crystalRiverRejectedCarrierIDs[carrierID] {
 		return RoutingNotAccepted, false
 	}
@@ -917,6 +1048,9 @@ func RoutingForCarrierIDAtOffice(carrierID string, office *OfficeConfig) (Routin
 // RoutingForDemographicInsurance prefers AMD's carrier name when available, then
 // falls back to carrier ID. Carrier IDs can represent mixed accepted/rejected plans.
 func RoutingForDemographicInsurance(carrierID, carrierName string, office *OfficeConfig) (RoutingRule, bool) {
+	if entry, ok := lookupSpringHillHumanaMedicalInsurance(carrierName, office); ok {
+		return entry.Routing, false
+	}
 	if isHollywoodSweetwaterMedicalOffice(office) {
 		if entry, _, ok := lookupInsuranceEntry(carrierName, hollywoodSweetwaterMedicalInsuranceNameMap, hollywoodSweetwaterMedicalInsuranceAliases); ok {
 			return entry.Routing, false

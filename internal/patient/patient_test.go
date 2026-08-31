@@ -75,8 +75,8 @@ func TestResolveReturnsCompletePatientForPhoneLookup(t *testing.T) {
 		InsuranceCarrierID: "car40906",
 		InsPlanID:          "ins789",
 		RespPartyID:        "resp456",
-		Routing:            domain.RoutingBachOnly,
-		AllowedProviders:   []string{"Dr. Bach"},
+		Routing:            domain.RoutingAll,
+		AllowedProviders:   []string{"Dr. Bach", "Dr. Licht", "Dr. Noel"},
 		AppointmentsStatus: patient.AppointmentsFound,
 		Appointments: []patient.Appointment{{
 			ID:                9570263,
@@ -127,8 +127,8 @@ func TestCreateReturnsExistingSuccessContract(t *testing.T) {
 		PatientID:        "123",
 		Name:             "DOE,JANE",
 		DOB:              "01/15/1980",
-		Routing:          domain.RoutingBachOnly,
-		AllowedProviders: []string{"Dr. Bach"},
+		Routing:          domain.RoutingAll,
+		AllowedProviders: []string{"Dr. Bach", "Dr. Licht", "Dr. Noel"},
 		Message:          "Patient created and insurance attached successfully",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -444,7 +444,7 @@ func TestCreateReconcilesAmbiguousInsuranceAttachment(t *testing.T) {
 	amd.AddInsuranceError = advancedmd.NewMutationError(advancedmd.MutationAmbiguous)
 	amd.Demographics["123"] = domain.PatientDemographics{
 		CarrierName:         "HUMANA MEDICARE",
-		CarrierID:           "car308175",
+		CarrierID:           "car40906",
 		InsPlanID:           "ins456",
 		RespPartyID:         "resp456",
 		SubscriberNum:       "H123",
@@ -471,7 +471,7 @@ func TestUpdateInsuranceReturnsExistingSuccessContract(t *testing.T) {
 		InsPlanID:      "ins123",
 		RespPartyID:    "resp123",
 		OldInsurance:   "Old",
-		Insurance:      "Humana Medicare",
+		Insurance:      "Humana Medicaid",
 		SubscriberName: "Jane Doe",
 		SubscriberNum:  "H123",
 		Office:         "Spring Hill",
@@ -481,7 +481,7 @@ func TestUpdateInsuranceReturnsExistingSuccessContract(t *testing.T) {
 		Status:           patient.UpdateInsuranceStatusUpdated,
 		PatientID:        "123",
 		OldInsurance:     "Old",
-		NewInsurance:     "Humana Medicare",
+		NewInsurance:     "Humana Medicaid",
 		Routing:          domain.RoutingBachOnly,
 		AllowedProviders: []string{"Dr. Bach"},
 		Message:          "Insurance updated successfully",
@@ -518,7 +518,7 @@ func TestUpdateInsuranceReconcilesAmbiguousWriteAfterTransientReadFailure(t *tes
 	}
 	amd.Demographics["123"] = domain.PatientDemographics{
 		CarrierName:         "HUMANA MEDICARE",
-		CarrierID:           "car308175",
+		CarrierID:           "car40906",
 		InsPlanID:           "ins456",
 		RespPartyID:         "resp123",
 		SubscriberNum:       "H123",
@@ -912,7 +912,7 @@ func TestResolveRefreshesKnownPatientByID(t *testing.T) {
 	if got.Name != "DOE,JANE" {
 		t.Fatalf("Name = %q, want DOE,JANE", got.Name)
 	}
-	if got.DOB != "01/15/1980" || got.Routing != domain.RoutingBachOnly {
+	if got.DOB != "01/15/1980" || got.Routing != domain.RoutingAll {
 		t.Fatalf("demographics = DOB %q routing %q", got.DOB, got.Routing)
 	}
 	if got.AppointmentsStatus != patient.AppointmentsFound || len(got.Appointments) != 1 {

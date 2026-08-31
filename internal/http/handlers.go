@@ -132,6 +132,48 @@ func (h *Handlers) HandleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+type InsuranceCheckRequest struct {
+	Plan         string `json:"plan"`
+	CoverageType string `json:"coverageType"`
+	Office       string `json:"office"`
+}
+
+func (h *Handlers) HandleInsuranceCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req InsuranceCheckRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil || strings.TrimSpace(req.Plan) == "" {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Invalid insurance check request"})
+		return
+	}
+
+	office, err := domain.ResolveOffice(req.Office)
+	if err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Unknown office"})
+		return
+	}
+
+	var mode domain.InsuranceMode
+	switch req.CoverageType {
+	case "medical":
+		mode = domain.InsuranceModeMedical
+	case "routine_vision":
+		mode = domain.InsuranceModeVision
+	default:
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Invalid coverage type"})
+		return
+	}
+
+	json.NewEncoder(w).Encode(domain.CheckInsuranceForCoverageAtOffice(req.Plan, mode, office))
+}
+
 // HandleSessionMaintenance refreshes the process-local AdvancedMD session
 // without returning credentials, tokens, or provider endpoints.
 func (h *Handlers) HandleSessionMaintenance(w http.ResponseWriter, r *http.Request) {

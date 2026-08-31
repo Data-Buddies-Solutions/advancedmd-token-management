@@ -92,14 +92,18 @@ Insurance names consolidate to AMD carrier IDs where accepted. Some rejected pla
 |---------------|---------|
 | Humana Gold Plus | **Not Accepted** |
 | Humana Healthy Horizons | Bach Only |
-| Humana Medicaid | **Not Accepted** |
-| Humana Medicare | Bach Only |
+| Humana Medicaid | Bach Only |
+| Humana Medicare | All 3 |
 | Humana PPO | Bach Only |
 | Molina Medicare | Bach Only |
 | Cigna Medicare Advantage | Bach + Licht |
 | Humana HMO | **Not Accepted** |
 | Humana Premier HMO | **Not Accepted** |
 | Molina Marketplace | **Not Accepted** |
+
+Spring Hill writes Humana Medicare to carrier `car40906` and Humana Medicaid to
+carrier `car303033` so their provider routing remains exact after demographics
+are reloaded. Other Humana plans continue to use the consolidated family carrier.
 
 ---
 
