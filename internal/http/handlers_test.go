@@ -1378,3 +1378,7 @@ func newPatientResolveTestHandlers(
 
 	return NewHandlers(amdSession, patientmodule.New(records), nil)
 }
+
+func (s schedulingStub) List(ctx context.Context, command schedulingmodule.ListCommand) (domain.AvailabilityResponse, error) {
+	return s.Search(ctx, schedulingmodule.SearchCommand{Office: command.Office})
+}

@@ -534,6 +534,39 @@ func (h *Handlers) HandleGetAvailability(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(response)
 }
 
+// HandleListAppointmentSlots loads an inventory window through the Scheduling module.
+func (h *Handlers) HandleListAppointmentSlots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req schedulingmodule.ListCommand
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		recordRequestOutcome(r.Context(), outcomeInvalidRequest, safeerrors.CategoryNone)
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: "Invalid JSON body"})
+		return
+	}
+
+	if h.scheduling == nil {
+		recordRequestOutcome(r.Context(), outcomeInternalFailure, safeerrors.CategoryNone)
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Status:  "error",
+			Message: "Appointment scheduling is temporarily unavailable. Please try again.",
+		})
+		return
+	}
+	response, err := h.scheduling.List(r.Context(), req)
+	if err != nil {
+		recordSchedulingError(r.Context(), err)
+		json.NewEncoder(w).Encode(ErrorResponse{Status: "error", Message: err.Error()})
+		return
+	}
+	if response.Status == domain.AvailabilityStatusError {
+		recordRequestOutcome(r.Context(), outcomeProviderFailure, safeerrors.CategoryInvalidResponse)
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
 // UpdateInsuranceRequest is the expected JSON body for insurance updates.
 type UpdateInsuranceRequest struct {
 	PatientID      string `json:"patientId"`
