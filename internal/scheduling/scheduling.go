@@ -763,7 +763,8 @@ func countSameStart(slotTime time.Time, appointments []domain.Appointment) int {
 }
 
 func enforcePreauthMinDate(requestedDate, now time.Time) time.Time {
-	minDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, 14)
+	// Match provider schedules: clinic calendar values encoded in UTC, not Eastern instants.
+	minDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 14)
 	if requestedDate.Before(minDate) {
 		return minDate
 	}

@@ -97,3 +97,40 @@ func TestListExcludesHeldAndFullSlots(t *testing.T) {
 		}
 	}
 }
+
+func TestPreauthInventoryExcludesOccupiedAndHeldWallClockSlots(t *testing.T) {
+	for _, date := range []string{"2026-01-05", "2026-06-01", "2026-02-23", "2026-10-19"} {
+		t.Run(date, func(t *testing.T) {
+			today, err := time.Parse("2006-01-02", date)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := today.Add(16 * time.Hour)
+			first := today.AddDate(0, 0, 14)
+			records := recordsWithSetup(testColumn("1513", "620", "1568", "09:00", "10:00", 15))
+			for i := 0; i < 14; i++ {
+				day := first.AddDate(0, 0, i)
+				// AdvancedMD schedule values are clinic wall times represented in UTC.
+				records.ScheduleReads[day.Format("2006-01-02")] = completeRead("1513", []domain.Appointment{
+					{StartDateTime: day.Add(9 * time.Hour), Duration: 15},
+					{StartDateTime: day.Add(9 * time.Hour), Duration: 15},
+				}, []domain.BlockHold{{StartDateTime: day.Add(9*time.Hour + 30*time.Minute), EndDateTime: day.Add(10 * time.Hour)}})
+			}
+			result, err := scheduling.New(records, "test-secret", func() time.Time { return now }).List(context.Background(), scheduling.ListCommand{Office: "Spring Hill", Routing: "bach_only", PreauthRequired: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.SearchedFrom != first.Format("2006-01-02") || result.SearchedThrough != first.AddDate(0, 0, 13).Format("2006-01-02") {
+				t.Fatalf("wrong coverage: %s..%s", result.SearchedFrom, result.SearchedThrough)
+			}
+			if len(result.Slots) != 14 {
+				t.Fatalf("slots=%d want14", len(result.Slots))
+			}
+			for _, slot := range result.Slots {
+				if slot.Time != "9:15 AM" {
+					t.Fatalf("offered occupied/held slot: %s", slot.DateTime)
+				}
+			}
+		})
+	}
+}
