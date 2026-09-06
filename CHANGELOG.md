@@ -4,6 +4,13 @@ Release Please owns new versioned sections at the top of this file. The dated
 `[Unreleased]` sections below predate the automation and remain as historical
 records.
 
+## [2.4.0](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.3.1...v2.4.0) (2026-09-06)
+
+
+### Features
+
+* **scheduling:** list complete appointment inventory ([#167](https://github.com/Data-Buddies-Solutions/amd_middleware/issues/167)) ([f455345](https://github.com/Data-Buddies-Solutions/amd_middleware/commit/f4553453f4f64c03393198553013f63d45888d29))
+
 ## [2.3.1](https://github.com/Data-Buddies-Solutions/amd_middleware/compare/v2.3.0...v2.3.1) (2026-08-08)
 
 
