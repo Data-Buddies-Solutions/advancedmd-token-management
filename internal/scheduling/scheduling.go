@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"advancedmd-token-management/internal/advancedmd"
@@ -125,7 +124,7 @@ type service struct {
 	allowRawBooking    bool
 	now                func() time.Time
 
-	setupMu        sync.Mutex
+	setupLock      chan struct{}
 	setup          *domain.SchedulerSetup
 	setupExpiresAt time.Time
 }
@@ -152,6 +151,7 @@ func NewWithConfig(
 	}
 	return &service{
 		records:            records,
+		setupLock:          make(chan struct{}, 1),
 		bookingTokenSecret: bookingTokenSecret,
 		appointmentTokens:  NewAppointmentTokens(bookingTokenSecret, now),
 		allowRawBooking:    config.AllowRawBooking,
@@ -276,6 +276,9 @@ func (s *service) search(ctx context.Context, command SearchCommand, inventoryDa
 	var candidates []rankedAvailabilitySlot
 
 	for !searchDate.After(maxDate) {
+		if err := ctx.Err(); err != nil {
+			return empty, providerError(err, "Appointment scheduling timed out. Please try again.")
+		}
 		date := searchDate.Format("2006-01-02")
 		searchedThrough = date
 		workingColumnIDs := make([]string, 0, len(allowedColumns))
@@ -394,6 +397,9 @@ func (s *service) search(ctx context.Context, command SearchCommand, inventoryDa
 		return noneResponse(originalRequestedDate, searchStartDate, searchEndDate), nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return empty, providerError(err, "Appointment scheduling timed out. Please try again.")
+	}
 	actualDate := slots[0].DateTime[:len("2006-01-02")]
 	tokenIssuedAt := s.now().UTC()
 	slots, tokenExpiresAt, err := s.signSlots(slots, office, routing, command.DOB, tokenIssuedAt)
@@ -615,6 +621,10 @@ func providerError(err error, fallback string) error {
 
 func providerFailureMessage(err error, fallback string) string {
 	switch providerCategory(err) {
+	case safeerrors.CategoryRateLimited:
+		return "AdvancedMD is temporarily rate limited. Please try again later."
+	case safeerrors.CategoryTimeout:
+		return "AdvancedMD did not respond in time. Please try again."
 	case safeerrors.CategoryAuthentication, safeerrors.CategoryUnavailable:
 		return "Service authentication is temporarily unavailable. Please try again."
 	default:
@@ -631,8 +641,15 @@ func providerCategory(err error) safeerrors.Category {
 }
 
 func (s *service) schedulerSetup(ctx context.Context, now time.Time) (*domain.SchedulerSetup, error) {
-	s.setupMu.Lock()
-	defer s.setupMu.Unlock()
+	select {
+	case s.setupLock <- struct{}{}:
+		defer func() { <-s.setupLock }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if s.setup != nil && now.Before(s.setupExpiresAt) {
 		return s.setup, nil
@@ -642,6 +659,9 @@ func (s *service) schedulerSetup(ctx context.Context, now time.Time) (*domain.Sc
 	}
 
 	setup, err := s.records.GetSchedulerSetup(ctx)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		if s.setup != nil {
 			log.Printf("WARNING: scheduler setup refresh failed; using cached setup category=%s", providerCategory(err))
