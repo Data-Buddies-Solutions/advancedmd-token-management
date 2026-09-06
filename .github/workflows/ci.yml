@@ -44,3 +44,6 @@ jobs:
 
       - name: Deployment script test
         run: scripts/deploy-cloud-run_test.sh
+
+      - name: Sandbox deployment script test
+        run: bash scripts/deploy-sandbox-cloud-run_test.sh
